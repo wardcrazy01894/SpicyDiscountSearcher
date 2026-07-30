@@ -40,6 +40,7 @@ function quote(id: string, status: QuoteStatus, offers: OfferSpec[] = []): Quote
       note: null,
     },
     url: `https://example.test/${id}`,
+    confidence: 'best-effort',
     status,
     offers: built,
     // Same path the service worker uses, so the fixtures can't drift from it.

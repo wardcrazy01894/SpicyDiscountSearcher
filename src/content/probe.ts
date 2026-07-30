@@ -1,6 +1,6 @@
-import { extractOffers } from '../core/extract.js';
+import { extract } from '../core/extract.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
-import type { Offer } from '../core/types.js';
+import type { Offer, ProbeReport } from '../core/types.js';
 
 /**
  * Injected into every vendor site, but deliberately inert unless the background
@@ -13,13 +13,40 @@ import type { Offer } from '../core/types.js';
  */
 
 const POLL_INTERVAL_MS = 1_500;
+const RETRY_DELAY_MS = 250;
 /** Two identical reads in a row is our stand-in for "the page settled". */
 const STABLE_READS_REQUIRED = 2;
 
-function send(message: ProbeRequest): void {
-  chrome.runtime.sendMessage(message).catch(() => {
-    // Background went away mid-run; nothing useful to do from here.
-  });
+/**
+ * Deliver the one payload this script exists to produce, with a single retry.
+ *
+ * Swallowing a failure here does not lose a log line, it loses the result: the
+ * background's timer then fires and the user is told "timed out before any
+ * price appeared" for a page where prices were found and parsed. That is worse
+ * than no diagnosis — it is a confident wrong one. A rejection is usually the
+ * service worker mid-restart, which a moment's wait resolves.
+ */
+async function send(message: ProbeRequest): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await chrome.runtime.sendMessage(message);
+      return;
+    } catch {
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+  // Two failures means the background is genuinely gone; it will time this
+  // quote out on its own, and there is no one left here to tell.
+}
+
+/** Path only — the query string carries the discount code and the itinerary. */
+function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
+  return {
+    finalPath: location.pathname,
+    title: document.title.slice(0, 120),
+    offerCount: offers.length,
+    path,
+  };
 }
 
 function fingerprint(offers: Offer[]): string {
@@ -34,17 +61,22 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
   let previous = '';
   let stableReads = 0;
   let latest: Offer[] = [];
+  let path: ProbeReport['path'] = 'generic-sweep';
 
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
     let offers: Offer[] = [];
     try {
-      offers = extractOffers(document, assignment.vendor);
+      const extraction = extract(document, assignment.vendor);
+      offers = extraction.offers;
+      path = extraction.path;
     } catch (error) {
-      send({
+      await send({
         type: 'PROBE_FAILED',
+        failure: 'extract-threw',
         message: error instanceof Error ? error.message : String(error),
+        report: report([], path),
       });
       return;
     }
@@ -62,14 +94,22 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
     previous = current;
 
     if (stableReads >= STABLE_READS_REQUIRED - 1) {
-      send({ type: 'PROBE_RESULT', offers });
+      await send({ type: 'PROBE_RESULT', offers, report: report(offers, path) });
       return;
     }
   }
 
   // Out of time. Partial results still beat nothing.
-  if (latest.length > 0) send({ type: 'PROBE_RESULT', offers: latest });
-  else send({ type: 'PROBE_FAILED', message: 'no prices found before timeout' });
+  if (latest.length > 0) {
+    await send({ type: 'PROBE_RESULT', offers: latest, report: report(latest, path) });
+  } else {
+    await send({
+      type: 'PROBE_FAILED',
+      failure: 'probe-empty',
+      message: 'polled to the deadline without seeing a price',
+      report: report([], path),
+    });
+  }
 }
 
 async function main(): Promise<void> {

@@ -290,6 +290,7 @@ input:focus-visible {
 
 .quote {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   padding: 7px 9px;
@@ -327,6 +328,24 @@ input:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* A warning or evidence line appended to a quote has to break onto its own row
+   (see flex-wrap above) or it becomes a third flex item competing with the
+   company name for width in a 420px popup. */
+.quote .hint,
+.quote .evidence {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+
+.quote .evidence {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  /* A vendor path can be long and has no spaces to break on; without this it
+     forces horizontal scroll in a 420px popup. */
+  overflow-wrap: anywhere;
+}
+
 .quote .basis {
   color: var(--muted);
   font-size: 10px;
@@ -344,6 +363,9 @@ input:focus-visible {
 .quote .status {
   color: var(--muted);
   font-size: 11px;
+  /* Can hold a message the content script supplied, which has no length bound
+     and may not break on its own. */
+  overflow-wrap: anywhere;
 }
 
 .quote .status.is-error {

@@ -19,6 +19,7 @@ import type {
   Category,
   PriceBasis,
   Quote,
+  QuoteFailure,
   RunState,
   SearchPlan,
   Trip,
@@ -321,6 +322,56 @@ function basisPhrase(basis: PriceBasis, currency: string, category: Category): s
   return `${kind} in ${currency}`;
 }
 
+/**
+ * One short phrase per failure. Deliberately a lookup rather than free text:
+ * the popup used to print whatever sentence the background happened to set,
+ * which meant nothing could be counted or grouped, and a reworded string
+ * silently changed what the user was told.
+ */
+const FAILURE_TEXT: Record<QuoteFailure, string> = {
+  'link-build': 'could not build a search link',
+  'tab-open': 'could not open a tab',
+  'probe-timeout': 'no answer before the deadline',
+  'probe-empty': 'page loaded, no price appeared',
+  'extract-threw': 'could not read this page',
+  'tab-closed': 'tab closed early',
+  interrupted: 'interrupted mid-run',
+  cancelled: 'cancelled',
+};
+
+/**
+ * Short phrase for a known failure code, or nothing.
+ *
+ * Returning null rather than defaulting matters: a quote persisted by an older
+ * build has a message but no code, and defaulting would have relabelled "tab
+ * closed before pricing" as "no answer before the deadline". Inventing a
+ * diagnosis is worse than admitting there isn't one.
+ */
+function describeFailure(quote: Quote): string | null {
+  const failure = quote.failure;
+  // Object.hasOwn, not `in` — `in` walks the prototype chain, so a stored value
+  // of "toString" would have rendered a function body into the row.
+  return failure && Object.hasOwn(FAILURE_TEXT, failure) ? FAILURE_TEXT[failure] : null;
+}
+
+/** "landed /en/home · 0 offers · generic sweep" — what the probe actually saw. */
+function evidenceLine(quote: Quote): HTMLElement | null {
+  const report = quote.report;
+  if (!report) return null;
+  const line = document.createElement('p');
+  line.className = 'evidence';
+  const plural = report.offerCount === 1 ? '' : 's';
+  const branch =
+    report.path === 'generic-sweep'
+      ? 'generic sweep'
+      : report.path === 'vendor-selectors'
+        ? 'vendor selectors'
+        : 'unknown branch';
+  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}`;
+  if (report.title) line.title = report.title;
+  return line;
+}
+
 function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIElement {
   const item = document.createElement('li');
   item.className = quote.id === winnerId ? 'quote is-winner' : 'quote';
@@ -370,11 +421,33 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
         ? 'checking…'
         : quote.status === 'pending'
           ? 'queued'
-          : (quote.message ?? quote.status);
+          : (describeFailure(quote) ?? quote.message ?? quote.status);
+    if (quote.message) status.title = quote.message;
     right.append(status);
   }
 
   item.append(who, right);
+
+  // Evidence where it is load-bearing: any failure, plus the flagged case.
+  // Gating on a failed status alone hid it from the quote that needs it most —
+  // one flagged as landing on the home page still reads `ok`, so the user got
+  // the accusation with nothing to check it against. Showing it on every row
+  // instead was the over-correction: 25 codes would mean 25 lines nobody reads.
+  if (quote.status !== 'ok' || quote.suspect) {
+    const evidence = evidenceLine(quote);
+    if (evidence) item.append(evidence);
+  }
+
+  // The failure that does not look like one: a deep link that missed its search
+  // still shows a plausible "from $19/day", so the quote reads ok and simply
+  // wins. Say so where the price is, not in a console nobody opens.
+  if (quote.suspect === 'landed-elsewhere') {
+    const warning = document.createElement('p');
+    warning.className = 'hint is-warning';
+    warning.textContent =
+      'This landed on the vendor home page, not a results page — the code was almost certainly not applied.';
+    item.append(warning);
+  }
 
   if (quote.url) {
     const link = document.createElement('a');
@@ -407,6 +480,20 @@ function renderRun(state: RunState | null): void {
   quotesList.replaceChildren(
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
+
+  // One line for the list rather than a badge per row: every builder is
+  // best-effort today, so a per-row flag would mark every row and say nothing.
+  const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
+  if (unverified > 0) {
+    const note = document.createElement('li');
+    note.className = 'hint';
+    const scope =
+      unverified === state.quotes.length
+        ? 'Vendor search links are'
+        : `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'}`;
+    note.textContent = `${scope} reverse-engineered and unverified — a result that looks wrong probably is.`;
+    quotesList.append(note);
+  }
 
   const spread = savings(state.quotes);
   const setAside = unrankedQuotes(state.quotes);
@@ -559,14 +646,39 @@ function setCategory(category: Category): void {
   refreshPlan();
 }
 
+/**
+ * Talk to the background, retrying once — except for START_RUN.
+ *
+ * A rejection here is usually the service worker asleep or mid-restart, which
+ * one retry fixes. It does not mean the message went undelivered, so a null
+ * reply must not be read as "no run" — doing that cleared ui.running and
+ * re-armed the button, letting the next click cancel a race still in flight.
+ */
 async function send(request: PopupRequest): Promise<StateMessage | null> {
-  try {
-    return await chrome.runtime.sendMessage<PopupRequest, StateMessage>(request);
-  } catch {
-    // The service worker can be asleep or mid-restart; the popup just shows
-    // whatever it already had rather than throwing at the user.
-    return null;
+  // START_RUN is the one request that is not idempotent: a rejection does not
+  // prove non-delivery, and retrying it starts a second race that opens real
+  // vendor tabs before cancelling the first. CLAUDE.md's politeness rule beats
+  // the convenience of a retry here.
+  const attempts = request.type === 'START_RUN' ? 1 : 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await chrome.runtime.sendMessage<PopupRequest, StateMessage>(request);
+    } catch {
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 150));
+    }
   }
+  return null;
+}
+
+/** Render a reply, or say why there isn't one instead of going quiet. */
+function applyReply(reply: StateMessage | null): void {
+  if (reply) {
+    renderRun(reply.state);
+    return;
+  }
+  // Leave whatever is on screen alone — the run may well still be going.
+  planSummary.textContent = 'Could not reach the extension background. Try reopening the popup.';
+  planSummary.classList.add('is-warning');
 }
 
 form.addEventListener('submit', (event) => {
@@ -589,11 +701,11 @@ form.addEventListener('submit', (event) => {
   };
 
   void saveForm();
-  void send({ type: 'START_RUN', plan }).then((reply) => renderRun(reply?.state ?? null));
+  void send({ type: 'START_RUN', plan }).then(applyReply);
 });
 
 cancelBtn.addEventListener('click', () => {
-  void send({ type: 'CANCEL_RUN' }).then((reply) => renderRun(reply?.state ?? null));
+  void send({ type: 'CANCEL_RUN' }).then(applyReply);
 });
 
 for (const tab of document.querySelectorAll<HTMLButtonElement>('.tab')) {
@@ -622,8 +734,7 @@ async function main(): Promise<void> {
     .reduce((sum, vendor) => sum + countCodesFor(vendor.id), 0);
   tagline.textContent = `${totalCodes} corporate codes loaded. Pick a trip and let them fight.`;
 
-  const reply = await send({ type: 'GET_STATE' });
-  renderRun(reply?.state ?? null);
+  applyReply(await send({ type: 'GET_STATE' }));
 }
 
 // An unhandled rejection here leaves the popup half-rendered and silent — the
