@@ -1,4 +1,5 @@
 import {
+  allCompanies,
   buildCandidates,
   countCodesFor,
   interleaveByVendor,
@@ -15,7 +16,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { getVendor, vendorsFor } from '../core/vendors.js';
+import { VENDORS, getVendor, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -45,12 +46,15 @@ interface UiState {
   category: Category;
   vendors: Set<VendorId>;
   companies: Set<string>;
+  /** Mirrors the background's run state, so plan edits can't re-arm Run. */
+  running: boolean;
 }
 
 const ui: UiState = {
   category: 'car',
   vendors: new Set<VendorId>(),
   companies: new Set<string>(),
+  running: false,
 };
 
 function money(amount: number, currency: string): string {
@@ -96,12 +100,53 @@ function renderVendorChips(): void {
   );
 }
 
+/**
+ * "3 selected · clear" — the only handle on a selection you cannot see.
+ *
+ * The list renders at most 60 matches, so a company picked via the search box
+ * is invisible once the box is cleared, and a stale saved selection can leave
+ * the plan empty with no checkbox anywhere to untick.
+ */
+function selectionSummary(): HTMLElement | null {
+  if (ui.companies.size === 0) return null;
+  const row = document.createElement('p');
+  row.className = 'empty selection';
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'linklike';
+  clear.textContent = 'clear';
+  clear.addEventListener('click', () => {
+    ui.companies.clear();
+    renderCompanyList();
+    refreshPlan();
+    void saveForm();
+  });
+  row.append(`${ui.companies.size} selected · `, clear);
+  return row;
+}
+
+/** Keep the count current without re-rendering the list out from under a click. */
+function syncSelectionSummary(): void {
+  const existing = companyList.querySelector('.selection');
+  if (ui.companies.size === 0) {
+    existing?.remove();
+    return;
+  }
+  if (existing?.firstChild) {
+    existing.firstChild.textContent = `${ui.companies.size} selected · `;
+    return;
+  }
+  const fresh = selectionSummary();
+  if (fresh) companyList.prepend(fresh);
+}
+
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
   const matches = searchCompanies(query).filter((company) =>
     company.codes.some((code) => code.code && vendors.includes(code.vendor)),
   );
+  const selected = selectionSummary();
 
   if (matches.length === 0) {
     const empty = document.createElement('p');
@@ -109,13 +154,16 @@ function renderCompanyList(): void {
     empty.textContent = query
       ? `No company matching "${query}" has a code for these vendors.`
       : 'Pick at least one vendor.';
-    companyList.replaceChildren(empty);
+    // Still offer the escape hatch — an empty list is exactly when a stale
+    // selection has stranded the plan.
+    companyList.replaceChildren(...(selected ? [selected, empty] : [empty]));
     return;
   }
 
   // Long lists make the popup crawl; the search box is how you reach the rest.
   const shown = matches.slice(0, 60);
   companyList.replaceChildren(
+    ...(selected ? [selected] : []),
     ...shown.map((company) => {
       const row = document.createElement('label');
       row.className = 'company';
@@ -126,6 +174,7 @@ function renderCompanyList(): void {
       box.addEventListener('change', () => {
         if (box.checked) ui.companies.add(company.slug);
         else ui.companies.delete(company.slug);
+        syncSelectionSummary();
         refreshPlan();
         void saveForm();
       });
@@ -190,7 +239,11 @@ function refreshPlan(): void {
     runBtn.disabled = true;
     return;
   }
-  runBtn.disabled = false;
+  // Not unconditionally: refreshPlan fires on every vendor chip, company
+  // checkbox and max-codes keystroke, all reachable mid-run, and re-arming the
+  // button let a second submit silently cancel the race in flight and discard
+  // the quotes it had already collected.
+  runBtn.disabled = ui.running;
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
@@ -297,6 +350,7 @@ function renderQuote(quote: Quote, winnerId: string | null): HTMLLIElement {
 
 function renderRun(state: RunState | null): void {
   const running = Boolean(state && !state.finishedAt);
+  ui.running = running;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
@@ -382,9 +436,21 @@ async function restoreForm(): Promise<void> {
   const saved = stored[FORM_STATE_KEY] as SavedForm | undefined;
   if (!saved) return;
 
-  if (saved.category) ui.category = saved.category;
-  if (saved.vendors?.length) ui.vendors = new Set(saved.vendors);
-  if (saved.companies?.length) ui.companies = new Set(saved.companies);
+  // Everything here came out of chrome.storage and is only as trustworthy as
+  // the version of the extension that wrote it. An unknown vendor id reaches
+  // getVendor(), which throws — killing main() and leaving a half-rendered
+  // popup stuck on "Loading codes…" with no way to recover. A company slug
+  // that no longer exists after `npm run codes` is quieter but just as stuck:
+  // nothing matches, Run is disabled, and no checkbox exists to untick.
+  if (saved.category === 'car' || saved.category === 'hotel') ui.category = saved.category;
+  if (saved.vendors?.length) {
+    const known = new Set<string>(VENDORS.map((vendor) => vendor.id));
+    ui.vendors = new Set(saved.vendors.filter((id) => known.has(id)));
+  }
+  if (saved.companies?.length) {
+    const known = new Set(allCompanies().map((company) => company.slug));
+    ui.companies = new Set(saved.companies.filter((slug) => known.has(slug)));
+  }
   if (saved.maxCodes) maxCodesInput.value = saved.maxCodes;
   if (saved.concurrency) concurrencyInput.value = saved.concurrency;
 
@@ -487,4 +553,10 @@ async function main(): Promise<void> {
   renderRun(reply?.state ?? null);
 }
 
-void main();
+// An unhandled rejection here leaves the popup half-rendered and silent — the
+// tagline still reading "Loading codes…" with no clue why. Say what broke.
+void main().catch((error: unknown) => {
+  planSummary.textContent = `Could not start up: ${error instanceof Error ? error.message : String(error)}`;
+  planSummary.classList.add('is-warning');
+  runBtn.disabled = true;
+});

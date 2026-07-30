@@ -215,6 +215,17 @@ input:focus-visible {
   text-align: center;
 }
 
+/* Inline action inside a hint line — the "clear" beside a selection count. */
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--spice);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .hint {
   margin: 6px 0 0;
   color: var(--muted);
