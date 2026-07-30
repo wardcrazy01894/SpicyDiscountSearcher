@@ -1,3 +1,5 @@
+import type { LinkConfidence } from './deeplinks.js';
+
 export type Category = 'car' | 'hotel';
 
 export type VendorId =
@@ -105,16 +107,70 @@ export interface Offer {
   basis: PriceBasis;
 }
 
+/**
+ * Why a quote produced no price, as a value rather than a sentence.
+ *
+ * `status` collapsed five genuinely different outcomes into `no-price`, and the
+ * only thing telling them apart was the English in `message` — which the popup
+ * printed verbatim and nothing could count, group or reason about. "It said no
+ * results for Hertz" was unanswerable without sitting next to the user.
+ */
+export type QuoteFailure =
+  /** buildDeepLink refused — an unsearchable vendor, or a malformed trip. */
+  | 'link-build'
+  /** chrome.tabs.create failed, so the page was never even requested. */
+  | 'tab-open'
+  /** The background's own clock ran out; the probe never answered at all. */
+  | 'probe-timeout'
+  /** The probe polled to its deadline and never saw a price. */
+  | 'probe-empty'
+  /** extractOffers threw on this page's markup. */
+  | 'extract-threw'
+  /** Prices were found, but none usable as a headline number. */
+  | 'no-usable-price'
+  /** The user closed the tab mid-probe. */
+  | 'tab-closed'
+  /** MV3 suspended the worker mid-race. */
+  | 'interrupted'
+  | 'cancelled';
+
+/**
+ * What the probe saw, kept whether or not it found a price.
+ *
+ * A deep link that lands on the vendor's home page still yields a plausible
+ * "from $19/day" and reports `ok`, indistinguishable from a real quote. These
+ * are the facts that tell the two apart after the fact — README calls the deep
+ * links reverse-engineered and expected to rot, so the evidence has to survive
+ * the run.
+ */
+export interface ProbeReport {
+  /** Landed URL, path only — the query string carries the code and itinerary. */
+  finalPath: string;
+  title: string;
+  offerCount: number;
+  /** Which extraction branch produced the offers. */
+  path: 'vendor-selectors' | 'generic-sweep';
+}
+
 export interface Quote {
   /** Stable per-run id: `${vendor}:${code}`. */
   id: string;
   candidate: Candidate;
   url: string;
+  /** How much to trust the deep link that produced `url`. */
+  confidence: LinkConfidence;
   status: QuoteStatus;
   offers: Offer[];
   /** Cheapest offer on the page, or null until one is found. */
   best: Offer | null;
+  /** Machine-readable reason, set whenever status is not ok/pending/loading. */
+  failure?: QuoteFailure;
+  /** Human detail alongside `failure`, never a substitute for it. */
   message?: string;
+  /** What the probe observed, when it got far enough to observe anything. */
+  report?: ProbeReport;
+  /** Set when the evidence says this page is not the search we asked for. */
+  suspect?: 'landed-elsewhere';
   startedAt?: number;
   finishedAt?: number;
 }

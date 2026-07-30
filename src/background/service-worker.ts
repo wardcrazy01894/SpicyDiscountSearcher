@@ -1,7 +1,7 @@
 import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
-import type { Candidate, Quote, RunState, SearchPlan } from '../core/types.js';
+import type { Candidate, ProbeReport, Quote, RunState, SearchPlan } from '../core/types.js';
 
 /**
  * Runs a price race.
@@ -88,7 +88,8 @@ function reapInterrupted(state: RunState | null): RunState | null {
   for (const quote of state.quotes) {
     if (quote.finishedAt) continue;
     quote.status = 'error';
-    quote.message = 'interrupted — the extension was suspended mid-run';
+    quote.failure = 'interrupted';
+    quote.message = 'the extension was suspended mid-run';
     quote.finishedAt = now;
   }
   state.finishedAt = now;
@@ -107,19 +108,51 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
   run.waiters.delete(quoteId);
 }
 
+/**
+ * Did the deep link land somewhere other than the search we asked for?
+ *
+ * README is explicit that these URLs are reverse-engineered and expected to
+ * rot, and the failure is silent: a vendor home page still shows "from $19/day",
+ * so the quote comes back `ok` and simply wins. The site root is the one
+ * unambiguous tell — it is never a results page — so that is all this claims.
+ */
+function landedElsewhere(quote: Quote | undefined, report: ProbeReport | undefined): boolean {
+  // A content script runs in a page we do not control, so treat its message as
+  // input rather than as a promise kept.
+  if (!quote?.url || !report) return false;
+  let asked: string;
+  try {
+    asked = new URL(quote.url).pathname;
+  } catch {
+    return false;
+  }
+  const landed = report.finalPath;
+  return (landed === '/' || landed === '') && asked !== '/' && asked !== '';
+}
+
 function makeQuote(candidate: Candidate, plan: SearchPlan): Quote {
   const id = `${candidate.vendor}:${candidate.code}`;
   try {
     const link = buildDeepLink(candidate.vendor, candidate.code, plan.trip);
-    return { id, candidate, url: link.url, status: 'pending', offers: [], best: null };
+    return {
+      id,
+      candidate,
+      url: link.url,
+      confidence: link.confidence,
+      status: 'pending',
+      offers: [],
+      best: null,
+    };
   } catch (error) {
     return {
       id,
       candidate,
       url: '',
+      confidence: 'best-effort',
       status: 'error',
       offers: [],
       best: null,
+      failure: 'link-build',
       message: error instanceof Error ? error.message : String(error),
       finishedAt: Date.now(),
     };
@@ -204,7 +237,8 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
       const timer = setTimeout(() => {
         finishQuote(run, quote.id, {
           status: 'no-price',
-          message: 'timed out before any price appeared',
+          failure: 'probe-timeout',
+          message: 'the tab never reported back before the deadline',
         });
         resolve();
       }, PROBE_TIMEOUT_MS);
@@ -217,6 +251,7 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
   } catch (error) {
     finishQuote(run, quote.id, {
       status: 'error',
+      failure: 'tab-open',
       message: error instanceof Error ? error.message : String(error),
     });
   } finally {
@@ -287,7 +322,7 @@ async function cancelRun(): Promise<void> {
   run.cancelled = true;
 
   for (const quote of [...run.state.quotes]) {
-    finishQuote(run, quote.id, { status: 'cancelled' });
+    finishQuote(run, quote.id, { status: 'cancelled', failure: 'cancelled' });
   }
   // finishQuote returns early for a quote already marked finished, so a lane
   // waiting on a duplicate quote id keeps waiting. Not forever — the probe
@@ -378,11 +413,19 @@ chrome.runtime.onMessage.addListener(
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
           if (active && quoteId !== undefined) {
             const best = bestOffer(message.offers);
+            const quote = quoteFor(active, quoteId);
             finishQuote(active, quoteId, {
               status: best ? 'ok' : 'no-price',
               offers: message.offers,
               best,
-              ...(best ? {} : { message: 'page loaded but showed no usable price' }),
+              report: message.report,
+              ...(landedElsewhere(quote, message.report) ? { suspect: 'landed-elsewhere' } : {}),
+              ...(best
+                ? {}
+                : {
+                    failure: 'no-usable-price',
+                    message: 'the page had prices, but none usable as a headline number',
+                  }),
             });
             await publish();
           }
@@ -393,7 +436,12 @@ chrome.runtime.onMessage.addListener(
           const tabId = sender.tab?.id;
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
           if (active && quoteId !== undefined) {
-            finishQuote(active, quoteId, { status: 'no-price', message: message.message });
+            finishQuote(active, quoteId, {
+              status: 'no-price',
+              failure: message.failure,
+              message: message.message,
+              report: message.report,
+            });
             await publish();
           }
           sendResponse({ ok: true });
@@ -439,6 +487,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   const quoteId = run?.tabs.get(tabId);
   if (!run || quoteId === undefined) return;
   run.tabs.delete(tabId);
-  finishQuote(run, quoteId, { status: 'no-price', message: 'tab closed before pricing' });
+  finishQuote(run, quoteId, {
+    status: 'no-price',
+    failure: 'tab-closed',
+    message: 'the tab was closed before it reported a price',
+  });
   void publish();
 });

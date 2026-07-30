@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
-import type { CarTrip, Offer, RunState, SearchPlan } from '../src/core/types.js';
+import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
   category: 'car',
@@ -26,6 +26,13 @@ function plan(concurrency = 2): SearchPlan {
 }
 
 const OFFER: Offer = { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' };
+
+const REPORT: ProbeReport = {
+  finalPath: '/rentacar/reservation/',
+  title: 'Results',
+  offerCount: 1,
+  path: 'generic-sweep',
+};
 
 let chromeMock: ChromeHarness;
 
@@ -77,7 +84,7 @@ describe('starting a run', () => {
     await settle();
 
     for (const tabId of [...chromeMock.tabs.keys()]) {
-      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
     }
     await settle(1_000);
 
@@ -98,7 +105,7 @@ describe('starting a run', () => {
 
     chromeMock.failNextSessionWrite();
     for (const tabId of [...chromeMock.tabs.keys()]) {
-      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
     }
     await settle(1_000);
 
@@ -149,7 +156,7 @@ describe('politeness', () => {
     for (let step = 0; step < 3; step += 1) {
       const tabId = [...chromeMock.tabs.keys()].at(-1);
       if (tabId === undefined) break;
-      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
       await settle(1_000);
     }
 
@@ -241,6 +248,89 @@ describe('probe assignment', () => {
   });
 });
 
+describe('diagnosing a run afterwards', () => {
+  it('flags a deep link that landed on the vendor home page', async () => {
+    // The silent failure README predicts: the home page still shows a
+    // plausible "from $19/day", so the quote comes back ok and simply wins.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, finalPath: '/' },
+    });
+    await settle(1_000);
+
+    const landed = (await getState())?.quotes.find((q) => q.suspect);
+    expect(landed?.suspect).toBe('landed-elsewhere');
+    expect(landed?.status).toBe('ok');
+  });
+
+  it('leaves a quote that reached a real results path unflagged', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    for (const tabId of [...chromeMock.tabs.keys()]) {
+      await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    }
+    await settle(1_000);
+
+    expect((await getState())?.quotes.some((q) => q.suspect)).toBe(false);
+  });
+
+  it('keeps what the probe saw even when it found no price', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'probe-empty',
+      message: 'polled to the deadline without seeing a price',
+      report: { ...REPORT, offerCount: 0, title: 'No vehicles available' },
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.failure === 'probe-empty');
+    // Without this, "it said no results for Hertz" cannot be told apart from a
+    // tab that never loaded.
+    expect(quote?.report?.title).toBe('No vehicles available');
+    expect(quote?.report?.offerCount).toBe(0);
+    expect(quote?.report?.path).toBe('generic-sweep');
+  });
+
+  it('records which extraction branch produced the offers', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'vendor-selectors' },
+    });
+    await settle(1_000);
+
+    expect((await getState())?.quotes[0]?.report?.path).toBe('vendor-selectors');
+  });
+
+  it('carries the deep-link confidence onto the quote', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    // Every builder is best-effort today; the point is that it reaches the UI
+    // at all, rather than being computed and thrown away.
+    expect((await getState())?.quotes.every((q) => q.confidence === 'best-effort')).toBe(true);
+  });
+});
+
 describe('cancelling', () => {
   it('closes the tabs and window and marks every unfinished quote cancelled', async () => {
     await bootWorker();
@@ -264,7 +354,7 @@ describe('cancelling', () => {
     const tabId = [...chromeMock.tabs.keys()][0]!;
 
     await chromeMock.fromPopup({ type: 'CANCEL_RUN' });
-    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
     await settle();
 
     const state = await getState();
@@ -285,7 +375,9 @@ describe('a tab the user closes', () => {
     const state = await getState();
     const closed = state?.quotes.find((q) => q.finishedAt);
     expect(closed?.status).toBe('no-price');
-    expect(closed?.message).toContain('tab closed');
+    // The code, not the prose — a reworded message must not change what the
+    // rest of the system believes happened.
+    expect(closed?.failure).toBe('tab-closed');
   });
 });
 
@@ -304,6 +396,7 @@ describe('a run the browser interrupted', () => {
           id: 'hertz:H1',
           candidate: plan().candidates[0]!,
           url: 'https://www.hertz.com/',
+          confidence: 'best-effort',
           status: 'loading',
           offers: [],
           best: null,
@@ -317,7 +410,7 @@ describe('a run the browser interrupted', () => {
     const state = await getState();
     expect(state?.finishedAt).toBeTypeOf('number');
     expect(state?.quotes[0]?.status).toBe('error');
-    expect(state?.quotes[0]?.message).toContain('interrupted');
+    expect(state?.quotes[0]?.failure).toBe('interrupted');
   });
 
   it('closes the window its worker orphaned', async () => {

@@ -488,10 +488,23 @@ function sweep(root: Element): Offer[] {
   return dedupe(offers);
 }
 
-export function extractOffers(doc: Document, vendor: VendorId): Offer[] {
+/**
+ * Offers plus which branch found them.
+ *
+ * CLAUDE.md says a vendor redesign should degrade to the generic sweep rather
+ * than to nothing — but degrading silently is indistinguishable from a vendor
+ * whose selectors were never written. Recording the branch makes "this vendor
+ * used to match its selectors and now never does" answerable from one report.
+ */
+export interface Extraction {
+  offers: Offer[];
+  path: 'vendor-selectors' | 'generic-sweep';
+}
+
+export function extract(doc: Document, vendor: VendorId): Extraction {
   const config = VENDOR_SELECTORS[vendor] ?? {};
   const root = firstMatch(doc, config.container) ?? doc.body;
-  if (!root) return [];
+  if (!root) return { offers: [], path: 'generic-sweep' };
 
   const offerNodes = allMatches(root, config.offer);
   if (offerNodes.length > 0) {
@@ -510,10 +523,14 @@ export function extractOffers(doc: Document, vendor: VendorId): Offer[] {
         });
       }
     }
-    if (offers.length > 0) return dedupe(offers);
+    if (offers.length > 0) return { offers: dedupe(offers), path: 'vendor-selectors' };
   }
 
-  return sweep(root);
+  return { offers: sweep(root), path: 'generic-sweep' };
+}
+
+export function extractOffers(doc: Document, vendor: VendorId): Offer[] {
+  return extract(doc, vendor).offers;
 }
 
 const BASIS_PREFERENCE: PriceBasis[] = ['total', 'unknown', 'per-day'];

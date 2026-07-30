@@ -1,4 +1,4 @@
-import type { Offer, RunState, SearchPlan, VendorId } from './types.js';
+import type { Offer, ProbeReport, QuoteFailure, RunState, SearchPlan, VendorId } from './types.js';
 
 /** Popup -> background. */
 export type PopupRequest =
@@ -7,8 +7,10 @@ export type PopupRequest =
 /** Content script -> background. */
 export type ProbeRequest =
   | { type: 'PROBE_READY' }
-  | { type: 'PROBE_RESULT'; offers: Offer[] }
-  | { type: 'PROBE_FAILED'; message: string };
+  // Both carry a report: the facts that separate a real quote from a deep link
+  // that quietly landed on the vendor's home page are the same either way.
+  | { type: 'PROBE_RESULT'; offers: Offer[]; report: ProbeReport }
+  | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport };
 
 export type BackgroundRequest = PopupRequest | ProbeRequest;
 
