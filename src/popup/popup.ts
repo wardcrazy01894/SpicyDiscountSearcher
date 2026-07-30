@@ -290,8 +290,23 @@ function renderRun(state: RunState | null): void {
   if (spread && winner?.best) {
     savingsBox.hidden = false;
     savingsBox.replaceChildren();
+
+    // Built node by node rather than as a template string: company names come
+    // from the workbook and prices ultimately from a vendor page, and neither
+    // should ever be parsed as markup.
+    const strong = (text: string): HTMLElement => {
+      const node = document.createElement('strong');
+      node.textContent = text;
+      return node;
+    };
     const line = document.createElement('div');
-    line.innerHTML = `Cheapest is <strong>${winner.candidate.companyName}</strong> (${winner.candidate.code}) at <strong>${money(spread.best, winner.best.currency)}</strong> — ${money(spread.absolute, winner.best.currency)} (${spread.percent.toFixed(0)}%) under the priciest code that answered.`;
+    line.append(
+      'Cheapest is ',
+      strong(winner.candidate.companyName),
+      ` (${winner.candidate.code}) at `,
+      strong(money(spread.best, winner.best.currency)),
+      ` — ${money(spread.absolute, winner.best.currency)} (${spread.percent.toFixed(0)}%) under the priciest code that answered.`,
+    );
     savingsBox.append(line);
 
     // Flag the case where the winner is only cheap because it surfaced a
@@ -355,9 +370,14 @@ async function restoreForm(): Promise<void> {
 }
 
 function setCategory(category: Category): void {
+  // Car vendors and hotel vendors share no codes, so switching category has to
+  // drop the old selection — but re-applying the *current* category (which is
+  // what happens on every popup open) must leave a restored selection alone.
+  if (ui.category !== category) {
+    ui.vendors.clear();
+    ui.companies.clear();
+  }
   ui.category = category;
-  ui.vendors.clear();
-  ui.companies.clear();
   carFields.classList.toggle('is-hidden', category !== 'car');
   hotelFields.classList.toggle('is-hidden', category !== 'hotel');
   // Only the visible section should block submit on empty required fields.

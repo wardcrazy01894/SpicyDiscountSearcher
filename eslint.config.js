@@ -9,10 +9,10 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        // The config files themselves aren't in any tsconfig; let the default
-        // project cover them rather than type-checking lint config.
+        // Config and build scripts aren't in any tsconfig; let the default
+        // project cover them rather than type-checking tooling.
         projectService: {
-          allowDefaultProject: ['eslint.config.js'],
+          allowDefaultProject: ['eslint.config.js', 'scripts/check-dist.mjs'],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -32,7 +32,7 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
   {
-    files: ['*.config.ts', 'eslint.config.js'],
+    files: ['*.config.ts', 'eslint.config.js', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: { globals: { ...globals.node } },
   },
