@@ -116,6 +116,15 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
 }
 
 /**
+ * The only failures a content script is allowed to claim.
+ *
+ * It runs in a page we do not control, so anything else it sends is not a
+ * diagnosis — including plausible-looking codes like `cancelled` or
+ * `tab-closed`, which would misattribute the failure to the user.
+ */
+const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
+
+/**
  * Did the deep link land somewhere other than the search we asked for?
  *
  * README is explicit that these URLs are reverse-engineered and expected to
@@ -128,18 +137,6 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
  * asked to. Detecting those needs a per-vendor "this is what a results page
  * looks like" signal, which is a different change.
  */
-const KNOWN_FAILURES = new Set<QuoteFailure>([
-  'link-build',
-  'tab-open',
-  'probe-timeout',
-  'probe-empty',
-  'extract-threw',
-  'no-usable-price',
-  'tab-closed',
-  'interrupted',
-  'cancelled',
-]);
-
 function landedElsewhere(quote: Quote | undefined, report: ProbeReport | undefined): boolean {
   // A content script runs in a page we do not control, so treat its message as
   // input rather than as a promise kept.
@@ -462,9 +459,12 @@ chrome.runtime.onMessage.addListener(
             const failed = quoteFor(active, quoteId);
             finishQuote(active, quoteId, {
               status: 'no-price',
-              // A content script is input, not a promise kept; an unknown code
-              // must not blank the popup's status cell.
-              failure: KNOWN_FAILURES.has(message.failure) ? message.failure : 'probe-empty',
+              // Unrecognised means unrecognised. Coercing it to probe-empty
+              // would render "page loaded, no price appeared" — a specific
+              // claim with nothing behind it, which is the thing this whole
+              // change exists to stop. Leaving it unset falls back to the
+              // message the script did send.
+              ...(PROBE_FAILURES.has(message.failure) ? { failure: message.failure } : {}),
               message: message.message,
               report: message.report,
               // "no price because the link missed its search" and "no price

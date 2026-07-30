@@ -350,7 +350,9 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
  */
 function describeFailure(quote: Quote): string | null {
   const failure = quote.failure;
-  return failure && failure in FAILURE_TEXT ? FAILURE_TEXT[failure] : null;
+  // Object.hasOwn, not `in` — `in` walks the prototype chain, so a stored value
+  // of "toString" would have rendered a function body into the row.
+  return failure && Object.hasOwn(FAILURE_TEXT, failure) ? FAILURE_TEXT[failure] : null;
 }
 
 /** "landed /en/home · 0 offers · generic sweep" — what the probe actually saw. */
@@ -360,7 +362,12 @@ function evidenceLine(quote: Quote): HTMLElement | null {
   const line = document.createElement('p');
   line.className = 'evidence';
   const plural = report.offerCount === 1 ? '' : 's';
-  const branch = report.path === 'generic-sweep' ? 'generic sweep' : 'vendor selectors';
+  const branch =
+    report.path === 'generic-sweep'
+      ? 'generic sweep'
+      : report.path === 'vendor-selectors'
+        ? 'vendor selectors'
+        : 'unknown branch';
   line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}`;
   if (report.title) line.title = report.title;
   return line;
@@ -425,14 +432,17 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   // The one failure that does not look like one: a deep link that missed its
   // search still shows a plausible "from $19/day", so the quote reads ok and
   // simply wins. Say so where the price is, not in a console nobody opens.
-  // The evidence, on screen. Persisting it and calling the quote diagnosable
-  // would have meant "open DevTools on the service worker and read
-  // chrome.storage.session", which is not a thing a user does.
-  if (quote.status !== 'ok') {
-    const evidence = evidenceLine(quote);
-    if (evidence) item.append(evidence);
-  }
+  // The evidence, on screen, whenever there is any. Gating this on a failed
+  // status hid it from the one case that needs it most — a quote flagged as
+  // landing on the home page still reads `ok`, so the user got the accusation
+  // with nothing to check it against, and no way to spot a false positive on a
+  // vendor whose results really do live at the root.
+  const evidence = evidenceLine(quote);
+  if (evidence) item.append(evidence);
 
+  // The failure that does not look like one: a deep link that missed its search
+  // still shows a plausible "from $19/day", so the quote reads ok and simply
+  // wins. Say so where the price is, not in a console nobody opens.
   if (quote.suspect === 'landed-elsewhere') {
     const warning = document.createElement('p');
     warning.className = 'hint is-warning';
@@ -475,11 +485,15 @@ function renderRun(state: RunState | null): void {
 
   // Every builder is best-effort today, so a per-row badge would mark every
   // row and say nothing. One line for the list carries the same information.
-  if (state.quotes.some((q) => q.confidence === 'best-effort')) {
+  const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
+  if (unverified > 0) {
     const note = document.createElement('li');
     note.className = 'hint';
-    note.textContent =
-      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+    const scope =
+      unverified === state.quotes.length
+        ? 'Vendor search links'
+        : `${unverified} of these search links`;
+    note.textContent = `${scope} are reverse-engineered and unverified — a result that looks wrong probably is.`;
     quotesList.append(note);
   }
 
@@ -635,7 +649,7 @@ function setCategory(category: Category): void {
 }
 
 /**
- * Talk to the background, retrying once.
+ * Talk to the background, retrying once — except for START_RUN.
  *
  * A rejection here is usually the service worker asleep or mid-restart, which
  * one retry fixes. It does not mean the message went undelivered, so a null

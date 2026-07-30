@@ -341,6 +341,9 @@ input:focus-visible {
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+  /* A vendor path can be long and has no spaces to break on; without this it
+     forces horizontal scroll in a 420px popup. */
+  overflow-wrap: anywhere;
 }
 
 .quote .basis {

@@ -352,6 +352,24 @@ describe('a probe reporting something unexpected', () => {
     expect(quote?.suspect).toBe('landed-elsewhere');
   });
 
+  it('will not let a page claim a failure only the background can know', async () => {
+    // "cancelled" and "tab-closed" are the user's actions, not the page's.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'cancelled',
+      message: 'pretending the user did this',
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    expect((await getState())?.quotes.find((q) => q.finishedAt)?.failure).toBeUndefined();
+  });
+
   it('does not trust an unknown failure code from the page', async () => {
     // The content script runs in a page we do not control, and an unrecognised
     // code would blank the popup's status cell rather than say anything.
@@ -368,7 +386,12 @@ describe('a probe reporting something unexpected', () => {
     });
     await settle(1_000);
 
-    expect((await getState())?.quotes.find((q) => q.finishedAt)?.failure).toBe('probe-empty');
+    // Unset, not coerced: rendering "page loaded, no price appeared" for a code
+    // we do not recognise would be inventing the diagnosis this exists to stop.
+    // The popup falls back to the message the script did send.
+    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+    expect(quote?.failure).toBeUndefined();
+    expect(quote?.message).toBe('whatever');
   });
 
   it('survives a probe result with no report at all', async () => {
