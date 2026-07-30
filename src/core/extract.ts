@@ -504,6 +504,8 @@ export interface Extraction {
 export function extract(doc: Document, vendor: VendorId): Extraction {
   const config = VENDOR_SELECTORS[vendor] ?? {};
   const root = firstMatch(doc, config.container) ?? doc.body;
+  // No root at all: nothing ran, and the sweep is the honest default only
+  // because it is the branch that would have run.
   if (!root) return { offers: [], path: 'generic-sweep' };
 
   const offerNodes = allMatches(root, config.offer);

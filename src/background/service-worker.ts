@@ -1,7 +1,14 @@
 import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
-import type { Candidate, ProbeReport, Quote, RunState, SearchPlan } from '../core/types.js';
+import type {
+  Candidate,
+  ProbeReport,
+  Quote,
+  QuoteFailure,
+  RunState,
+  SearchPlan,
+} from '../core/types.js';
 
 /**
  * Runs a price race.
@@ -115,7 +122,24 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
  * rot, and the failure is silent: a vendor home page still shows "from $19/day",
  * so the quote comes back `ok` and simply wins. The site root is the one
  * unambiguous tell — it is never a results page — so that is all this claims.
+ *
+ * Blind for avis and budget by construction: their builders already target
+ * /en/home, so a link that fails to apply the code lands exactly where it was
+ * asked to. Detecting those needs a per-vendor "this is what a results page
+ * looks like" signal, which is a different change.
  */
+const KNOWN_FAILURES = new Set<QuoteFailure>([
+  'link-build',
+  'tab-open',
+  'probe-timeout',
+  'probe-empty',
+  'extract-threw',
+  'no-usable-price',
+  'tab-closed',
+  'interrupted',
+  'cancelled',
+]);
+
 function landedElsewhere(quote: Quote | undefined, report: ProbeReport | undefined): boolean {
   // A content script runs in a page we do not control, so treat its message as
   // input rather than as a promise kept.
@@ -420,12 +444,11 @@ chrome.runtime.onMessage.addListener(
               best,
               report: message.report,
               ...(landedElsewhere(quote, message.report) ? { suspect: 'landed-elsewhere' } : {}),
-              ...(best
-                ? {}
-                : {
-                    failure: 'no-usable-price',
-                    message: 'the page had prices, but none usable as a headline number',
-                  }),
+              // bestOffer only returns null for an empty list, and the probe
+              // never sends one — it reports PROBE_FAILED instead. Kept as a
+              // real guard rather than a message describing a state it cannot
+              // be in: if that ever changes, this says so honestly.
+              ...(best ? {} : { failure: 'probe-empty', message: 'the page reported no offers' }),
             });
             await publish();
           }
@@ -436,11 +459,18 @@ chrome.runtime.onMessage.addListener(
           const tabId = sender.tab?.id;
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
           if (active && quoteId !== undefined) {
+            const failed = quoteFor(active, quoteId);
             finishQuote(active, quoteId, {
               status: 'no-price',
-              failure: message.failure,
+              // A content script is input, not a promise kept; an unknown code
+              // must not blank the popup's status cell.
+              failure: KNOWN_FAILURES.has(message.failure) ? message.failure : 'probe-empty',
               message: message.message,
               report: message.report,
+              // "no price because the link missed its search" and "no price
+              // because the results page was empty" is exactly the distinction
+              // this is for, and the evidence is already in hand.
+              ...(landedElsewhere(failed, message.report) ? { suspect: 'landed-elsewhere' } : {}),
             });
             await publish();
           }

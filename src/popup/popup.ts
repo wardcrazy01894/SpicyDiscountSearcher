@@ -340,6 +340,32 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   cancelled: 'cancelled',
 };
 
+/**
+ * Short phrase for a known failure code, or nothing.
+ *
+ * Returning null rather than defaulting matters: a quote persisted by an older
+ * build has a message but no code, and defaulting would have relabelled "tab
+ * closed before pricing" as "no answer before the deadline". Inventing a
+ * diagnosis is worse than admitting there isn't one.
+ */
+function describeFailure(quote: Quote): string | null {
+  const failure = quote.failure;
+  return failure && failure in FAILURE_TEXT ? FAILURE_TEXT[failure] : null;
+}
+
+/** "landed /en/home · 0 offers · generic sweep" — what the probe actually saw. */
+function evidenceLine(quote: Quote): HTMLElement | null {
+  const report = quote.report;
+  if (!report) return null;
+  const line = document.createElement('p');
+  line.className = 'evidence';
+  const plural = report.offerCount === 1 ? '' : 's';
+  const branch = report.path === 'generic-sweep' ? 'generic sweep' : 'vendor selectors';
+  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}`;
+  if (report.title) line.title = report.title;
+  return line;
+}
+
 function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIElement {
   const item = document.createElement('li');
   item.className = quote.id === winnerId ? 'quote is-winner' : 'quote';
@@ -354,17 +380,6 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   code.className = 'code';
   code.textContent = `${quote.candidate.vendor} · ${quote.candidate.code}`;
   who.append(name, code);
-
-  // README's own caveat, put where it is actually load-bearing. The flag has
-  // existed since the first commit and nothing read it, so "expect to fix
-  // these" lived in the docs while the UI presented every result as equal.
-  if (quote.confidence === 'best-effort') {
-    const flag = document.createElement('span');
-    flag.className = 'basis';
-    flag.textContent = ' unverified link';
-    flag.title = 'This vendor\u2019s search URL is reverse-engineered and may not apply the code.';
-    who.append(flag);
-  }
 
   const right = document.createElement('span');
   if (quote.best) {
@@ -400,7 +415,7 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
         ? 'checking…'
         : quote.status === 'pending'
           ? 'queued'
-          : FAILURE_TEXT[quote.failure ?? 'probe-timeout'];
+          : (describeFailure(quote) ?? quote.message ?? quote.status);
     if (quote.message) status.title = quote.message;
     right.append(status);
   }
@@ -410,6 +425,14 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   // The one failure that does not look like one: a deep link that missed its
   // search still shows a plausible "from $19/day", so the quote reads ok and
   // simply wins. Say so where the price is, not in a console nobody opens.
+  // The evidence, on screen. Persisting it and calling the quote diagnosable
+  // would have meant "open DevTools on the service worker and read
+  // chrome.storage.session", which is not a thing a user does.
+  if (quote.status !== 'ok') {
+    const evidence = evidenceLine(quote);
+    if (evidence) item.append(evidence);
+  }
+
   if (quote.suspect === 'landed-elsewhere') {
     const warning = document.createElement('p');
     warning.className = 'hint is-warning';
@@ -449,6 +472,16 @@ function renderRun(state: RunState | null): void {
   quotesList.replaceChildren(
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
+
+  // Every builder is best-effort today, so a per-row badge would mark every
+  // row and say nothing. One line for the list carries the same information.
+  if (state.quotes.some((q) => q.confidence === 'best-effort')) {
+    const note = document.createElement('li');
+    note.className = 'hint';
+    note.textContent =
+      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+    quotesList.append(note);
+  }
 
   const spread = savings(state.quotes);
   const setAside = unrankedQuotes(state.quotes);
@@ -610,11 +643,16 @@ function setCategory(category: Category): void {
  * re-armed the button, letting the next click cancel a race still in flight.
  */
 async function send(request: PopupRequest): Promise<StateMessage | null> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // START_RUN is the one request that is not idempotent: a rejection does not
+  // prove non-delivery, and retrying it starts a second race that opens real
+  // vendor tabs before cancelling the first. CLAUDE.md's politeness rule beats
+  // the convenience of a retry here.
+  const attempts = request.type === 'START_RUN' ? 1 : 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       return await chrome.runtime.sendMessage<PopupRequest, StateMessage>(request);
     } catch {
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 150));
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 150));
     }
   }
   return null;

@@ -331,6 +331,63 @@ describe('diagnosing a run afterwards', () => {
   });
 });
 
+describe('a probe reporting something unexpected', () => {
+  it('flags a failed quote that also landed on the home page', async () => {
+    // "no price because the link missed its search" and "no price because the
+    // results page was empty" are different answers to the same complaint.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'probe-empty',
+      message: 'polled to the deadline without seeing a price',
+      report: { ...REPORT, finalPath: '/', offerCount: 0 },
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+    expect(quote?.suspect).toBe('landed-elsewhere');
+  });
+
+  it('does not trust an unknown failure code from the page', async () => {
+    // The content script runs in a page we do not control, and an unrecognised
+    // code would blank the popup's status cell rather than say anything.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'something-invented',
+      message: 'whatever',
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    expect((await getState())?.quotes.find((q) => q.finishedAt)?.failure).toBe('probe-empty');
+  });
+
+  it('survives a probe result with no report at all', async () => {
+    // A content script from a previous build can still be live in an open tab
+    // after an update, sending the old message shape.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+    expect(quote?.status).toBe('ok');
+    expect(quote?.suspect).toBeUndefined();
+  });
+});
+
 describe('cancelling', () => {
   it('closes the tabs and window and marks every unfinished quote cancelled', async () => {
     await bootWorker();
