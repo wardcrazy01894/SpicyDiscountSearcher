@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Race corporate discount codes against each other to find the cheapest rental car or hotel rate.",
   "minimum_chrome_version": "116",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://www.avis.com/*",
     "https://www.budget.com/*",

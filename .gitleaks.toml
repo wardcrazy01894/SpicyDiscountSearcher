@@ -16,8 +16,14 @@ paths = [
   '''README\.md''',
 ]
 
+# Scoped to one rule above rather than listed here, so the config says what it
+# means: a global entry exempts a path from *every* rule.
+#
+# Do not read that as coverage, though. gitleaks skips the .xlsx before any
+# repo config applies — its own built-in allowlist drops binaries by extension,
+# and a debug run reports "scanned ~0 bytes" for the workbook with no config at
+# all. So the single committed artefact nobody reads by hand is invisible to
+# the scanner either way. Closing that properly means unzipping the workbook
+# and scanning its XML in the data job; until then, it is unscanned.
 [allowlist]
-paths = [
-  '''package-lock\.json''',
-  '''data/source/.*\.xlsx''',
-]
+paths = ['''package-lock\.json''']

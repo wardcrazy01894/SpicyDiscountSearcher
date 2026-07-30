@@ -1,8 +1,9 @@
 node_modules/
 dist/
 *.zip
-.env
-.env.local
+.env*
+!.env.example
+.npmrc
 .DS_Store
 *.log
 
