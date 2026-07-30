@@ -97,3 +97,35 @@ export function buildCandidates(query: CandidateQuery): Candidate[] {
     })
     .sort((a, b) => a.vendor.localeCompare(b.vendor) || a.companyName.localeCompare(b.companyName));
 }
+
+/**
+ * Reorder candidates so that taking the first N gives every vendor a turn.
+ *
+ * buildCandidates groups by vendor, which is the right order to read but the
+ * wrong one to truncate: the popup races only the first N, so with the default
+ * cap of 12 a car run was twelve Avis codes and nothing else, and a hotel run
+ * twelve Hilton codes. Racing codes against each other *within one vendor* is
+ * not the comparison this tool exists to make.
+ *
+ * Order within a vendor is preserved, so the cap still takes that vendor's
+ * alphabetically-first companies — only the spread across vendors changes.
+ */
+export function interleaveByVendor(candidates: Candidate[]): Candidate[] {
+  const queues = new Map<VendorId, Candidate[]>();
+  for (const candidate of candidates) {
+    const queue = queues.get(candidate.vendor) ?? [];
+    queue.push(candidate);
+    queues.set(candidate.vendor, queue);
+  }
+
+  const lanes = [...queues.values()];
+  const longest = lanes.reduce((max, lane) => Math.max(max, lane.length), 0);
+  const out: Candidate[] = [];
+  for (let round = 0; round < longest; round += 1) {
+    for (const lane of lanes) {
+      const next = lane[round];
+      if (next) out.push(next);
+    }
+  }
+  return out;
+}

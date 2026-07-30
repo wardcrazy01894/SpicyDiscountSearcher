@@ -6,9 +6,11 @@ import {
   codeDatabase,
   companyBySlug,
   countCodesFor,
+  interleaveByVendor,
   searchCompanies,
 } from '../src/core/codes.js';
-import { VENDORS } from '../src/core/vendors.js';
+import type { Candidate } from '../src/core/types.js';
+import { VENDORS, vendorsFor } from '../src/core/vendors.js';
 
 const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
@@ -121,5 +123,58 @@ describe('buildCandidates', () => {
     const candidates = buildCandidates({ vendors: ['marriott'], companySlugs: ['deloitte'] });
     expect(candidates.map((c) => c.code)).toContain('DTC');
     expect(candidates.length).toBeLessThan(10);
+  });
+});
+
+describe('interleaveByVendor', () => {
+  const candidate = (vendor: Candidate['vendor'], code: string): Candidate => ({
+    companySlug: code.toLowerCase(),
+    companyName: code,
+    vendor,
+    code,
+    note: null,
+  });
+
+  it('gives every vendor a turn before any vendor gets a second', () => {
+    const spread = interleaveByVendor([
+      candidate('avis', 'A1'),
+      candidate('avis', 'A2'),
+      candidate('avis', 'A3'),
+      candidate('hertz', 'H1'),
+      candidate('sixt', 'S1'),
+    ]);
+    expect(spread.map((c) => c.code)).toEqual(['A1', 'H1', 'S1', 'A2', 'A3']);
+  });
+
+  it('keeps the order within each vendor intact', () => {
+    const spread = interleaveByVendor([
+      candidate('avis', 'A1'),
+      candidate('avis', 'A2'),
+      candidate('hertz', 'H1'),
+      candidate('hertz', 'H2'),
+    ]);
+    expect(spread.filter((c) => c.vendor === 'avis').map((c) => c.code)).toEqual(['A1', 'A2']);
+  });
+
+  it('loses nothing and invents nothing', () => {
+    const all = buildCandidates({ vendors: vendorsFor('car').map((v) => v.id) });
+    const spread = interleaveByVendor(all);
+    expect(spread.length).toBe(all.length);
+    expect(new Set(spread.map((c) => `${c.vendor}:${c.code}`))).toEqual(
+      new Set(all.map((c) => `${c.vendor}:${c.code}`)),
+    );
+  });
+
+  it('handles an empty selection', () => {
+    expect(interleaveByVendor([])).toEqual([]);
+  });
+
+  it('makes the default cap race more than one vendor', () => {
+    // The bug this exists to prevent: buildCandidates sorts by vendor, so
+    // slicing the first 12 raced twelve Avis codes and nothing else — no
+    // comparison across vendors happened at default settings at all.
+    const carVendors = vendorsFor('car').map((v) => v.id);
+    const raced = interleaveByVendor(buildCandidates({ vendors: carVendors })).slice(0, 12);
+    expect(new Set(raced.map((c) => c.vendor)).size).toBe(carVendors.length);
   });
 });

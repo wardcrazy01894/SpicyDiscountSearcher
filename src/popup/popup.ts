@@ -1,4 +1,9 @@
-import { buildCandidates, countCodesFor, searchCompanies } from '../core/codes.js';
+import {
+  buildCandidates,
+  countCodesFor,
+  interleaveByVendor,
+  searchCompanies,
+} from '../core/codes.js';
 import { classMatrix, rankQuotes, savings } from '../core/compare.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
@@ -10,7 +15,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { vendorsFor } from '../core/vendors.js';
+import { getVendor, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -149,13 +154,31 @@ function renderCompanyList(): void {
   }
 }
 
-function plannedCandidates(): { all: Candidate[]; capped: Candidate[]; max: number } {
+function plannedCandidates(): { all: Candidate[]; capped: Candidate[] } {
   const max = Math.max(1, Number(maxCodesInput.value) || 1);
-  const all = buildCandidates({
-    vendors: [...ui.vendors],
-    companySlugs: [...ui.companies],
-  });
-  return { all, capped: all.slice(0, max), max };
+  // Interleaved before the cap, so the codes we actually race are spread across
+  // the selected vendors instead of being one vendor's alphabetical prefix.
+  const all = interleaveByVendor(
+    buildCandidates({
+      vendors: [...ui.vendors],
+      companySlugs: [...ui.companies],
+    }),
+  );
+  return { all, capped: all.slice(0, max) };
+}
+
+/** "Hertz 4 · Avis 4 · Budget 4" — what the cap actually chose. */
+function vendorBreakdown(candidates: Candidate[]): string {
+  const counts = new Map<VendorId, number>();
+  for (const candidate of candidates) {
+    counts.set(candidate.vendor, (counts.get(candidate.vendor) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(
+      ([aVendor, aCount], [bVendor, bCount]) => bCount - aCount || aVendor.localeCompare(bVendor),
+    )
+    .map(([vendor, count]) => `${getVendor(vendor).label} ${count}`)
+    .join(' · ');
 }
 
 function refreshPlan(): void {
@@ -169,9 +192,11 @@ function refreshPlan(): void {
   }
   runBtn.disabled = false;
   const truncated = all.length > capped.length;
+  // Always name the spread: a cap that silently picked one vendor is the whole
+  // bug this replaced, and the only way to see it is to say what was chosen.
   planSummary.textContent = truncated
-    ? `${all.length} codes match ${scope} — racing the first ${capped.length}. Narrow the list or raise the cap to try more.`
-    : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope}.`;
+    ? `${all.length} codes match ${scope} — racing ${capped.length} of them (${vendorBreakdown(capped)}). Narrow the list or raise the cap to try more.`
+    : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope} (${vendorBreakdown(capped)}).`;
   planSummary.classList.toggle('is-warning', truncated);
 }
 
