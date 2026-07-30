@@ -332,6 +332,15 @@ input:focus-visible {
   font-size: 10px;
 }
 
+/* Arithmetic we did, not a number the vendor showed — keep it visibly softer
+   than the scraped price so the two are never read as equally solid. */
+.quote .estimate {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
 .quote .status {
   color: var(--muted);
   font-size: 11px;

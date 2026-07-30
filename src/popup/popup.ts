@@ -5,11 +5,19 @@ import {
   interleaveByVendor,
   searchCompanies,
 } from '../core/codes.js';
-import { classMatrix, rankQuotes, savings } from '../core/compare.js';
+import {
+  cheapest,
+  classMatrix,
+  estimatedTotal,
+  rankQuotes,
+  savings,
+  unrankedQuotes,
+} from '../core/compare.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
   Candidate,
   Category,
+  PriceBasis,
   Quote,
   RunState,
   SearchPlan,
@@ -295,7 +303,25 @@ function validate(trip: Trip): string | null {
   return null;
 }
 
-function renderQuote(quote: Quote, winnerId: string | null): HTMLLIElement {
+/** How this category words a rate that isn't a total. */
+function perUnitLabel(category: Category): string {
+  return category === 'hotel' ? ' /night' : ' /day';
+}
+
+/** Plain-English name for one comparison bucket, e.g. "nightly rates in EUR". */
+function basisPhrase(basis: PriceBasis, currency: string, category: Category): string {
+  const kind =
+    basis === 'total'
+      ? 'trip totals'
+      : basis === 'per-day'
+        ? category === 'hotel'
+          ? 'nightly rates'
+          : 'daily rates'
+        : 'prices of no stated kind';
+  return `${kind} in ${currency}`;
+}
+
+function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIElement {
   const item = document.createElement('li');
   item.className = quote.id === winnerId ? 'quote is-winner' : 'quote';
 
@@ -319,8 +345,22 @@ function renderQuote(quote: Quote, winnerId: string | null): HTMLLIElement {
     if (quote.best.basis !== 'total') {
       const basis = document.createElement('span');
       basis.className = 'basis';
-      basis.textContent = quote.best.basis === 'per-day' ? ' /day' : ' (basis unclear)';
+      basis.textContent =
+        quote.best.basis === 'per-day' ? perUnitLabel(trip.category) : ' (basis unclear)';
       right.append(basis);
+
+      // A daily rate is not comparable to a total, so it never enters the
+      // ranking — but showing the trip-length arithmetic saves doing it in your
+      // head. Labelled an estimate because that is exactly what it is.
+      const estimate = estimatedTotal(quote.best, trip);
+      if (estimate !== null) {
+        const projected = document.createElement('span');
+        projected.className = 'estimate';
+        projected.textContent = ` ≈ ${money(estimate, quote.best.currency)} est.`;
+        projected.title =
+          'Daily rate × trip length. Excludes taxes and fees, and is not used for ranking.';
+        right.append(projected);
+      }
     }
   } else {
     const status = document.createElement('span');
@@ -361,15 +401,19 @@ function renderRun(state: RunState | null): void {
   }
   results.hidden = false;
 
+  const trip = state.plan.trip;
   const ranked = rankQuotes(state.quotes);
-  const winner = ranked.find((q) => q.status === 'ok' && q.best) ?? null;
-  quotesList.replaceChildren(...ranked.map((quote) => renderQuote(quote, winner?.id ?? null)));
+  const winner = cheapest(state.quotes);
+  quotesList.replaceChildren(
+    ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
+  );
 
   const spread = savings(state.quotes);
-  if (spread && winner?.best) {
-    savingsBox.hidden = false;
-    savingsBox.replaceChildren();
+  const setAside = unrankedQuotes(state.quotes);
+  savingsBox.hidden = !spread && setAside.length === 0;
+  savingsBox.replaceChildren();
 
+  if (spread && winner) {
     // Built node by node rather than as a template string: company names come
     // from the workbook and prices ultimately from a vendor page, and neither
     // should ever be parsed as markup.
@@ -383,24 +427,53 @@ function renderRun(state: RunState | null): void {
       'Cheapest is ',
       strong(winner.candidate.companyName),
       ` (${winner.candidate.code}) at `,
-      strong(money(spread.best, winner.best.currency)),
-      ` — ${money(spread.absolute, winner.best.currency)} (${spread.percent.toFixed(0)}%) under the priciest code that answered.`,
+      strong(money(spread.best, spread.currency)),
+      ` — ${money(spread.absolute, spread.currency)} (${spread.percent.toFixed(0)}%) under the priciest comparable code, counting ${basisPhrase(spread.basis, spread.currency, trip.category)}.`,
     );
     savingsBox.append(line);
 
+    const thing = trip.category === 'hotel' ? 'room type' : 'vehicle';
+
     // Flag the case where the winner is only cheap because it surfaced a
-    // different class of car than the others did.
-    const shared = classMatrix(state.quotes).filter((row) => row.amounts.size > 1);
+    // different class of car than the others did. Restricted to the bucket the
+    // ranking came from: a matrix built from a daily rate on one side and a
+    // trip total on the other cannot say anything about fairness.
+    const shared = classMatrix(state.quotes, {
+      basis: spread.basis,
+      currency: spread.currency,
+    }).filter((row) => row.amounts.size > 1);
     const winnerWinsShared = shared.some((row) => row.bestQuoteId === winner.id);
-    if (shared.length > 0 && !winnerWinsShared) {
+
+    if (shared.length === 0) {
+      // No overlap at all is the weakest evidence there is, and it used to pass
+      // in silence — the winner looked as clean as one that beat every rival on
+      // matched classes.
       const caveat = document.createElement('p');
       caveat.className = 'hint is-warning';
-      caveat.textContent =
-        'Heads up: another code is cheaper on the classes these results have in common, so this winner may just be showing a different vehicle.';
+      caveat.textContent = `Heads up: these codes surfaced no ${thing} in common, so there is nothing to check the winner against — the prices may not describe the same thing.`;
+      savingsBox.append(caveat);
+    } else if (!winnerWinsShared) {
+      const caveat = document.createElement('p');
+      caveat.className = 'hint is-warning';
+      caveat.textContent = `Heads up: another code is cheaper on the classes these results have in common, so this winner may just be showing a different ${thing}.`;
       savingsBox.append(caveat);
     }
-  } else {
-    savingsBox.hidden = true;
+  }
+
+  // Outside the spread block on purpose. One total against one daily rate
+  // produces no spread at all, and that is precisely when the odd one out most
+  // needs explaining — otherwise it sits in the list looking like it lost.
+  if (setAside.length > 0) {
+    const kinds = [
+      ...new Set(setAside.map((q) => basisPhrase(q.best.basis, q.best.currency, trip.category))),
+    ];
+    const note = document.createElement('p');
+    note.className = 'hint';
+    const plural = setAside.length === 1 ? '' : 's';
+    note.textContent = spread
+      ? `${setAside.length} other code${plural} quoted ${kinds.join(' or ')}. Listed below, but not ranked — that is a different question from the one above.`
+      : `${setAside.length} code${plural} quoted ${kinds.join(' or ')}, which cannot be compared with the rest. Nothing here is ranked against it.`;
+    savingsBox.append(note);
   }
 }
 
