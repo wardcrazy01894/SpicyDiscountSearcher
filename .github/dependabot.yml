@@ -1,0 +1,26 @@
+# The toolchain is what builds dist/, so its advisories are the ones that
+# matter here — there are no runtime dependencies. Grouped so a refresh is one
+# reviewable PR rather than a dozen, and monthly because this is a small repo
+# and weekly churn would just get ignored.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      # Minor and patch only. Grouping majors too would put vite 5->8 and
+      # vitest 2->4 in one PR, so a single breaking bump would block every
+      # security fix behind it; majors arrive individually instead.
+      dev-dependencies:
+        patterns: ['*']
+        update-types: [minor, patch]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']

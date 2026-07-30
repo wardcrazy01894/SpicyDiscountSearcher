@@ -15,13 +15,16 @@ import { VENDORS, vendorsFor } from '../src/core/vendors.js';
 const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
 describe('the generated code database', () => {
-  it('parsed a substantial number of companies and codes', () => {
-    // A regression in extract_codes.py that quietly drops rows would show up
-    // here before it ships as an extension that finds nothing.
+  it('parsed exactly the rows the workbook holds', () => {
+    // Exact, not a floor. Floors of 150/400 against real values of 225/546 let
+    // extract_codes.py drop a quarter of the workbook and still ship green,
+    // which is the regression the comment claimed to guard. The CI data job
+    // already pins this JSON byte-for-byte to the workbook, so a legitimate
+    // workbook edit updates both numbers together and nothing else can move
+    // them.
     const companies = allCompanies();
-    expect(companies.length).toBeGreaterThan(150);
-    const codes = companies.flatMap((c) => c.codes);
-    expect(codes.length).toBeGreaterThan(400);
+    expect(companies.length).toBe(225);
+    expect(companies.flatMap((c) => c.codes).length).toBe(546);
   });
 
   it('only references vendors the extension knows about', () => {

@@ -3,7 +3,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'src/data/*.generated.json'] },
+  { ignores: ['dist/**', 'node_modules/**', 'src/data/*.generated.json', '.claude/worktrees/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
