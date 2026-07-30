@@ -371,8 +371,9 @@ describe('a probe reporting something unexpected', () => {
   });
 
   it('does not trust an unknown failure code from the page', async () => {
-    // The content script runs in a page we do not control, and an unrecognised
-    // code would blank the popup's status cell rather than say anything.
+    // The content script runs in a page we do not control. An unrecognised code
+    // is left unset rather than coerced, so the popup falls back to the message
+    // the script did send instead of naming a failure nobody established.
     await bootWorker();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
     await settle();

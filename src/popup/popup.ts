@@ -334,7 +334,6 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   'probe-timeout': 'no answer before the deadline',
   'probe-empty': 'page loaded, no price appeared',
   'extract-threw': 'could not read this page',
-  'no-usable-price': 'prices found, none comparable',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
   cancelled: 'cancelled',
@@ -429,16 +428,15 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
 
   item.append(who, right);
 
-  // The one failure that does not look like one: a deep link that missed its
-  // search still shows a plausible "from $19/day", so the quote reads ok and
-  // simply wins. Say so where the price is, not in a console nobody opens.
-  // The evidence, on screen, whenever there is any. Gating this on a failed
-  // status hid it from the one case that needs it most — a quote flagged as
-  // landing on the home page still reads `ok`, so the user got the accusation
-  // with nothing to check it against, and no way to spot a false positive on a
-  // vendor whose results really do live at the root.
-  const evidence = evidenceLine(quote);
-  if (evidence) item.append(evidence);
+  // Evidence where it is load-bearing: any failure, plus the flagged case.
+  // Gating on a failed status alone hid it from the quote that needs it most —
+  // one flagged as landing on the home page still reads `ok`, so the user got
+  // the accusation with nothing to check it against. Showing it on every row
+  // instead was the over-correction: 25 codes would mean 25 lines nobody reads.
+  if (quote.status !== 'ok' || quote.suspect) {
+    const evidence = evidenceLine(quote);
+    if (evidence) item.append(evidence);
+  }
 
   // The failure that does not look like one: a deep link that missed its search
   // still shows a plausible "from $19/day", so the quote reads ok and simply
@@ -483,17 +481,17 @@ function renderRun(state: RunState | null): void {
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
 
-  // Every builder is best-effort today, so a per-row badge would mark every
-  // row and say nothing. One line for the list carries the same information.
+  // One line for the list rather than a badge per row: every builder is
+  // best-effort today, so a per-row flag would mark every row and say nothing.
   const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
   if (unverified > 0) {
     const note = document.createElement('li');
     note.className = 'hint';
     const scope =
       unverified === state.quotes.length
-        ? 'Vendor search links'
-        : `${unverified} of these search links`;
-    note.textContent = `${scope} are reverse-engineered and unverified — a result that looks wrong probably is.`;
+        ? 'Vendor search links are'
+        : `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'}`;
+    note.textContent = `${scope} reverse-engineered and unverified — a result that looks wrong probably is.`;
     quotesList.append(note);
   }
 

@@ -363,6 +363,9 @@ input:focus-visible {
 .quote .status {
   color: var(--muted);
   font-size: 11px;
+  /* Can hold a message the content script supplied, which has no length bound
+     and may not break on its own. */
+  overflow-wrap: anywhere;
 }
 
 .quote .status.is-error {

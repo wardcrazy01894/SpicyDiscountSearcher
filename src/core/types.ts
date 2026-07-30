@@ -126,8 +126,6 @@ export type QuoteFailure =
   | 'probe-empty'
   /** extractOffers threw on this page's markup. */
   | 'extract-threw'
-  /** Prices were found, but none usable as a headline number. */
-  | 'no-usable-price'
   /** The user closed the tab mid-probe. */
   | 'tab-closed'
   /** MV3 suspended the worker mid-race. */
@@ -163,9 +161,14 @@ export interface Quote {
   offers: Offer[];
   /** Cheapest offer on the page, or null until one is found. */
   best: Offer | null;
-  /** Machine-readable reason, set whenever status is not ok/pending/loading. */
+  /**
+   * Machine-readable reason. Usually set once a quote stops, but deliberately
+   * absent when a content script reported something we do not recognise —
+   * naming a specific failure there would be inventing one. Treat it as
+   * optional and fall back to `message`.
+   */
   failure?: QuoteFailure;
-  /** Human detail alongside `failure`, never a substitute for it. */
+  /** Human detail. The only diagnosis when `failure` is absent. */
   message?: string;
   /** What the probe observed, when it got far enough to observe anything. */
   report?: ProbeReport;
