@@ -127,9 +127,13 @@ describe('buildCandidates', () => {
 });
 
 describe('interleaveByVendor', () => {
-  const candidate = (vendor: Candidate['vendor'], code: string): Candidate => ({
-    companySlug: code.toLowerCase(),
-    companyName: code,
+  const candidate = (
+    vendor: Candidate['vendor'],
+    code: string,
+    slug = code.toLowerCase(),
+  ): Candidate => ({
+    companySlug: slug,
+    companyName: slug,
     vendor,
     code,
     note: null,
@@ -146,14 +150,16 @@ describe('interleaveByVendor', () => {
     expect(spread.map((c) => c.code)).toEqual(['A1', 'H1', 'S1', 'A2', 'A3']);
   });
 
-  it('keeps the order within each vendor intact', () => {
+  it('reorders within a lane only to reach an uncovered company', () => {
+    // Not "order within a vendor is preserved" — that guarantee is gone, and
+    // is incompatible with spreading across companies. A1 and A2 share a
+    // company, so A3's fresh one is pulled forward past A2.
     const spread = interleaveByVendor([
-      candidate('avis', 'A1'),
-      candidate('avis', 'A2'),
-      candidate('hertz', 'H1'),
-      candidate('hertz', 'H2'),
+      candidate('avis', 'A1', 'acme'),
+      candidate('avis', 'A2', 'acme'),
+      candidate('avis', 'A3', 'globex'),
     ]);
-    expect(spread.filter((c) => c.vendor === 'avis').map((c) => c.code)).toEqual(['A1', 'A2']);
+    expect(spread.map((c) => c.code)).toEqual(['A1', 'A3', 'A2']);
   });
 
   it('loses nothing and invents nothing', () => {
@@ -169,12 +175,60 @@ describe('interleaveByVendor', () => {
     expect(interleaveByVendor([])).toEqual([]);
   });
 
+  it('prefers a company the run has not covered yet', () => {
+    // The consultancies have a code at nearly every vendor, so a plain vendor
+    // round robin picked the same one from every lane.
+    const spread = interleaveByVendor([
+      candidate('avis', 'A1', 'accenture'),
+      candidate('avis', 'A2', 'bain'),
+      candidate('hertz', 'H1', 'accenture'),
+      candidate('hertz', 'H2', 'comcast'),
+      candidate('sixt', 'S1', 'accenture'),
+      candidate('sixt', 'S2', 'danaher'),
+    ]);
+    expect(new Set(spread.slice(0, 3).map((c) => c.companySlug)).size).toBe(3);
+  });
+
+  it('still takes a repeat company when a lane has nothing fresh left', () => {
+    const spread = interleaveByVendor([
+      candidate('avis', 'A1', 'accenture'),
+      candidate('hertz', 'H1', 'accenture'),
+    ]);
+    expect(spread).toHaveLength(2);
+    expect(spread.map((c) => c.code)).toEqual(['A1', 'H1']);
+  });
+
   it('makes the default cap race more than one vendor', () => {
     // The bug this exists to prevent: buildCandidates sorts by vendor, so
     // slicing the first 12 raced twelve Avis codes and nothing else — no
     // comparison across vendors happened at default settings at all.
     const carVendors = vendorsFor('car').map((v) => v.id);
+    const all = buildCandidates({ vendors: carVendors });
+    const raced = interleaveByVendor(all).slice(0, 12);
+
+    const perVendor = new Map<string, number>();
+    for (const candidate of raced) {
+      perVendor.set(candidate.vendor, (perVendor.get(candidate.vendor) ?? 0) + 1);
+    }
+    // Compared against the vendors that actually have candidates, not against
+    // the registry: a vendor added to vendors.ts before its codes land in the
+    // workbook is not this function's fault. `ceil(12 / perVendor.size)` looks
+    // stricter but lets two vendors take six each — the very shape of the bug
+    // this guards — and goes red merely because a lane runs short.
+    const withCodes = new Set(all.map((c) => c.vendor));
+    expect(perVendor.size).toBe(withCodes.size);
+    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(3);
+  });
+
+  it('spreads the default cap across companies, not just vendors', () => {
+    // Cycling vendors alone put seven of the first twelve on one company: the
+    // big consultancies have a code at nearly every vendor, so every lane
+    // offered the same name first.
+    const carVendors = vendorsFor('car').map((v) => v.id);
     const raced = interleaveByVendor(buildCandidates({ vendors: carVendors })).slice(0, 12);
-    expect(new Set(raced.map((c) => c.vendor)).size).toBe(carVendors.length);
+    // All 12 distinct today, but pinned a little below that: one company
+    // gaining a code at another vendor is a workbook edit, not a regression
+    // here, and 10 is still decisive against the 4 this replaced.
+    expect(new Set(raced.map((c) => c.companySlug)).size).toBeGreaterThanOrEqual(10);
   });
 });

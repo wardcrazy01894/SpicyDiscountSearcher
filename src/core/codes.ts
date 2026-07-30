@@ -99,7 +99,8 @@ export function buildCandidates(query: CandidateQuery): Candidate[] {
 }
 
 /**
- * Reorder candidates so that taking the first N gives every vendor a turn.
+ * Reorder candidates so that taking the first N spreads across both vendors
+ * and companies.
  *
  * buildCandidates groups by vendor, which is the right order to read but the
  * wrong one to truncate: the popup races only the first N, so with the default
@@ -107,8 +108,12 @@ export function buildCandidates(query: CandidateQuery): Candidate[] {
  * twelve Hilton codes. Racing codes against each other *within one vendor* is
  * not the comparison this tool exists to make.
  *
- * Order within a vendor is preserved, so the cap still takes that vendor's
- * alphabetically-first companies — only the spread across vendors changes.
+ * Cycling vendors alone is not enough. Each vendor's lane is ordered by company
+ * name, and the big consultancies have a code at nearly every vendor — so a
+ * plain round robin spent seven of its first twelve slots on one company,
+ * trading "one vendor, twelve companies" for "six vendors, four companies".
+ * Each pick therefore prefers a company the run has not covered yet, which
+ * costs nothing when a lane has no fresh company left to offer.
  */
 export function interleaveByVendor(candidates: Candidate[]): Candidate[] {
   const queues = new Map<VendorId, Candidate[]>();
@@ -119,13 +124,22 @@ export function interleaveByVendor(candidates: Candidate[]): Candidate[] {
   }
 
   const lanes = [...queues.values()];
-  const longest = lanes.reduce((max, lane) => Math.max(max, lane.length), 0);
   const out: Candidate[] = [];
-  for (let round = 0; round < longest; round += 1) {
+  const covered = new Set<string>();
+
+  while (out.length < candidates.length) {
+    let progressed = false;
     for (const lane of lanes) {
-      const next = lane[round];
-      if (next) out.push(next);
+      if (lane.length === 0) continue;
+      const fresh = lane.findIndex((candidate) => !covered.has(candidate.companySlug));
+      // splice on a non-empty lane at an in-range index always yields one.
+      const picked = lane.splice(fresh === -1 ? 0 : fresh, 1)[0]!;
+      out.push(picked);
+      covered.add(picked.companySlug);
+      progressed = true;
     }
+    // Every lane is empty; nothing further can be added.
+    if (!progressed) break;
   }
   return out;
 }
