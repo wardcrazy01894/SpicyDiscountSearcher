@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Spicy Discount Searcher",
+  "version": "0.1.0",
+  "description": "Race corporate discount codes against each other to find the cheapest rental car or hotel rate.",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "https://www.avis.com/*",
+    "https://www.budget.com/*",
+    "https://www.enterprise.com/*",
+    "https://www.hertz.com/*",
+    "https://www.hilton.com/*",
+    "https://www.hyatt.com/*",
+    "https://www.marriott.com/*",
+    "https://www.nationalcar.com/*",
+    "https://www.sixt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.avis.com/*",
+        "https://www.budget.com/*",
+        "https://www.enterprise.com/*",
+        "https://www.hertz.com/*",
+        "https://www.hilton.com/*",
+        "https://www.hyatt.com/*",
+        "https://www.marriott.com/*",
+        "https://www.nationalcar.com/*",
+        "https://www.sixt.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "Spicy Discount Searcher",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

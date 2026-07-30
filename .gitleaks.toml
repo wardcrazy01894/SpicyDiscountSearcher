@@ -1,0 +1,23 @@
+title = "spicy-discount-searcher"
+
+[extend]
+useDefault = true
+
+# The whole point of this repo is a list of corporate rate codes — short
+# alphanumeric strings like "N0156333" that trip generic high-entropy rules.
+# They are not credentials: they identify a negotiated rate, they are published
+# widely, and they grant no access to anything.
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+paths = [
+  '''src/data/codes\.generated\.json''',
+  '''data/source/.*\.xlsx''',
+  '''README\.md''',
+]
+
+[allowlist]
+paths = [
+  '''package-lock\.json''',
+  '''data/source/.*\.xlsx''',
+]

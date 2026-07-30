@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spicy Discount Searcher</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <h1>🌶️ Spicy Discount Searcher</h1>
+      <p class="tagline" id="tagline">Loading codes…</p>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab is-active" data-category="car" role="tab">
+        Rental cars
+      </button>
+      <button type="button" class="tab" data-category="hotel" role="tab">Hotels</button>
+    </nav>
+
+    <main class="panel">
+      <form id="trip-form" autocomplete="off">
+        <section class="fields" id="car-fields">
+          <label class="field">
+            <span>Pick-up location</span>
+            <input type="text" name="pickupLocation" placeholder="TPA, or Tampa Airport" required />
+          </label>
+          <label class="field">
+            <span>Drop-off location <em>(optional)</em></span>
+            <input type="text" name="dropoffLocation" placeholder="Same as pick-up" />
+          </label>
+          <div class="row">
+            <label class="field">
+              <span>Pick-up date</span>
+              <input type="date" name="pickupDate" required />
+            </label>
+            <label class="field field--narrow">
+              <span>Time</span>
+              <input type="time" name="pickupTime" value="10:00" required />
+            </label>
+          </div>
+          <div class="row">
+            <label class="field">
+              <span>Drop-off date</span>
+              <input type="date" name="dropoffDate" required />
+            </label>
+            <label class="field field--narrow">
+              <span>Time</span>
+              <input type="time" name="dropoffTime" value="10:00" required />
+            </label>
+          </div>
+        </section>
+
+        <section class="fields is-hidden" id="hotel-fields">
+          <label class="field">
+            <span>Destination</span>
+            <input type="text" name="destination" placeholder="St. Petersburg, FL" />
+          </label>
+          <div class="row">
+            <label class="field">
+              <span>Check in</span>
+              <input type="date" name="checkIn" />
+            </label>
+            <label class="field">
+              <span>Check out</span>
+              <input type="date" name="checkOut" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="field field--narrow">
+              <span>Adults</span>
+              <input type="number" name="adults" min="1" max="8" value="2" />
+            </label>
+            <label class="field field--narrow">
+              <span>Rooms</span>
+              <input type="number" name="rooms" min="1" max="4" value="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="fields">
+          <span class="legend">Vendors</span>
+          <div class="chips" id="vendor-chips"></div>
+        </section>
+
+        <section class="fields">
+          <span class="legend">Which codes to race</span>
+          <label class="field">
+            <input
+              type="search"
+              id="company-search"
+              placeholder="Filter companies — blank races every code"
+            />
+          </label>
+          <div class="company-list" id="company-list"></div>
+        </section>
+
+        <section class="fields">
+          <div class="row row--tight">
+            <label class="field field--narrow">
+              <span>Max codes</span>
+              <input type="number" id="max-codes" min="1" max="60" value="12" />
+            </label>
+            <label class="field field--narrow">
+              <span>At a time</span>
+              <input type="number" id="concurrency" min="1" max="6" value="2" />
+            </label>
+          </div>
+          <p class="hint" id="plan-summary"></p>
+        </section>
+
+        <div class="actions">
+          <button type="submit" class="btn btn--primary" id="run-btn">
+            Find the cheapest code
+          </button>
+          <button type="button" class="btn" id="cancel-btn" hidden>Stop</button>
+        </div>
+      </form>
+
+      <section class="results" id="results" hidden>
+        <div class="savings" id="savings" hidden></div>
+        <ol class="quotes" id="quotes"></ol>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Prices are read off each vendor's own results page. Always confirm the rate — and your
+        eligibility for a corporate code — before booking.
+      </p>
+    </footer>
+
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>
