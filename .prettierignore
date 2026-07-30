@@ -2,3 +2,6 @@ dist/
 node_modules/
 package-lock.json
 src/data/*.generated.json
+
+# Python test artefacts.
+.pytest_cache/

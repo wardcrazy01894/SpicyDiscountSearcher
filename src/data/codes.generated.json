@@ -36,84 +36,6 @@
       ]
     },
     {
-      "slug": "americas-only",
-      "name": "(Americas only)",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "0000394181",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        },
-        {
-          "vendor": "hilton",
-          "code": "FIAT",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        },
-        {
-          "vendor": "hilton",
-          "code": "N0394181",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "for-hgvc-only-0302844100-siemens",
-      "name": "(for HGVC only) 0302844100 Siemens",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "N0079268",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "lon",
-      "name": "(LON)",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "PR13CB",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "lon-ams",
-      "name": "(LON, AMS)",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "PR11PN",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
       "slug": "3m",
       "name": "3M",
       "codes": [
@@ -124,39 +46,6 @@
           "url": null,
           "sources": [
             "Corp Codes"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "a-few-i-ve-umulated-for-emea-again-ymmv",
-      "name": "a few I\u2019ve umulated for EMEA. Again, YMMV.",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "ADD",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        },
-        {
-          "vendor": "hilton",
-          "code": "LET",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        },
-        {
-          "vendor": "hilton",
-          "code": "ME",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
           ]
         }
       ]
@@ -625,13 +514,13 @@
       ]
     },
     {
-      "slug": "american-bar-association-aba",
-      "name": "American Bar Association (ABA)",
+      "slug": "american-bar-association",
+      "name": "American Bar Association",
       "codes": [
         {
           "vendor": "marriott",
           "code": "ABA",
-          "note": null,
+          "note": "ABA",
           "url": null,
           "sources": [
             "Codes",
@@ -641,7 +530,7 @@
         {
           "vendor": "starwood",
           "code": "270121",
-          "note": null,
+          "note": "ABA",
           "url": null,
           "sources": [
             "Codes",
@@ -784,13 +673,13 @@
       ]
     },
     {
-      "slug": "american-institute-of-cpas-aicpa",
-      "name": "American Institute of CPAs (AICPA)",
+      "slug": "american-institute-of-cpas",
+      "name": "American Institute of CPAs",
       "codes": [
         {
           "vendor": "starwood",
           "code": "69569",
-          "note": null,
+          "note": "AICPA",
           "url": null,
           "sources": [
             "Codes",
@@ -1428,8 +1317,17 @@
     },
     {
       "slug": "booz-co",
-      "name": "Booz & Co",
+      "name": "Booz & Co ///",
       "codes": [
+        {
+          "vendor": "hyatt",
+          "code": "54749",
+          "note": "Now Strategy&",
+          "url": null,
+          "sources": [
+            "Corp Codes"
+          ]
+        },
         {
           "vendor": "hyatt",
           "code": "90443",
@@ -1438,6 +1336,15 @@
           "sources": [
             "Codes",
             "Marriott Codes"
+          ]
+        },
+        {
+          "vendor": "marriott",
+          "code": "BAH",
+          "note": "Now Strategy&",
+          "url": null,
+          "sources": [
+            "Corp Codes"
           ]
         },
         {
@@ -1457,30 +1364,6 @@
           "sources": [
             "Codes",
             "Marriott Codes"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "booz-co-now-strategy",
-      "name": "Booz & Co (Now Strategy&) ///",
-      "codes": [
-        {
-          "vendor": "hyatt",
-          "code": "54749",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Corp Codes"
-          ]
-        },
-        {
-          "vendor": "marriott",
-          "code": "BAH",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Corp Codes"
           ]
         }
       ]
@@ -1544,13 +1427,13 @@
       ]
     },
     {
-      "slug": "bristol-myers-bms-ww2",
-      "name": "Bristol Myers (BMS) WW2",
+      "slug": "bristol-myers-ww2",
+      "name": "Bristol Myers WW2",
       "codes": [
         {
           "vendor": "marriott",
           "code": "BMS",
-          "note": null,
+          "note": "BMS",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -1559,13 +1442,13 @@
       ]
     },
     {
-      "slug": "british-petroleum-bp",
-      "name": "British Petroleum (BP)",
+      "slug": "british-petroleum",
+      "name": "British Petroleum",
       "codes": [
         {
           "vendor": "avis",
           "code": "A541200",
-          "note": null,
+          "note": "BP",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -1574,7 +1457,7 @@
         {
           "vendor": "marriott",
           "code": "BPA",
-          "note": null,
+          "note": "BP",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -1651,13 +1534,13 @@
       ]
     },
     {
-      "slug": "careerbuilder-americas-only",
-      "name": "CareerBuilder (Americas Only)",
+      "slug": "careerbuilder",
+      "name": "CareerBuilder",
       "codes": [
         {
           "vendor": "hilton",
           "code": "560061387",
-          "note": null,
+          "note": "Americas Only",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -1666,7 +1549,7 @@
         {
           "vendor": "hilton",
           "code": "N9885088",
-          "note": null,
+          "note": "Americas Only",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -1904,13 +1787,13 @@
       ]
     },
     {
-      "slug": "computer-science-161-at-hampton-inn-suites-in-sjc",
-      "name": "Computer Science ($161 at Hampton Inn & Suites in SJC)",
+      "slug": "computer-science",
+      "name": "Computer Science",
       "codes": [
         {
           "vendor": "hilton",
           "code": "0052751100",
-          "note": null,
+          "note": "$161 at Hampton Inn & Suites in SJC",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -1919,7 +1802,7 @@
         {
           "vendor": "hilton",
           "code": "N0912126",
-          "note": null,
+          "note": "$161 at Hampton Inn & Suites in SJC",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -2189,13 +2072,13 @@
       ]
     },
     {
-      "slug": "daimler-also-0560031184",
-      "name": "Daimler (also 0560031184?)",
+      "slug": "daimler",
+      "name": "Daimler",
       "codes": [
         {
           "vendor": "hilton",
           "code": "560031184",
-          "note": null,
+          "note": "also 0560031184?",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -2204,7 +2087,7 @@
         {
           "vendor": "hilton",
           "code": "N0206144",
-          "note": null,
+          "note": "also 0560031184?",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -3179,23 +3062,8 @@
         },
         {
           "vendor": "hilton",
-          "code": "N0001398",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "general-electric-ge",
-      "name": "General Electric (GE)",
-      "codes": [
-        {
-          "vendor": "hilton",
           "code": "1398",
-          "note": null,
+          "note": "GE",
           "url": null,
           "sources": [
             "Codes",
@@ -3206,7 +3074,7 @@
         {
           "vendor": "hilton",
           "code": "72799100",
-          "note": null,
+          "note": "GE",
           "url": null,
           "sources": [
             "Codes",
@@ -3215,9 +3083,18 @@
           ]
         },
         {
+          "vendor": "hilton",
+          "code": "N0001398",
+          "note": null,
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
           "vendor": "hyatt",
           "code": "NC16700",
-          "note": null,
+          "note": "GE",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3226,7 +3103,7 @@
         {
           "vendor": "marriott",
           "code": "GEE",
-          "note": null,
+          "note": "GE",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3391,13 +3268,13 @@
       ]
     },
     {
-      "slug": "goldman-sachs-gs",
-      "name": "Goldman Sachs (GS)",
+      "slug": "goldman-sachs",
+      "name": "Goldman Sachs",
       "codes": [
         {
           "vendor": "hertz",
           "code": "28765",
-          "note": null,
+          "note": "GS",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3406,7 +3283,7 @@
         {
           "vendor": "hilton",
           "code": null,
-          "note": null,
+          "note": "GS",
           "url": "https://stay.hilton.com/goldmansachs/",
           "sources": [
             "Corp Codes"
@@ -3415,7 +3292,7 @@
         {
           "vendor": "marriott",
           "code": "GLD",
-          "note": null,
+          "note": "GS",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3654,13 +3531,13 @@
       ]
     },
     {
-      "slug": "hewlett-packard-hp",
-      "name": "Hewlett Packard (HP)",
+      "slug": "hewlett-packard",
+      "name": "Hewlett Packard",
       "codes": [
         {
           "vendor": "hilton",
           "code": "9122532",
-          "note": null,
+          "note": "HP",
           "url": null,
           "sources": [
             "Codes",
@@ -3671,7 +3548,7 @@
         {
           "vendor": "marriott",
           "code": "EDS",
-          "note": null,
+          "note": "HP",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3680,7 +3557,7 @@
         {
           "vendor": "marriott",
           "code": "HPQ",
-          "note": null,
+          "note": "HP",
           "url": null,
           "sources": [
             "Corp Codes"
@@ -3689,7 +3566,7 @@
         {
           "vendor": "starwood",
           "code": "5105",
-          "note": null,
+          "note": "HP",
           "url": null,
           "sources": [
             "Codes",
@@ -3699,7 +3576,7 @@
         {
           "vendor": "starwood",
           "code": "5444",
-          "note": null,
+          "note": "HP",
           "url": null,
           "sources": [
             "Codes",
@@ -4547,6 +4424,15 @@
       "name": "Macy's",
       "codes": [
         {
+          "vendor": "marriott",
+          "code": "FDR",
+          "note": "Federated Dept. Stores",
+          "url": null,
+          "sources": [
+            "Corp Codes"
+          ]
+        },
+        {
           "vendor": "starwood",
           "code": "66272",
           "note": null,
@@ -4554,21 +4440,6 @@
           "sources": [
             "Codes",
             "Marriott Codes"
-          ]
-        }
-      ]
-    },
-    {
-      "slug": "macy-s-federated-dept-stores",
-      "name": "Macy's (Federated Dept. Stores)",
-      "codes": [
-        {
-          "vendor": "marriott",
-          "code": "FDR",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Corp Codes"
           ]
         }
       ]
@@ -5825,21 +5696,6 @@
       ]
     },
     {
-      "slug": "seems-to-offer-40-off-with-breakfast-provided-the-booking-starts-on-a-friday-saturday-or-sunday",
-      "name": "seems to offer 40% off, with breakfast, provided the booking starts on a Friday, Saturday or Sunday.",
-      "codes": [
-        {
-          "vendor": "hilton",
-          "code": "PR09PN",
-          "note": null,
-          "url": null,
-          "sources": [
-            "Hilton Code"
-          ]
-        }
-      ]
-    },
-    {
       "slug": "semiconductor",
       "name": "Semiconductor",
       "codes": [
@@ -5926,6 +5782,15 @@
           ]
         },
         {
+          "vendor": "hilton",
+          "code": "N0079268",
+          "note": "for HGVC only; 0302844100",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
           "vendor": "marriott",
           "code": "SIE",
           "note": null,
@@ -5995,13 +5860,13 @@
       ]
     },
     {
-      "slug": "t-mobile-deutsche-telekom",
-      "name": "T-Mobile (Deutsche Telekom)",
+      "slug": "t-mobile",
+      "name": "T-Mobile",
       "codes": [
         {
           "vendor": "hilton",
           "code": "0560045484",
-          "note": null,
+          "note": "Deutsche Telekom",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -6010,7 +5875,7 @@
         {
           "vendor": "hilton",
           "code": "N9880715",
-          "note": null,
+          "note": "Deutsche Telekom",
           "url": null,
           "sources": [
             "Hilton Code"
@@ -6150,6 +6015,93 @@
           "vendor": "hilton",
           "code": "N2067853",
           "note": null,
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "unattributed",
+      "name": "Unattributed",
+      "codes": [
+        {
+          "vendor": "hilton",
+          "code": "0000394181",
+          "note": "(Americas only)",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "ADD",
+          "note": "a few I\u2019ve umulated for EMEA. Again, YMMV.",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "FIAT",
+          "note": "(Americas only)",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "LET",
+          "note": "a few I\u2019ve umulated for EMEA. Again, YMMV.",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "ME",
+          "note": "a few I\u2019ve umulated for EMEA. Again, YMMV.",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "N0394181",
+          "note": "(Americas only)",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "PR09PN",
+          "note": "seems to offer 40% off, with breakfast, provided the booking starts on a Friday, Saturday or Sunday.",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "PR11PN",
+          "note": "(LON, AMS)",
+          "url": null,
+          "sources": [
+            "Hilton Code"
+          ]
+        },
+        {
+          "vendor": "hilton",
+          "code": "PR13CB",
+          "note": "(LON)",
           "url": null,
           "sources": [
             "Hilton Code"

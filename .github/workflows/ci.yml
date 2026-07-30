@@ -80,6 +80,14 @@ jobs:
         # Deliberately a manual pin: Dependabot needs a manifest to track, and a
         # requirements file for one dependency is not worth the indirection.
         run: pip install 'openpyxl==3.1.5'
+      - name: Lint the parser (ruff)
+        run: pipx run ruff==0.14.2 check scripts tests/test_extract_codes.py
+
+      - name: Test the parser (pytest)
+        # The freshness check below cannot catch a parser that is wrong in the
+        # same way twice — it regenerates both sides. These cover the decisions.
+        run: pipx run --spec pytest==8.4.2 pytest tests/test_extract_codes.py -q
+
       - name: Regenerate the code database
         run: python3 scripts/extract_codes.py
       - name: Fail if the committed database is stale

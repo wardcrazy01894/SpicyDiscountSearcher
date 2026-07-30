@@ -158,6 +158,60 @@ def parse_cell(text: str) -> tuple[list[str], str | None, str | None]:
     return codes, note, url
 
 
+# Text that is a remark rather than an employer: a sentence, a percentage, or
+# the kind of hedge people type into a spreadsheet margin.
+PROSE_RE = re.compile(r"\.\s+\S|%|\bYMMV\b", re.IGNORECASE)
+
+# A bare number leading the company column is a code someone typed one cell to
+# the left, not part of anybody's name.
+LEADING_CODE_RE = re.compile(r"^(\d[\d-]{3,})\s+(.*)$")
+
+# Where codes go when the cell beside them was a remark, not an employer. They
+# are still real codes; only the attribution was invented.
+UNATTRIBUTED = "Unattributed"
+
+
+def parse_company(text: str) -> tuple[str | None, str | None]:
+    """Split a company cell into a name and whatever qualified it.
+
+    The workbook's first column is a name column by convention only. It also
+    holds parenthetical asides ("CareerBuilder (Americas Only)"), stray codes,
+    and outright prose — and every one of those became a company in its own
+    right, published in the extension's picker as though it were an employer.
+
+    Returns (None, original) when the cell is not a name at all. The codes
+    beside it are usually real — "(LON, AMS)" and "(Americas only)" qualify a
+    perfectly good Hilton rate — so the caller files them under UNATTRIBUTED
+    and keeps the original text as the note. Dropping them would throw away
+    working codes to fix a naming problem.
+    """
+    if not text:
+        return None, None
+
+    notes: list[str] = []
+
+    def take(match: re.Match[str]) -> str:
+        notes.append(match.group(1).strip())
+        return " "
+
+    name = re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip()
+
+    while True:
+        leading = LEADING_CODE_RE.match(name)
+        if not leading:
+            break
+        notes.append(leading.group(1))
+        name = leading.group(2).strip()
+
+    words = name.split()
+    # Sentence-shaped, long enough that no one would call it a company, or
+    # nothing left once the qualifiers came out.
+    if not name or PROSE_RE.search(name) or len(words) > 6 or (name[0].islower() and len(words) > 2):
+        return None, re.sub(r"\s+", " ", text).strip()
+
+    return name, "; ".join(n for n in notes if n) or None
+
+
 def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
     """The 'Hilton Code' sheet is free text: 'N0001542 / 0232757100 3M'.
 
@@ -176,16 +230,21 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
             if code not in codes:
                 codes.append(code)
             idx += 1
-        company = " ".join(tokens[idx:]).strip(" -–—")
-        if not company or not codes:
+        # Same treatment as the grid sheets: this column is free text, so it
+        # also holds bare qualifiers ("(Americas only)") and outright prose,
+        # every one of which became its own company in the picker.
+        company, note = parse_company(" ".join(tokens[idx:]).strip(" -–—"))
+        if not codes or (not company and not note):
             continue
+        if not company:
+            company = UNATTRIBUTED
         for code in codes:
             records.append(
                 {
                     "company": company,
                     "vendor": "hilton",
                     "code": code,
-                    "note": None,
+                    "note": note,
                     "url": None,
                     "source": "Hilton Code",
                 }
@@ -197,18 +256,26 @@ def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
     layout = SHEET_LAYOUTS[name]
     records: list[dict] = []
     for row in rows[1:]:  # row 0 is the header
-        company = clean_cell(row[0] if row else None)
+        raw_company = clean_cell(row[0] if row else None)
         # The 'Corp Codes' header cell doubles as a stray Hilton link; skip
         # anything that isn't a plain company name.
-        if not company or URL_RE.search(company):
+        if not raw_company or URL_RE.search(raw_company):
             continue
+        company, company_note = parse_company(raw_company)
+        if not company:
+            # Rejected text still names *something*; an empty cell names
+            # nothing and stays skipped, as it always was.
+            if not company_note:
+                continue
+            company = UNATTRIBUTED
         for offset, vendor in enumerate(layout):
             if vendor is None:
                 continue
             col = offset + 1
             if col >= len(row):
                 break
-            codes, note, url = parse_cell(clean_cell(row[col]))
+            codes, cell_note, url = parse_cell(clean_cell(row[col]))
+            note = "; ".join(n for n in (company_note, cell_note) if n) or None
             for code in codes:
                 records.append(
                     {
