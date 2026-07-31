@@ -68,7 +68,10 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
-    let offers: Offer[] = [];
+    // No initialiser: the catch below returns, so every path that reaches the
+    // read has assigned it. eslint 10's no-useless-assignment spotted the dead
+    // [] this used to carry.
+    let offers: Offer[];
     try {
       const extraction = extract(document, assignment.vendor);
       offers = extraction.offers;
