@@ -1,0 +1,112 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * The popup's contract with its own HTML.
+ *
+ * `popup.ts` runs fifteen `el()` lookups at module top level — before the
+ * `void main().catch(...)` at the bottom is installed — so a missing id throws
+ * during module evaluation and the popup renders as dead HTML stuck on
+ * "Loading codes…". Nothing else catches that: renaming one id in index.html
+ * leaves typecheck, eslint, vitest, the build and check-dist all green while
+ * the extension is completely non-functional, because `check-dist.mjs` verifies
+ * that referenced *files* exist and never parses ids.
+ *
+ * These tests import the real module against the real HTML, so they cover the
+ * whole import-time path rather than a hand-copied list of selectors that could
+ * itself drift.
+ */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const ROOT = path.resolve(__dirname, '..');
+const HTML = readFileSync(path.join(ROOT, 'src/popup/index.html'), 'utf8');
+const BODY = /<body[^>]*>([\s\S]*)<\/body>/i.exec(HTML)?.[1] ?? '';
+
+/** Every `el('#id')` selector the module resolves at import time. */
+const SELECTORS = [
+  '#trip-form',
+  '#tagline',
+  '#car-fields',
+  '#hotel-fields',
+  '#vendor-chips',
+  '#company-search',
+  '#company-list',
+  '#max-codes',
+  '#concurrency',
+  '#plan-summary',
+  '#run-btn',
+  '#cancel-btn',
+  '#results',
+  '#savings',
+  '#quotes',
+];
+
+/** The slice of chrome the popup touches while starting up. */
+function installChrome(): void {
+  const local = new Map<string, unknown>();
+  (globalThis as { chrome?: unknown }).chrome = {
+    storage: {
+      local: {
+        get: () => Promise.resolve(Object.fromEntries(local)),
+        set: (items: Record<string, unknown>) => {
+          for (const [k, v] of Object.entries(items)) local.set(k, v);
+          return Promise.resolve();
+        },
+      },
+    },
+    runtime: {
+      sendMessage: () => Promise.resolve({ type: 'RUN_STATE', state: null }),
+      onMessage: { addListener: () => {} },
+    },
+  };
+}
+
+beforeEach(() => {
+  installChrome();
+  document.body.innerHTML = BODY;
+});
+
+afterEach(() => {
+  vi.resetModules();
+  delete (globalThis as { chrome?: unknown }).chrome;
+});
+
+describe('the popup against its own HTML', () => {
+  it('imports and starts up without throwing', async () => {
+    await expect(import('../src/popup/popup.js')).resolves.toBeDefined();
+    // main() ran to completion: the tagline is only written at its end, so
+    // this fails if startup threw anywhere along the way.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
+    });
+  });
+
+  it.each(SELECTORS)('finds %s in index.html', (selector) => {
+    expect(document.querySelector(selector)).not.toBeNull();
+  });
+
+  it('has a selector for every el() call in the module, and no more', () => {
+    // Guards the list above against drifting from the source it describes —
+    // otherwise this file could keep passing while popup.ts grew a sixteenth
+    // lookup nobody checked.
+    const source = readFileSync(path.join(ROOT, 'src/popup/popup.ts'), 'utf8');
+    const found = [...source.matchAll(/\bel<[^>]+>\('([^']+)'\)/g)].map((m) => m[1]);
+    expect(new Set(found)).toEqual(new Set(SELECTORS));
+  });
+
+  it('finds the category tabs the module wires listeners onto', () => {
+    // Not an el() lookup, so it fails silently rather than loudly: no tabs
+    // means no way to switch between cars and hotels, and no error either.
+    expect(document.querySelectorAll('.tab').length).toBeGreaterThan(0);
+  });
+
+  it.each(SELECTORS)('fails loudly when %s is missing', async (selector) => {
+    // The point of the whole file. Without this, renaming an id ships a dead
+    // popup with every required check green.
+    const id = selector.slice(1);
+    document.body.innerHTML = BODY.replace(`id="${id}"`, `id="${id}-renamed"`);
+    await expect(import('../src/popup/popup.js')).rejects.toThrow(/missing element/);
+  });
+});

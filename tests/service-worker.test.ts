@@ -991,3 +991,38 @@ describe('a second start arriving after an earlier run has finished', () => {
     await settle(120_000);
   });
 });
+
+describe('a quote whose link could not be built', () => {
+  it('records link-build rather than failing the whole run', async () => {
+    // The one failure code with no test. buildDeepLink throws for an
+    // unsearchable vendor, and makeQuote turns that into a finished quote so
+    // the rest of the race carries on.
+    await bootWorker();
+    await chromeMock.fromPopup({
+      type: 'START_RUN',
+      plan: {
+        trip: plan(1).trip,
+        candidates: [
+          {
+            companySlug: 'acme',
+            companyName: 'Acme',
+            vendor: 'starwood',
+            code: 'SET1',
+            note: null,
+          },
+          { companySlug: 'globex', companyName: 'Globex', vendor: 'hertz', code: 'H1', note: null },
+        ],
+        concurrency: 2,
+      },
+    });
+    await settle(1_000);
+
+    const quotes = (await getState())?.quotes ?? [];
+    const failed = quotes.find((q) => q.candidate.vendor === 'starwood');
+    expect(failed?.failure).toBe('link-build');
+    expect(failed?.status).toBe('error');
+    expect(failed?.finishedAt).toBeDefined();
+    // The searchable vendor still ran.
+    expect(quotes.find((q) => q.candidate.vendor === 'hertz')?.status).not.toBe('error');
+  });
+});

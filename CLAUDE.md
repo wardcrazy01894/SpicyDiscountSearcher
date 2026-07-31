@@ -189,8 +189,11 @@ close). Never pass it a URL or a code.
   still lost.
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
-- No tests for `src/popup/popup.ts`: it runs `el()` lookups at import time, so
-  testing it needs the real HTML in jsdom. Its logic is unpinned.
+- `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison warnings,
+  the plan line, saved-selection persistence. Its import-time contract is not:
+  `tests/popup-contract.test.ts` loads the real `index.html` into jsdom and
+  imports the module, so a renamed id fails the suite. It used to fail nothing,
+  while bricking the popup.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON. Remove a vendor from `vendors.ts` without regenerating and the popup
   dies in `refreshPlan`; the `data` job doesn't assert the ids are known.
