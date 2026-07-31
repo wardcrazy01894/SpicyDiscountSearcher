@@ -20,6 +20,7 @@ This unzips the workbook and reads the parts a spreadsheet hides:
   xl/threadedComments/    modern comment bodies (Excel 365, Excel for the web)
   xl/persons/*.xml        the commenter's real name, as a displayName attribute
   docProps/core.xml       `dc:creator` / `cp:lastModifiedBy`, stamped by Excel
+  docProps/app.xml        `Manager` is a person and `Company` an employer
   xl/sharedStrings.xml    every string in every cell, including URLs
 
 The host check is an allowlist of exact hostnames, not a pattern. A
@@ -98,7 +99,12 @@ NOT_PEOPLE_WORDS = frozenset(
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 AUTHOR_RE = re.compile(r"<author>(.*?)</author>", re.DOTALL)
-CREATOR_RE = re.compile(r"<(?:dc:creator|cp:lastModifiedBy)>(.*?)</", re.DOTALL)
+# `Manager` is a person's name and `Company` an employer's, both stamped from
+# the Office installation into docProps/app.xml — a part this already reads and
+# was not checking.
+CREATOR_RE = re.compile(
+    r"<(?:dc:creator|cp:lastModifiedBy|Manager|Company)>(.*?)</", re.DOTALL
+)
 TAG_RE = re.compile(r"<[^>]+>")
 
 # Excel 365 and Excel for the web write *threaded* comments, which are a
@@ -270,7 +276,9 @@ def scan(workbook: Path) -> list[str]:
     with zipfile.ZipFile(workbook) as archive:
         for name in archive.namelist():
             if not name.endswith((".xml", ".vml", ".rels")):
-                if CONTENT_BEARING_BINARY_RE.search(name) and not BENIGN_BINARY_RE.search(name):
+                if CONTENT_BEARING_BINARY_RE.search(
+                    name
+                ) and not BENIGN_BINARY_RE.search(name):
                     unreadable.append(name)
                 continue
             text = archive.read(name).decode("utf-8", errors="replace")
@@ -345,7 +353,9 @@ def main() -> int:
     # macro-enabled .xlsm is the same zip of XML and would have been scanned by
     # nothing at all.
     workbooks = sorted(
-        book for pattern in ("*.xlsx", "*.xlsm", "*.xlsb") for book in SOURCE_DIR.glob(pattern)
+        book
+        for pattern in ("*.xlsx", "*.xlsm", "*.xlsb")
+        for book in SOURCE_DIR.glob(pattern)
     )
     if not workbooks:
         print(f"no workbook found under {SOURCE_DIR}", file=sys.stderr)
