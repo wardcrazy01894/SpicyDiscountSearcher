@@ -98,9 +98,30 @@ offer count, extraction branch — and renders under any failed or flagged quote
 Path only, never the query string: that carries the discount code and the user's
 itinerary.
 
+`probe-timeout` is the exception, because by definition the probe said nothing.
+The background reads the tab itself just before closing it and builds a report
+with `path: 'not-reached'` — same path-only rule. Without it the commonest
+failure was the one with no evidence at all, and "Hertz always times out" could
+not be told apart from a consent interstitial or a country picker.
+
+`Quote.lateReport` is evidence that arrived _after_ the quote was settled. A
+page can begin its final extract a millisecond inside the deadline and send
+after it; that reply used to be discarded whole while the quote kept a
+`probe-timeout` saying nothing came back. The late payload can attach a report
+and nothing else — it never settles a quote, changes a verdict or contributes a
+price, because a page that missed its deadline must not win a race the user
+already saw finish. `ActiveRun.retiredTabs` is what makes that possible, and is
+deliberately a second map rather than a delayed delete from `tabs`.
+
 A content script may only claim `extract-threw` or `probe-empty`. Anything else
 is the background's own knowledge, and a page claiming `cancelled` would
 misattribute its failure to the user.
+
+`warn()` in the service worker is the only place this extension logs. There is
+no log store and the worker's console dies with it, so the structured fields
+above remain the real telemetry — `warn` is the backstop for failures that
+belong to no quote (a storage write that failed, a tab or window that would not
+close). Never pass it a URL or a code.
 
 ## Known gaps
 

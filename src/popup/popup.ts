@@ -18,6 +18,7 @@ import type {
   Candidate,
   Category,
   PriceBasis,
+  ProbeReport,
   Quote,
   QuoteFailure,
   RunState,
@@ -356,26 +357,66 @@ function describeFailure(quote: Quote): string | null {
   return failure && Object.hasOwn(FAILURE_TEXT, failure) ? FAILURE_TEXT[failure] : null;
 }
 
-/** "landed /en/home · 0 offers · generic sweep" — what the probe actually saw. */
+/**
+ * How long the vendor took, whether or not it said anything.
+ *
+ * Kept out of evidenceLine because it used to live inside it: a quote with no
+ * report rendered no line at all, so `probe-timeout` — the one failure where
+ * the elapsed time is the whole story — showed neither. The timing is
+ * collected for every quote; only the rendering was conditional.
+ *
+ * Clamped and fixed-width: a clock that steps backwards mid-run would
+ * otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
+ */
+function durationText(quote: Quote): string {
+  if (!quote.startedAt || !quote.finishedAt) return '';
+  return `${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`;
+}
+
+function branchText(path: ProbeReport['path']): string {
+  if (path === 'generic-sweep') return 'generic sweep';
+  if (path === 'vendor-selectors') return 'vendor selectors';
+  // The probe never answered, so the background described the tab instead.
+  return 'no answer from the page';
+}
+
+/** "landed /en/home · 0 offers · generic sweep · 4.2s" — what the probe saw. */
 function evidenceLine(quote: Quote): HTMLElement | null {
   const report = quote.report;
-  if (!report) return null;
+  const took = durationText(quote);
+  // A duration with no report is still worth showing — that is exactly the
+  // timeout case, where "45.0s" is the finding.
+  if (!report) {
+    if (!took) return null;
+    const bare = document.createElement('p');
+    bare.className = 'evidence';
+    bare.textContent = `gave up after ${took}`;
+    return bare;
+  }
   const line = document.createElement('p');
   line.className = 'evidence';
   const plural = report.offerCount === 1 ? '' : 's';
-  const branch =
-    report.path === 'generic-sweep'
-      ? 'generic sweep'
-      : report.path === 'vendor-selectors'
-        ? 'vendor selectors'
-        : 'unknown branch';
-  // Clamped and fixed-width: a clock that steps backwards mid-run would
-  // otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
-  const took =
-    quote.startedAt && quote.finishedAt
-      ? ` · ${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`
-      : '';
-  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}${took}`;
+  const landed = report.finalPath ? `landed ${report.finalPath}` : 'never navigated';
+  const counted = report.path === 'not-reached' ? '' : ` · ${report.offerCount} offer${plural}`;
+  line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;
+  if (report.title) line.title = report.title;
+  return line;
+}
+
+/**
+ * "the page answered after the deadline" — evidence that arrived too late.
+ *
+ * Its own line rather than folded into the one above, because it contradicts
+ * the failure text sitting beside it: the row says nothing came back, and this
+ * says something did. That contradiction is the diagnosis.
+ */
+function lateAnswerLine(quote: Quote): HTMLElement | null {
+  const report = quote.lateReport;
+  if (!report) return null;
+  const line = document.createElement('p');
+  line.className = 'evidence is-warning';
+  const plural = report.offerCount === 1 ? '' : 's';
+  line.textContent = `the page did answer, just after the deadline — ${report.finalPath} · ${report.offerCount} offer${plural} · ${branchText(report.path)}`;
   if (report.title) line.title = report.title;
   return line;
 }
@@ -453,6 +494,8 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   if (quote.status !== 'ok' || quote.suspect) {
     const evidence = evidenceLine(quote);
     if (evidence) item.append(evidence);
+    const late = lateAnswerLine(quote);
+    if (late) item.append(late);
   }
 
   // The failure that does not look like one: a deep link that missed its search

@@ -32,6 +32,16 @@ interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
   tabs: Map<number, string>;
+  /**
+   * Tab id -> quote id for tabs already retired, kept only so a reply that
+   * arrives after the deadline can still be attributed.
+   *
+   * Deliberately separate from `tabs` rather than a delayed delete: a tab in
+   * here can no longer be assigned work, settle a quote, or change a verdict.
+   * It can attach evidence and nothing else. Merging the two would let a page
+   * that missed its deadline win a race the user already saw finish.
+   */
+  retiredTabs: Map<number, string>;
   /** Quote id -> absolute ms deadline, so a redirect can't reset the clock. */
   deadlines: Map<string, number>;
   windowId: number | null;
@@ -61,6 +71,23 @@ function broadcast(state: RunState | null): void {
 }
 
 /**
+ * The one place this extension writes a log line.
+ *
+ * There is no log store to ship to and the service-worker console dies with
+ * the worker, so `Quote.failure` and `Quote.report` remain the real telemetry —
+ * this is the backstop for the failures that belong to no quote. Every call
+ * site below was previously a bare `catch {}` whose comment named the benign
+ * cause and could not tell it from a real one.
+ *
+ * Never pass a URL or a code: the query string carries the discount code and
+ * the user's itinerary, and this is the one channel with no reviewer.
+ */
+function warn(what: string, error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  console.warn(`[spicy] ${what}: ${reason}`);
+}
+
+/**
  * Persist and broadcast the current state. Deliberately cannot throw.
  *
  * This is awaited from inside runQuote and its `finally`. An escaping rejection
@@ -73,9 +100,13 @@ async function publish(): Promise<void> {
   if (!active) return;
   try {
     await persist(active.state);
-  } catch {
+  } catch (error) {
     // Storage is best-effort here; losing the snapshot costs a resumed popup,
-    // while throwing costs the whole run.
+    // while throwing costs the whole run. Not throwing and not recording are
+    // separate decisions though: a failed write leaves the persisted snapshot
+    // stale, and a popup opened later reads it and stamps the quotes
+    // `interrupted` — blaming MV3 suspension for a storage failure.
+    warn('could not persist the run snapshot', error);
   }
   broadcast(active.state);
 }
@@ -109,7 +140,17 @@ function quoteFor(run: ActiveRun, quoteId: string): Quote | undefined {
 
 function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): void {
   const quote = quoteFor(run, quoteId);
-  if (!quote || quote.finishedAt) return;
+  if (!quote) return;
+  if (quote.finishedAt) {
+    // A late answer is still an answer. The probe can begin its final extract
+    // one millisecond inside the deadline and spend arbitrary time there, so
+    // this fires for a page that really did parse prices — and the quote is
+    // sitting on a `probe-timeout` claiming nothing came back. Keeping the
+    // evidence is the difference between "the vendor never answered" and "the
+    // deadline is too short", which need opposite fixes.
+    if (patch.report) quote.lateReport = patch.report;
+    return;
+  }
   Object.assign(quote, patch, { finishedAt: Date.now() });
   run.waiters.get(quoteId)?.();
   run.waiters.delete(quoteId);
@@ -216,21 +257,32 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
 /** Close the run's window, if it still has one, and forget it. */
 async function closeWindow(run: ActiveRun): Promise<void> {
   run.windowPromise = null;
-  await chrome.storage.session.remove(WINDOW_KEY).catch(() => {});
-  if (run.windowId === null) return;
-  try {
-    await chrome.windows.remove(run.windowId);
-  } catch {
-    // Already closed, possibly by the user.
+  if (run.windowId !== null) {
+    try {
+      await chrome.windows.remove(run.windowId);
+    } catch (error) {
+      // Usually already closed by the user. If it is not, the window is
+      // minimised and holds a new-tab page, so nobody will ever see it to
+      // close it by hand — which is worth a line.
+      warn('could not close the background window', error);
+    }
+    run.windowId = null;
   }
-  run.windowId = null;
+  // After the close, not before. Dropping the key first meant a failed close
+  // left a window no future worker could ever find, because the id it would
+  // have looked it up by was already gone.
+  await chrome.storage.session.remove(WINDOW_KEY).catch((error: unknown) => {
+    warn('could not forget the background window id', error);
+  });
 }
 
 async function closeTab(tabId: number): Promise<void> {
   try {
     await chrome.tabs.remove(tabId);
-  } catch {
-    // Already gone — the user may have closed the window themselves.
+  } catch (error) {
+    // Usually already gone. If it is not, a tab is sitting open on a live
+    // vendor site, which is the politeness contract broken.
+    warn('could not close a probe tab', error);
   }
 }
 
@@ -281,10 +333,50 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
   } finally {
     run.deadlines.delete(quote.id);
     if (tabId !== undefined) {
+      // Before the tab goes, not after: this is the only moment the background
+      // can see what the probe was looking at.
+      await describeSilentTab(quote, tabId);
       run.tabs.delete(tabId);
+      run.retiredTabs.set(tabId, quote.id);
       await closeTab(tabId);
     }
     await publish();
+  }
+}
+
+/**
+ * Give a timed-out quote something to show, read from the tab itself.
+ *
+ * `probe-timeout` is the commonest failure and was the only one carrying no
+ * evidence: the popup suppresses the whole evidence line when `report` is
+ * absent, so the row said "no answer before the deadline" and nothing else.
+ * A consent interstitial, a redirect to a country picker and a page that never
+ * finished loading were indistinguishable — despite the background holding a
+ * tab handle that answers the question.
+ *
+ * Path only, never the query string, exactly as the probe's own report is.
+ */
+async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
+  if (quote.failure !== 'probe-timeout' || quote.report) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    let finalPath = '';
+    try {
+      finalPath = new URL(tab.url ?? '').pathname;
+    } catch {
+      // No url at all means the tab never navigated, which is itself the
+      // answer; an empty path renders as such rather than inventing one.
+    }
+    quote.report = {
+      finalPath,
+      title: (tab.title ?? '').slice(0, 200),
+      offerCount: 0,
+      path: 'not-reached',
+    };
+  } catch (error) {
+    // The tab is already gone. Nothing to describe, and the quote keeps the
+    // bare timeout it already had.
+    warn('could not read the timed-out tab', error);
   }
 }
 
@@ -306,6 +398,7 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
   const run: ActiveRun = {
     state,
     tabs: new Map(),
+    retiredTabs: new Map(),
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
@@ -430,6 +523,14 @@ chrome.runtime.onMessage.addListener(
         case 'PROBE_RESULT': {
           const tabId = sender.tab?.id;
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
+          // A tab retired at its deadline can still be mid-extract. finishQuote
+          // keeps only the report from an already-settled quote, so this can
+          // add evidence and cannot change a verdict.
+          const lateId = tabId === undefined ? undefined : active?.retiredTabs.get(tabId);
+          if (active && quoteId === undefined && lateId !== undefined) {
+            finishQuote(active, lateId, { report: message.report });
+            await publish();
+          }
           if (active && quoteId !== undefined) {
             const best = bestOffer(message.offers);
             const quote = quoteFor(active, quoteId);
@@ -453,6 +554,12 @@ chrome.runtime.onMessage.addListener(
         case 'PROBE_FAILED': {
           const tabId = sender.tab?.id;
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
+          // Same as PROBE_RESULT: evidence from a retired tab, nothing more.
+          const lateId = tabId === undefined ? undefined : active?.retiredTabs.get(tabId);
+          if (active && quoteId === undefined && lateId !== undefined && message.report) {
+            finishQuote(active, lateId, { report: message.report });
+            await publish();
+          }
           if (active && quoteId !== undefined) {
             const failed = quoteFor(active, quoteId);
             finishQuote(active, quoteId, {
@@ -490,18 +597,49 @@ chrome.runtime.onMessage.addListener(
  * Nothing else ever will: the window is minimised and holds a new-tab page, so
  * it outlives its probe tabs and the user cannot see it to close it.
  */
+/** Does this window still exist? Used to tell a failed close from a stale id. */
+async function windowStillOpen(windowId: number): Promise<boolean> {
+  try {
+    await chrome.windows.get(windowId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function reapOrphanWindow(): Promise<void> {
+  let windowId: number | undefined;
   try {
     const stored = await chrome.storage.session.get(WINDOW_KEY);
-    const windowId = stored[WINDOW_KEY] as number | undefined;
-    // A run that started while this lookup was in flight owns its own window.
-    // Never close a live one.
-    if (windowId === undefined || active !== null) return;
-    await chrome.storage.session.remove(WINDOW_KEY);
-    await chrome.windows.remove(windowId);
-  } catch {
-    // No orphan, or it is already gone.
+    windowId = stored[WINDOW_KEY] as number | undefined;
+  } catch (error) {
+    warn('could not look for an orphaned window', error);
+    return;
   }
+  if (windowId === undefined) return;
+
+  // A run that started while that lookup was in flight owns its own window, and
+  // closing a live one would kill the race. Compared against the live run's own
+  // id rather than bailing on `active !== null`: bailing left the key in place
+  // for ensureWindow to overwrite moments later, so the *previous* worker's
+  // orphan became unreachable forever — the leak this function exists to fix.
+  if (active !== null && active.windowId === windowId) return;
+
+  try {
+    await chrome.windows.remove(windowId);
+  } catch (error) {
+    warn('could not close an orphaned window', error);
+    // Almost always "already gone", which is fine — but not always, and the
+    // two need opposite handling. Ask. If the window is still there, keeping
+    // the id is the only way any later worker can find it again: it is
+    // minimised and holds a new-tab page, so nobody will close it by hand.
+    if (await windowStillOpen(windowId)) return;
+  }
+  // Only once the window is gone. Dropping the key first is what turned a
+  // failed close into a permanent, invisible leak.
+  await chrome.storage.session.remove(WINDOW_KEY).catch((error: unknown) => {
+    warn('could not forget an orphaned window id', error);
+  });
 }
 
 // Runs whenever the worker wakes, which is the only moment we know a previous

@@ -531,3 +531,159 @@ describe('a run the browser interrupted', () => {
     expect(chromeMock.session.has('runWindow')).toBe(false);
   });
 });
+
+describe('a quote that timed out', () => {
+  it('describes the tab the probe never reported on', async () => {
+    // probe-timeout is the commonest failure and was the only one carrying no
+    // evidence at all: the popup suppresses the whole evidence line when there
+    // is no report, so the row said "no answer before the deadline" and
+    // nothing else. A consent interstitial, a redirect to a country picker and
+    // a page that never finished loading were indistinguishable — while the
+    // background held a tab handle that answers the question.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    const tab = chromeMock.tabs.get(tabId)!;
+    tab.url = 'https://www.hertz.com/rentacar/privacy-consent?redirect=x';
+    tab.title = 'Before you continue';
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout');
+    expect(quote?.report?.path).toBe('not-reached');
+    expect(quote?.report?.finalPath).toBe('/rentacar/privacy-consent');
+    expect(quote?.report?.title).toBe('Before you continue');
+  });
+
+  it('keeps the query string out of the report it builds', async () => {
+    // Same rule the probe's own report follows: the query carries the discount
+    // code and the user's itinerary, and this one is built from a tab url that
+    // has both.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.get(tabId)!.url = 'https://www.hertz.com/results?cdp=H1&pickup=SFO';
+
+    await settle(60_000);
+
+    const report = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout')?.report;
+    expect(report?.finalPath).toBe('/results');
+    expect(JSON.stringify(report)).not.toContain('H1');
+    expect(JSON.stringify(report)).not.toContain('SFO');
+  });
+
+  it('still settles when the tab has already gone', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    // The tab vanishes before the deadline — the background has nothing left
+    // to read, and must not turn that into an unhandled rejection.
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.delete(tabId);
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.finishedAt).toBeDefined();
+    expect(quote?.report).toBeUndefined();
+  });
+});
+
+describe('an answer that arrives after the deadline', () => {
+  it('records it instead of dropping it on the floor', async () => {
+    // The probe's loop runs while Date.now() < deadline, so it can begin its
+    // final extract one millisecond inside the window and spend arbitrary time
+    // there. That reply used to be discarded entirely — offers, best price and
+    // report — while the quote kept a probe-timeout saying nothing came back.
+    // "The vendor never answered" and "the deadline is too short" need
+    // opposite fixes.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+
+    const before = (await getState())?.quotes[0];
+    expect(before?.failure).toBe('probe-timeout');
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, offerCount: 1 },
+    });
+    await settle();
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.lateReport?.offerCount).toBe(1);
+    expect(quote?.lateReport?.finalPath).toBe(REPORT.finalPath);
+  });
+
+  it('does not resurrect the quote or rewrite its verdict', async () => {
+    // The evidence is worth keeping; the result is not. Accepting a late
+    // payload as the answer would let a page that missed its deadline win a
+    // race the user already saw settled.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+    const finishedAt = (await getState())?.quotes[0]?.finishedAt;
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: REPORT,
+    });
+    await settle();
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.failure).toBe('probe-timeout');
+    expect(quote?.status).toBe('no-price');
+    expect(quote?.best).toBeNull();
+    expect(quote?.offers).toEqual([]);
+    expect(quote?.finishedAt).toBe(finishedAt);
+  });
+});
+
+describe('the orphan-window reaper', () => {
+  it('forgets an id whose window is genuinely gone', async () => {
+    // The ordinary case: the user closed it themselves. Holding the id would
+    // make every future worker retry a window that does not exist.
+    chromeMock = installChromeMock();
+    chromeMock.session.set('runWindow', 9999);
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chromeMock.session.has('runWindow')).toBe(false);
+  });
+
+  it('keeps the id of a window it could not close', async () => {
+    // The key used to be dropped before the close was even attempted, so a
+    // failed close left a window nothing could ever find again — it is
+    // minimised and holds a new-tab page, so the user cannot see it to close
+    // it either. The stored id is the only handle on it.
+    chromeMock = installChromeMock();
+    const orphan = (await chrome.windows.create({}))!.id!;
+    chromeMock.session.set('runWindow', orphan);
+    // Still open, but refusing to close — chrome does this when the window is
+    // in a state it will not tear down.
+    const windows = chrome.windows as unknown as { remove: (id: number) => Promise<void> };
+    windows.remove = () => Promise.reject(new Error('cannot remove window'));
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chromeMock.session.get('runWindow')).toBe(orphan);
+    expect(chromeMock.windows.has(orphan)).toBe(true);
+  });
+});
