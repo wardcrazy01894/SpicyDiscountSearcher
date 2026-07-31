@@ -78,7 +78,9 @@ describe('company names', () => {
     // each of which reached the picker as a company you could select.
     for (const company of allCompanies()) {
       expect(company.name).not.toMatch(/^\(|%|\.\s/);
-      expect(company.name.split(/\s+/).length).toBeLessThanOrEqual(6);
+      // Matches MAX_NAME_WORDS in extract_codes.py; two different limits meant
+      // a name the parser accepts could still fail here.
+      expect(company.name.split(/\s+/).length).toBeLessThanOrEqual(8);
     }
   });
 

@@ -158,14 +158,19 @@ def parse_cell(text: str) -> tuple[list[str], str | None, str | None]:
     return codes, note, url
 
 
-# Marks of a remark rather than an employer, whatever its length.
+# Marks of a remark rather than an employer, whatever its length. Tested
+# against the *name*, so a qualifier is still lifted rather than condemning the
+# whole cell: "Nestle (100% subsidiary)" is Nestle with a note.
 REMARK_RE = re.compile(
-    r"\.{2,}"  # an ellipsis
-    r"|^[A-Za-z]+:"  # "NOTE: have not been confirmed"
+    r"^[A-Za-z]+:"  # "NOTE: have not been confirmed"
     r"|%"  # nobody writes a percentage into their own name
     r"|\bYMMV\b",
     re.IGNORECASE,
 )
+
+# Tested against the original, because stripping decoration removes the very
+# dots that make an ellipsis recognisable.
+ELLIPSIS_RE = re.compile(r"\.{2,}")
 
 # A sentence boundary: lowercase, full stop, capital. Case-sensitive on
 # purpose — with IGNORECASE this also matched "St. Jude Medical", because
@@ -232,9 +237,8 @@ def parse_company(text: str) -> tuple[str | None, str | None]:
     # "eBay Enterprise Global" and caught nothing these do not.
     prose = (
         not name
-        # Against the original: stripping decoration removes the trailing dots
-        # that made an ellipsis recognisable in the first place.
-        or REMARK_RE.search(text)
+        or ELLIPSIS_RE.search(text)
+        or REMARK_RE.search(name)
         or len(words) > MAX_NAME_WORDS
         or (SENTENCE_RE.search(name) and len(words) > SENTENCE_WORDS)
     )

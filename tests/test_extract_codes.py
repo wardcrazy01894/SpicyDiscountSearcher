@@ -82,6 +82,14 @@ class TestParseCompany:
     def test_keeps_real_names(self, name: str) -> None:
         assert extract_codes.parse_company(name) == (name, None)
 
+    def test_lifts_a_qualifier_even_when_the_qualifier_reads_like_a_remark(self) -> None:
+        # Testing the remark patterns against the raw cell rejected the whole
+        # thing; they belong against the name, after the lift.
+        assert extract_codes.parse_company("Nestle (100% subsidiary)") == (
+            "Nestle",
+            "100% subsidiary",
+        )
+
     def test_lifts_a_qualifier_out_of_the_name(self) -> None:
         assert extract_codes.parse_company("CareerBuilder (Americas Only)") == (
             "CareerBuilder",
@@ -138,6 +146,9 @@ class TestParseCompany:
             "1-800 Contacts",
             "1901 Group",
             "Ernst & Young LLP Global Business Travel",
+            # Six words, so past SENTENCE_WORDS: only SENTENCE_RE staying
+            # case-sensitive keeps this. With IGNORECASE, [a-z]{2} matches "St".
+            "St. Jude Medical Center Travel Office",
         ],
     )
     def test_does_not_refuse_a_real_employer(self, name: str) -> None:
