@@ -507,7 +507,7 @@ describe('bestOffer', () => {
 });
 
 describe('numbers that are not prices for anything bookable', () => {
-  it('does not let a tax line become the page price', () => {
+  it('does not let a tax line become the page price, however it is wrapped', () => {
     // The whole basis machinery cannot save you from a number that was never a
     // rate. "Total taxes and fees" carries the word `total`, so it was tagged
     // `total`, and being the cheapest number on the most trusted basis it
@@ -518,7 +518,7 @@ describe('numbers that are not prices for anything bookable', () => {
         <div class="hotel">
           <h3>Hilton Chicago</h3>
           <div class="rate"><span>$189</span> <span>/night</span></div>
-          <div class="fees">Total taxes and fees: $57.20</div>
+          <div class="fees">Total taxes and fees: <span>$57.20</span></div>
         </div>
       </main>`;
     const offers = extractOffers(document, 'hilton');
@@ -643,5 +643,62 @@ describe('labels', () => {
         <div class="p">$29.99 per day</div>
       </div></main>`;
     expect(extractOffers(document, 'hertz')[0]?.label).toBe('Economy');
+  });
+});
+
+describe('fee lines and the prices that live beside them', () => {
+  const only = (html: string): string[] => {
+    document.body.innerHTML = `<main><div class="t">${html}</div></main>`;
+    return extractOffers(document, 'hertz').map((o) => `${o.amount}/${o.basis}`);
+  };
+
+  it.each([
+    'Total taxes and fees: $57.20',
+    'Taxes and fees $57.20',
+    'Total savings $50.00',
+    'Resort fee $35.00',
+  ])('drops %s', (line) => {
+    expect(only(line)).toEqual([]);
+  });
+
+  it.each([
+    // Every one of these leads with a fee noun and quotes a real rate. An
+    // earlier version of this fix rejected the lot, which is worse than the bug
+    // it was fixing: a lost price drops the vendor out of the race silently.
+    ['Fees included — $412 total', '412/total'],
+    ['Fees and taxes included: $412.00', '412/unknown'],
+    ['Deposit waived · $210 total', '210/total'],
+    ['Savings Rate $89/day', '89/per-day'],
+    ['Discount rate $89.00/day', '89/per-day'],
+    ['Estimated total $412.00 including taxes and fees', '412/total'],
+  ])('keeps the real price in %s', (line, expected) => {
+    expect(only(line)).toEqual([expected]);
+  });
+
+  it('suppresses a savings badge sharing an element with a total', () => {
+    // Cannot be split by text alone, and emitting both makes the $50 a `total`
+    // that wins outright. Losing the $412 costs a vendor its place in the race;
+    // keeping the $50 crowns the wrong one.
+    expect(only('Save $50 · $412 total')).toEqual([]);
+  });
+
+  it('does not let an ambiguous wrapper emit a daily rate as the headline', () => {
+    // Both numbers classify `unknown`, and `unknown` outranks `per-day`, so the
+    // $29 became the page price and bucketed with real trip totals.
+    document.body.innerHTML = `<main><div class="card">
+      <span>Economy</span> $29 per day, estimated total $210 for 3 days
+    </div></main>`;
+    expect(bestOffer(extractOffers(document, 'hertz'))).toBeNull();
+  });
+
+  it('still finds the rate when the fee sits in its own element', () => {
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189<span>/night</span></div>
+      <div class="fees">Taxes and fees: <span>$57.20</span></div>
+    </div></main>`;
+    const offers = extractOffers(document, 'hilton');
+    expect(offers.map((o) => o.amount)).toEqual([189]);
+    expect(bestOffer(offers)?.amount).toBe(189);
   });
 });
