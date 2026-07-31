@@ -702,3 +702,47 @@ describe('fee lines and the prices that live beside them', () => {
     expect(bestOffer(offers)?.amount).toBe(189);
   });
 });
+
+describe('an inclusive word after the price is not a licence', () => {
+  const beside = (fee: string): string | null => {
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189.00 per night</div>
+      <div class="fees">${fee}</div>
+    </div></main>`;
+    const best = bestOffer(extractOffers(document, 'hilton'));
+    return best ? `${best.amount}/${best.basis}` : null;
+  };
+
+  it.each([
+    // Amenity copy mentions "free" and "included" constantly. Tested against
+    // the whole string, the inclusive rule was an escape hatch wide enough to
+    // undo the fix — and worse than before the cap was raised, because these
+    // elements used to be dropped for length instead.
+    'Total taxes and fees $57.20 (VAT included)',
+    'Taxes and fees $57.20 · Free cancellation',
+    'Taxes and fees: $57.20. Free cancellation',
+    'Taxes and fees $57.20, breakfast included',
+  ])('keeps the rate as the headline beside %s', (fee) => {
+    expect(beside(fee)).toBe('189/per-day');
+  });
+
+  it.each([
+    ['Fees included — $412 total', '412/total'],
+    ['Fees and taxes included: $412.00', '412/unknown'],
+    ['Deposit waived · $210 total', '210/total'],
+  ])('still keeps %s, where the inclusive word comes first', (line, expected) => {
+    document.body.innerHTML = `<main><div class="t">${line}</div></main>`;
+    expect(extractOffers(document, 'hertz').map((o) => `${o.amount}/${o.basis}`)).toEqual([
+      expected,
+    ]);
+  });
+
+  it.each(['Plus taxes and fees $57.20', 'Additional fees $57.20'])(
+    'recognises %s as a fee line',
+    (line) => {
+      document.body.innerHTML = `<main><div class="t">${line}</div></main>`;
+      expect(extractOffers(document, 'hertz')).toEqual([]);
+    },
+  );
+});

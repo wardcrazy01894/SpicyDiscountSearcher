@@ -67,6 +67,20 @@ The two things that would silently produce a wrong answer, and their guards:
   probe reports its landed path; a quote that landed on the site root is flagged
   in the popup. Structurally blind for Avis and Budget, whose deep links target
   `/en/home` already.
+- **A number that was never a rate.** "Total taxes and fees: $57.20" carries the
+  word `total`, so it was tagged `total` — the most trusted basis — and being
+  the cheapest number there it became the page's headline price. Bucketing
+  cannot save you from this: the number really is in the reported bucket.
+  `isFeeLine` in `extract.ts` strips the fee phrases and asks what is left; if
+  something still says what the number means (`total`, `/day`) the fee words
+  were a modifier and the number is a price. A fee element stays a _site_ so it
+  claims its number away from the card, and the flag propagates to any site
+  inside it — a `<span>` around the amount defeated the first version entirely.
+
+  Known escapes, all of which also escape on `main`: a flat label/amount sibling
+  pair directly under the card with no wrapper element, and `Taxes and fees not
+included: $57.20`, where the negation is invisible to the rule. Both surface a
+  fee as a price.
 
 ## Politeness
 

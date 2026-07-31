@@ -144,7 +144,7 @@ const FEE_NOUN = String.raw`taxes?|fees?|savings?|discounts?|surcharges?|deposit
  * fee", "Cleaning fee", "Destination fee". Without them the fee noun is not
  * first and the line reads as a rate.
  */
-const FEE_PREFIX = String.raw`estimated|total|resort|service|cleaning|facility|destination|amenity|booking|admin(?:istration)?`;
+const FEE_PREFIX = String.raw`estimated|total|resort|service|cleaning|facility|destination|amenity|booking|admin(?:istration)?|plus|additional|extra`;
 const FEE_LEAD_RE = new RegExp(
   String.raw`^\s*(?:(?:${FEE_PREFIX})\s+){0,2}(?:${FEE_NOUN})\b|^\s*(?:you\s+)?saves?\b`,
   'i',
@@ -152,6 +152,9 @@ const FEE_LEAD_RE = new RegExp(
 
 /** Words that turn a fee noun into a modifier on a real price. */
 const INCLUSIVE_RE = /\b(?:includ\w*|incl\.?|inclusive|waived|covered|free)\b/i;
+
+/** Where the first price starts, so the rule above can be scoped ahead of it. */
+const PRICE_START_RE = new RegExp(PRICE_RE.source, 'i');
 
 /** Every fee phrase, so what is left can be asked what it describes. */
 const FEE_PHRASE_RE = new RegExp(
@@ -183,7 +186,17 @@ function isFeeLine(own: string): boolean {
   // all-in price, and carries no `total` for the test below to find. The
   // inclusive word is the tell that the fee nouns are modifying a rate rather
   // than naming the number.
-  if (INCLUSIVE_RE.test(own)) return false;
+  //
+  // Only *before* the number, though. Tested against the whole string this
+  // became an escape hatch wide enough to undo the fix: amenity copy mentions
+  // "free" and "included" constantly, so "Total taxes and fees $57.20 (VAT
+  // included)" and "Taxes and fees $57.20 · Free cancellation" both walked
+  // straight through and the fee took the headline again — worse than before
+  // the 80-char cap, which had simply dropped them. In every line where the
+  // fee words really are a modifier the inclusive word comes first ("Fees
+  // included — $412"); in every line where they name the number it comes after.
+  const firstPrice = own.search(PRICE_START_RE);
+  if (INCLUSIVE_RE.test(firstPrice >= 0 ? own.slice(0, firstPrice) : own)) return false;
   const withoutFeeWords = own.replace(FEE_PHRASE_RE, ' ');
   return classifyBasis(withoutFeeWords) === 'unknown';
 }
@@ -392,11 +405,21 @@ function priceSites(root: Element): PriceSite[] {
   // price. Flagging only the element whose text carries the words left the
   // headline bug entirely intact in the commonest markup there is: the span
   // emitted, and basisFor then climbed to the fee div and tagged it `total`.
-  const feeElements = sites.filter((s) => s.suppressed === 'fee-line').map((s) => s.element);
+  // Walk each site's own ancestor chain rather than testing it against every
+  // fee element: `contains()` over a list is quadratic, and on a page of a
+  // thousand hotel cards — every one of which has a fee line — that measured
+  // ten times slower than the linear form. This runs on the vendor's main
+  // thread, so it is their page that pays. Same shape as claimedByDescendants.
+  const feeElements = new Set(
+    sites.filter((s) => s.suppressed === 'fee-line').map((s) => s.element),
+  );
   for (const site of sites) {
     if (site.suppressed) continue;
-    if (feeElements.some((fee) => fee !== site.element && fee.contains(site.element))) {
-      site.suppressed = 'fee-line';
+    for (let node = site.element.parentElement; node; node = node.parentElement) {
+      if (feeElements.has(node)) {
+        site.suppressed = 'fee-line';
+        break;
+      }
     }
   }
   return sites;
