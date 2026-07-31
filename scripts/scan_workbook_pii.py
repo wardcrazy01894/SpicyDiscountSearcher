@@ -161,9 +161,7 @@ PRODUCER_NAMES = frozenset(
 # This workbook already carries an unrelated note ("Not valid (as of 4/13/22)"),
 # so had the leaked name landed on that sheet, a part-wide scan would have
 # reported nothing at all on the very incident it exists to catch.
-COMMENT_BLOCK_RE = re.compile(
-    r"<(comment|threadedComment)\b[^>]*>(.*?)</\1>", re.DOTALL
-)
+COMMENT_BLOCK_RE = re.compile(r"<(comment|threadedComment)\b[^>]*>(.*?)</\1>", re.DOTALL)
 
 # A hand-typed sign-off: a dash near the end of a line, then a name. This is the
 # shape the leak actually took -- "...I can't see anything\n\t-Demilade Boyejo"
@@ -330,8 +328,7 @@ def scan(workbook: Path) -> list[str]:
     # anything was skipped that could hold text.
     for name in unreadable:
         problems.append(
-            f"{name}: not XML, so its contents cannot be scanned -- this part "
-            f"cannot be cleared"
+            f"{name}: not XML, so its contents cannot be scanned -- this part cannot be cleared"
         )
 
     return problems

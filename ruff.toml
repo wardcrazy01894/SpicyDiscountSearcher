@@ -1,0 +1,32 @@
+# Ruff runs with its default rule set unless told otherwise — E4/E7/E9 plus F,
+# which catches syntax errors and undefined names and essentially nothing else
+# on a 400-line parser full of regex and dict manipulation. The TypeScript side
+# gets eslint with type-aware rules; this was the weaker half of the same gate.
+#
+# Deliberately not the whole catalogue: every rule here is one whose violations
+# in this repo are worth acting on.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes — undefined names, unused imports
+  "I",   # import sorting, so a new import cannot land anywhere
+  "B",   # bugbear — mutable defaults, loop-variable capture, `except` shape
+  "UP",  # pyupgrade — this repo requires 3.11+, so 3.8-era idioms are noise
+  "SIM", # simplify — the readability rules that catch real tangles
+  "RUF", # ruff's own, incl. mutable class attrs and unused noqa
+]
+
+ignore = [
+  # These regexes match en dashes and curly apostrophes deliberately — the
+  # workbook and the vendor pages are full of them, and that is the point.
+  # "Did you mean a hyphen?" is exactly wrong here.
+  "RUF001",
+]
+
+[lint.per-file-ignores]
+# Tests load the module under test via importlib and reach into its internals
+# on purpose; that is the point of the file, not an accident.
+"tests/*" = ["S101"]

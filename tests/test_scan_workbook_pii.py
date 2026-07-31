@@ -194,9 +194,7 @@ def test_a_named_creator_in_that_same_part_is_still_caught(tmp_path: Path) -> No
     "signoff",
     ["-Hampton Inn", "-Americas Only", "-Not Valid", "-Corporate Rate", "-Best Western"],
 )
-def test_title_cased_workbook_vocabulary_is_not_a_person(
-    tmp_path: Path, signoff: str
-) -> None:
+def test_title_cased_workbook_vocabulary_is_not_a_person(tmp_path: Path, signoff: str) -> None:
     """Capitalisation alone is not enough in a workbook full of employers and
     hotel brands. One re-capitalised margin note failing a required check is
     how a gate stops being trusted."""
@@ -213,9 +211,7 @@ def test_title_cased_workbook_vocabulary_is_not_a_person(
 
 
 @pytest.mark.parametrize("signoff", ["-Ada Lovelace.", "-Ada Lovelace (EMEA)", "-Ada Lovelace,"])
-def test_a_signature_with_trailing_punctuation_still_counts(
-    tmp_path: Path, signoff: str
-) -> None:
+def test_a_signature_with_trailing_punctuation_still_counts(tmp_path: Path, signoff: str) -> None:
     book = make_workbook(
         tmp_path,
         {
@@ -365,8 +361,7 @@ def test_an_unrecognised_host_needs_a_human(tmp_path: Path) -> None:
         ),
         (
             "docProps/core.xml",
-            "<cp:coreProperties><dc:creator>Alan Turing</dc:creator>"
-            "</cp:coreProperties>",
+            "<cp:coreProperties><dc:creator>Alan Turing</dc:creator></cp:coreProperties>",
             "Alan Turing",
         ),
         (
@@ -407,7 +402,11 @@ def test_a_producer_name_is_not_a_person(tmp_path: Path) -> None:
     natural way to fix a leak) would have failed the gate on the fix."""
     book = make_workbook(
         tmp_path,
-        {"docProps/core.xml": "<cp:coreProperties><dc:creator>openpyxl</dc:creator></cp:coreProperties>"},
+        {
+            "docProps/core.xml": (
+                "<cp:coreProperties><dc:creator>openpyxl</dc:creator></cp:coreProperties>"
+            )
+        },
     )
     assert scanner.scan(book) == []
 
@@ -500,9 +499,7 @@ def test_a_marker_beats_an_allowlisted_host(
     """The reason the marker check runs first. Pinned against an allowlist that
     actually contains the host, because testing it with an unlisted one proves
     only that unlisted hosts fire."""
-    monkeypatch.setattr(
-        scanner, "ALLOWED_HOSTS", scanner.ALLOWED_HOSTS | {"stay-stg.hilton.com"}
-    )
+    monkeypatch.setattr(scanner, "ALLOWED_HOSTS", scanner.ALLOWED_HOSTS | {"stay-stg.hilton.com"})
     book = make_workbook(
         tmp_path,
         {"xl/sharedStrings.xml": "<sst><si><t>https://stay-stg.hilton.com/x</t></si></sst>"},

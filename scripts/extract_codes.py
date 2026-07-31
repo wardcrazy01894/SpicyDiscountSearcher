@@ -116,18 +116,13 @@ def split_codes(text: str) -> tuple[list[str], list[str]]:
     like "Hampton Inn, Homewood Suites" is a brand list, not a code list.
     """
     tokens = tokenize(text)
-    prose = [
-        tok
-        for tok in tokens
-        if not looks_like_code(tok) and tok.upper() not in STOPWORDS
-    ]
+    prose = [tok for tok in tokens if not looks_like_code(tok) and tok.upper() not in STOPWORDS]
     allow_letters_only = not prose
     codes: list[str] = []
     for token in tokens:
         code = token.upper()
-        if looks_like_code(code, allow_letters_only=allow_letters_only):
-            if code not in codes:
-                codes.append(code)
+        if looks_like_code(code, allow_letters_only=allow_letters_only) and code not in codes:
+            codes.append(code)
     return codes, prose
 
 
@@ -468,9 +463,7 @@ def main() -> int:
     by_company: dict[str, dict] = {}
     for rec in merged.values():
         slug = slugify(rec["company"])
-        entry = by_company.setdefault(
-            slug, {"slug": slug, "name": rec["company"], "codes": []}
-        )
+        entry = by_company.setdefault(slug, {"slug": slug, "name": rec["company"], "codes": []})
         entry["codes"].append(
             {
                 "vendor": rec["vendor"],
