@@ -78,16 +78,30 @@ export function unrankedQuotes(quotes: Quote[]): PricedQuote[] {
     .flatMap((group) => group.quotes);
 }
 
-export function cheapest(quotes: Quote[]): PricedQuote | null {
+/**
+ * The cheapest quote *among the comparable ones* — not the cheapest quote.
+ *
+ * Named `cheapest` until this rename, which promised the opposite of what it
+ * does: a numerically smaller EUR total or per-day rate sits outside the
+ * reported bucket and is deliberately not returned, which is the entire point
+ * of the bucketing. `unrankedQuotes` above says so in its own doc; this said
+ * nothing, so the name was the only description a reader had.
+ */
+export function cheapestComparable(quotes: Quote[]): PricedQuote | null {
   return primaryGroup(quotes)?.quotes[0] ?? null;
 }
 
 /**
- * Full ranking for display: priced quotes first — grouped so like sits with
+ * Full ordering for display: priced quotes first — grouped so like sits with
  * like and the leading bucket's cheapest is top — then everything still
  * working, then the ones that failed.
+ *
+ * Named `rankQuotes` until this rename, which was exact before the bucketing
+ * landed and wrong after: what it returns includes every quote
+ * `unrankedQuotes` hands the popup so it can print "Listed below, but not
+ * ranked". One function's output cannot be both.
  */
-export function rankQuotes(quotes: Quote[]): Quote[] {
+export function orderForDisplay(quotes: Quote[]): Quote[] {
   const statusRank: Record<Quote['status'], number> = {
     ok: 0,
     loading: 1,
@@ -114,6 +128,13 @@ export function rankQuotes(quotes: Quote[]): Quote[] {
   });
 }
 
+/**
+ * Best against worst *within the reported bucket*, not across the race.
+ *
+ * `savings()` returns null when that bucket holds fewer than two quotes, even
+ * if six others priced fine — the field names read as global extremes and are
+ * not.
+ */
 export interface Savings {
   /** Most expensive quote in the reported race — what picking badly costs. */
   worst: number;

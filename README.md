@@ -164,8 +164,11 @@ scripts/
 
 ## Development
 
-Requires Node `^22.22.2 || ^24.15.0 || >=26.0.0` — jsdom and eslint between them
-rule out 23.x, 25.x and Node 24 below 24.15. CI runs 22.
+Requires Node `^22.22.2 || ^24.15.0 || >=26.0.0`, which is jsdom's own range
+copied verbatim — it rules out 23.x, 25.x and Node 24 below 24.15, and every
+other dependency permits a superset of it. A test-only dependency therefore
+sets the supported runtime for everyone, including anyone who only wants to
+build. CI runs 22.
 
 ```bash
 npm run build        # typecheck + both vite builds
