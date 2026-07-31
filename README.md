@@ -183,6 +183,10 @@ The workbook parser is Python and tested separately:
 ```bash
 pip install 'openpyxl==3.1.5' 'pytest==8.4.2'
 python3 -m pytest tests -q
+
+# lint and formatting, both required checks — same pins CI uses
+pipx run ruff==0.14.2 check scripts tests
+pipx run ruff==0.14.2 format --check scripts tests
 ```
 
 CI runs five jobs on every PR. `main` is protected on four of them — they must
