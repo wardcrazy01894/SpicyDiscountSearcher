@@ -106,12 +106,15 @@ not be told apart from a consent interstitial or a country picker.
 
 It cannot always read it. The manifest holds no `tabs` permission — PR #5
 dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
-current URL is not one of the nine vendor hosts. That is not a gap to paper
-over with a permission: an invisible tab means the page left the vendor's
-origin, which is _also_ when the content script stops running, so it is a
-diagnosis in itself and gets its own `path: 'left-our-origins'`. The chrome
-fake models this, having previously returned `url` unconditionally and hidden
-the bug.
+current URL is not one of the nine vendor hosts. Not a gap to paper over with a
+permission, but not a diagnosis either: all it establishes is that the tab's
+address is unreadable, which is equally true of a redirect off the vendor's
+site and of a load that never committed (`about:blank`, or `chrome-error://`
+after a DNS or TLS failure). Both also mean the content script never ran, so
+both cause timeouts. `path: 'left-our-origins'` records the fact and the popup
+names both possibilities; claiming either one would repeat the mistake this
+replaced, which was asserting the other. The chrome fake models the permission
+rule, having previously returned `url` unconditionally and hidden it.
 
 `not-reached` and `left-our-origins` are the background's own knowledge, so a
 content script may not claim either — `PROBE_PATHS` enforces that at ingest,

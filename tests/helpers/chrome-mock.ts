@@ -138,6 +138,11 @@ export function installChromeMock(): ChromeHarness {
       create: (options: chrome.tabs.CreateProperties) => {
         tabOptions.push({ options: { ...options }, at: Date.now() });
         const id = nextTabId++;
+        // `url` is the *committed* address, which is why a test can set it to
+        // '' to model a navigation that never landed — a hung about:blank, or
+        // a chrome-error:// page after a DNS failure. Chrome reports no url in
+        // those cases for the same reason it reports none off-origin, and the
+        // suite could not express the difference while create() filled it in.
         tabs.set(id, { id, url: options.url ?? '', windowId: options.windowId ?? 0, title: '' });
         return Promise.resolve({ id });
       },

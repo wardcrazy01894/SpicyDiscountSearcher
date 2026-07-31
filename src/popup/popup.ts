@@ -376,7 +376,13 @@ function durationText(quote: Quote): string {
 function branchText(path: ProbeReport['path']): string {
   if (path === 'generic-sweep') return 'generic sweep';
   if (path === 'vendor-selectors') return 'vendor selectors';
-  if (path === 'left-our-origins') return 'left the vendor’s site';
+  // Deliberately two possibilities, not one. All the background knows is that
+  // it had no permission to read the tab's URL, which is equally true of a
+  // redirect off the vendor's site and of a load that never committed — an
+  // `about:blank` that hung, or a `chrome-error://` page after a DNS or TLS
+  // failure. Naming only the first would be the same mistake as the "never
+  // navigated" it replaced, pointing the opposite way.
+  if (path === 'left-our-origins') return 'off the vendor’s site, or never got there';
   // The probe never answered, so the background described the tab instead.
   return 'no answer from the page';
 }
@@ -403,7 +409,7 @@ function evidenceLine(quote: Quote): HTMLElement | null {
   const landed = report.finalPath
     ? `landed ${report.finalPath}`
     : report.path === 'left-our-origins'
-      ? 'the extension cannot see where it went'
+      ? 'no permission to read this tab’s address'
       : 'no path to show';
   const counted = observed ? '' : ` · ${report.offerCount} offer${plural}`;
   line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;

@@ -167,15 +167,42 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
  */
 const PROBE_PATHS = new Set<ProbeReport['path']>(['vendor-selectors', 'generic-sweep']);
 
-/** Take a report from a content script, keeping only what it may assert. */
+/** How much of a page-supplied string is worth keeping. */
+const MAX_REPORT_TEXT = 200;
+
+/**
+ * Take a report from a content script, keeping only what it may assert.
+ *
+ * Every field here is written by a page we do not control, so every field is
+ * checked — guarding `path` alone left the other three trusted:
+ *
+ * - `finalPath` is truncated at the first `?` or `#`. "Path only, never the
+ *   query string" is this repo's rule because the query carries the discount
+ *   code and the user's itinerary, and it was enforced only for the report the
+ *   *background* builds. The probe strips its own query honestly; a compromised
+ *   page has no reason to, and the string is persisted and rendered.
+ * - `title` and `finalPath` are capped. Unbounded, they go into
+ *   `chrome.storage.session`, whose quota a hostile page could simply fill —
+ *   and `publish()` swallows that failure into a warn, so the symptom would be
+ *   a run that silently stops persisting.
+ * - `offerCount` is clamped to a non-negative integer, having been rendered
+ *   verbatim as "-7 offers".
+ */
 function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefined {
   if (!report) return undefined;
-  if (PROBE_PATHS.has(report.path)) return report;
-  // Not rejected outright: the landed path, title and count are still the
-  // probe's own observations and are still worth having. Only the claim about
-  // *who* observed them is refused, and it falls back to the branch the probe
-  // would have used.
-  return { ...report, path: 'generic-sweep' };
+  const finalPath = String(report.finalPath ?? '')
+    .split(/[?#]/)[0]!
+    .slice(0, MAX_REPORT_TEXT);
+  const count = Number(report.offerCount);
+  return {
+    finalPath,
+    title: String(report.title ?? '').slice(0, MAX_REPORT_TEXT),
+    offerCount: Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0,
+    // The observations above are the probe's own and worth having; only the
+    // claim about *who* made them is refused, falling back to the branch the
+    // probe would have used.
+    path: PROBE_PATHS.has(report.path) ? report.path : 'generic-sweep',
+  };
 }
 
 /**
@@ -279,9 +306,10 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
 /** Close the run's window, if it still has one, and forget it. */
 async function closeWindow(run: ActiveRun): Promise<void> {
   run.windowPromise = null;
-  if (run.windowId !== null) {
+  const closing = run.windowId;
+  if (closing !== null) {
     try {
-      await chrome.windows.remove(run.windowId);
+      await chrome.windows.remove(closing);
     } catch (error) {
       // Usually already closed by the user. If it is not, the window is
       // minimised and holds a new-tab page, so nobody will ever see it to
@@ -290,12 +318,23 @@ async function closeWindow(run: ActiveRun): Promise<void> {
     }
     run.windowId = null;
   }
-  // After the close, not before. Dropping the key first meant a failed close
-  // left a window no future worker could ever find, because the id it would
-  // have looked it up by was already gone.
-  await chrome.storage.session.remove(WINDOW_KEY).catch((error: unknown) => {
+  // After the close, not before: dropping the key first meant a failed close
+  // left a window no future worker could ever find. And compared, not
+  // unconditional — `windows.remove` is awaited IPC, and a run starting during
+  // it writes its own id to this key. Same interleave `reapOrphanWindow`
+  // guards; fixing one of two identical instances just moves the bug.
+  await forgetWindowId(closing);
+}
+
+/** Drop the stored window id, but only if it is still the one we closed. */
+async function forgetWindowId(closed: number | null): Promise<void> {
+  try {
+    const stored = await chrome.storage.session.get(WINDOW_KEY);
+    if (closed !== null && stored[WINDOW_KEY] !== closed) return;
+    await chrome.storage.session.remove(WINDOW_KEY);
+  } catch (error) {
     warn('could not forget the background window id', error);
-  });
+  }
 }
 
 async function closeTab(tabId: number): Promise<void> {
@@ -384,13 +423,17 @@ async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
     const tab = await chrome.tabs.get(tabId);
     // `url` and `title` are populated only for a tab whose *current* URL
     // matches one of our host permissions. This extension holds no `tabs`
-    // permission — PR #5 dropped it on purpose — so an undefined url is not
-    // "the tab never navigated", it is "the tab is somewhere we are not
-    // allowed to look". That is itself the most useful thing we can say: it
-    // means the page left the vendor's origin, which is also exactly when the
-    // content script stops running and the probe goes silent. Reporting it as
-    // "never navigated" would have been a confident wrong answer in the very
-    // case this function exists for.
+    // permission — PR #5 dropped it on purpose — so an undefined url means
+    // only "we are not allowed to read this tab's address".
+    //
+    // That is as far as the inference goes, and no further. It is equally
+    // consistent with a redirect off the vendor's site and with a load that
+    // never committed — an `about:blank` that hung, a `chrome-error://` page
+    // after a DNS or TLS failure. Both are leading causes of `probe-timeout`,
+    // because both also mean the content script never ran. Reporting it as
+    // "never navigated" was a confident wrong answer for the first; reporting
+    // it as "left the vendor's site" would be the same mistake pointing the
+    // other way. The report says what is known and the popup names both.
     const landed = tab.url ?? '';
     if (!landed) {
       quote.report = {
@@ -688,11 +731,7 @@ async function reapOrphanWindow(): Promise<void> {
   // then loses the only handle on a window that is about to be orphaned for
   // real — the exact leak this function exists to fix, caused by the function
   // itself.
-  const now = await chrome.storage.session.get(WINDOW_KEY).catch(() => null);
-  if (now && now[WINDOW_KEY] !== windowId) return;
-  await chrome.storage.session.remove(WINDOW_KEY).catch((error: unknown) => {
-    warn('could not forget an orphaned window id', error);
-  });
+  await forgetWindowId(windowId);
 }
 
 // Runs whenever the worker wakes, which is the only moment we know a previous

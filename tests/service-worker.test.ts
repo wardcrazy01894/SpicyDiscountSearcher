@@ -812,3 +812,91 @@ describe('the reaper and a run that starts underneath it', () => {
     windows.remove = realRemove;
   });
 });
+
+describe('a report a page could have forged', () => {
+  it('keeps the query string out of a page-supplied path', async () => {
+    // "Path only, never the query string" is the rule because the query holds
+    // the discount code and the itinerary. It was enforced for the report the
+    // *background* builds and merely trusted for the one the page sends —
+    // which is persisted to storage and rendered.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, finalPath: '/search?cdp=SECRET&pickup=TPA' },
+    });
+    await settle(1_000);
+
+    const state = await getState();
+    expect(state?.quotes[0]?.report?.finalPath).toBe('/search');
+    expect(JSON.stringify(state)).not.toContain('SECRET');
+  });
+
+  it('caps the strings a page can put into storage', async () => {
+    // Unbounded, these fill chrome.storage.session's quota — and publish()
+    // swallows that into a warn, so the run would silently stop persisting.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, title: 'X'.repeat(5_000), offerCount: -7 },
+    });
+    await settle(1_000);
+
+    const report = (await getState())?.quotes[0]?.report;
+    expect(report?.title.length).toBeLessThanOrEqual(200);
+    // Rendered verbatim, so "-7 offers" was reachable.
+    expect(report?.offerCount).toBe(0);
+  });
+
+  it('sanitizes a late report too, not only a live one', async () => {
+    // The late branch is a separate call site, and was separately trusted.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'not-reached', finalPath: '/late?cdp=SECRET' },
+    });
+    await settle();
+
+    const late = (await getState())?.quotes[0]?.lateReport;
+    expect(late?.path).toBe('generic-sweep');
+    expect(late?.finalPath).toBe('/late');
+  });
+});
+
+describe('a tab whose navigation never landed', () => {
+  it('does not claim it left the vendor, because that is not knowable', async () => {
+    // An absent url means only "no permission to read this tab's address".
+    // That is equally true of an off-origin redirect and of a load that never
+    // committed. Round 1 blocked because "never navigated" was wrong for the
+    // first; asserting the second would be the same mistake reversed.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.get(tabId)!.url = '';
+
+    await settle(60_000);
+
+    const report = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout')?.report;
+    // Same code as the off-origin case on purpose: the background cannot tell
+    // them apart, so it does not pretend to.
+    expect(report?.path).toBe('left-our-origins');
+    expect(report?.finalPath).toBe('');
+  });
+});
