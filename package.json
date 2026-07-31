@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Chrome/Brave extension that races corporate discount codes against each other to find the cheapest rental car or hotel rate.",
   "engines": {
-    "node": ">=22"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "build": "npm run build:main && npm run build:content",

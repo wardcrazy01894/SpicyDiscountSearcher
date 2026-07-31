@@ -5,6 +5,11 @@ import { defineConfig } from 'vite';
 // build emits one self-contained IIFE with no imports and no shared chunks.
 export default defineConfig({
   build: {
+    // Rolldown (vite 8) defaults output.strict to 'auto' — it honours a
+    // "use strict" directive in the source and adds none of its own, where
+    // Rollup defaulted to true. The TS source has no directive, so upgrading
+    // silently shipped a sloppy-mode content script into every vendor page.
+    rollupOptions: { output: { strict: true } },
     outDir: 'dist',
     emptyOutDir: false, // the main build already populated dist/
     sourcemap: true,

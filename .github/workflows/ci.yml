@@ -35,13 +35,6 @@ jobs:
           cache: npm
       - name: Install dependencies (locked)
         run: npm ci
-      - name: Audit dependencies
-        # NOT --omit=dev. There are no runtime dependencies at all, so that
-        # audited an empty tree and always passed — while the dev tree is what
-        # vite bundles into dist/, i.e. the code users actually load.
-        # No continue-on-error: the tree is clean, so this now gates.
-        run: npm audit --audit-level=high
-
       - name: Type check (tsc)
         run: npm run typecheck
       - name: Lint (eslint)
@@ -54,6 +47,20 @@ jobs:
         # A manifest that points at a file the build never emitted installs
         # fine and then fails silently, so verify every referenced path exists.
         run: node scripts/check-dist.mjs
+      - name: Audit dependencies
+        # Last, deliberately. npm audit hits the registry at run time, so a new
+        # advisory with no fix available turns a green PR red overnight — and
+        # from step three it would abort before typecheck, lint or build had
+        # said anything, on every PR, since this job is required.
+        #
+        # NOT --omit=dev. There are no runtime dependencies at all, so that
+        # audited an empty tree and always passed — while the dev tree is what
+        # vite bundles into dist/, i.e. the code users actually load.
+        # No continue-on-error: the tree is clean at every severity, so this
+        # gates — and at moderate, since a moderate advisory still ends up in
+        # the bundle users load.
+        run: npm audit --audit-level=moderate
+
       - name: Upload unpacked extension
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

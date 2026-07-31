@@ -72,6 +72,26 @@ for (const relative of referenced) {
   else if (statSync(absolute).size === 0) problems.push(`${relative} — empty`);
 }
 
+// MV3 content scripts are not ES modules; a bundle that ships `import` or
+// `export` fails to inject and takes the whole race with it. Nothing else
+// checks this — no test imports from dist/ — and vite 8 swapped Rollup for
+// Rolldown underneath, so the shape of this file is not something to assume.
+const contentScripts = (manifest.content_scripts ?? []).flatMap((script) => script.js ?? []);
+for (const relative of contentScripts) {
+  const absolute = join(dist, relative);
+  if (!existsSync(absolute)) continue;
+  const source = readFileSync(absolute, 'utf8');
+  if (/^\s*(?:import|export)\s/m.test(source) || /\bexport\s*\{/.test(source)) {
+    problems.push(`${relative} — contains module syntax; MV3 content scripts must be classic`);
+  }
+  if (
+    !source.trimStart().startsWith('"use strict"') &&
+    !source.trimStart().startsWith("'use strict'")
+  ) {
+    problems.push(`${relative} — not in strict mode; check the bundler's output.strict`);
+  }
+}
+
 // A popup that references nothing loads as a blank page, which is the failure
 // this script exists for — so silence from the parser is itself a problem.
 if (popup && fromPopup === 0) {
