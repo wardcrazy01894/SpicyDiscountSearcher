@@ -6,14 +6,15 @@ import {
   searchCompanies,
 } from '../core/codes.js';
 import {
-  cheapest,
+  cheapestComparable,
   classMatrix,
   estimatedTotal,
   primaryGroup,
-  rankQuotes,
+  orderForDisplay,
   savings,
   unrankedQuotes,
 } from '../core/compare.js';
+import { MAX_CONCURRENCY } from '../core/types.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
   Candidate,
@@ -565,8 +566,8 @@ function renderRun(state: RunState | null): void {
   results.hidden = false;
 
   const trip = state.plan.trip;
-  const ranked = rankQuotes(state.quotes);
-  const winner = cheapest(state.quotes);
+  const ranked = orderForDisplay(state.quotes);
+  const winner = cheapestComparable(state.quotes);
   quotesList.replaceChildren(
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
@@ -800,7 +801,7 @@ form.addEventListener('submit', (event) => {
   const plan: SearchPlan = {
     trip,
     candidates: capped,
-    concurrency: Math.max(1, Math.min(6, Number(concurrencyInput.value) || 2)),
+    concurrency: Math.max(1, Math.min(MAX_CONCURRENCY, Number(concurrencyInput.value) || 2)),
   };
 
   void saveForm();
@@ -838,6 +839,11 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
 });
 
 async function main(): Promise<void> {
+  // The HTML cannot import the constant, so it is written here instead of
+  // trusted to stay in step. A `max` that disagrees with the worker's clamp
+  // offers the user a concurrency the background silently refuses.
+  concurrencyInput.max = String(MAX_CONCURRENCY);
+
   await restoreForm();
   setCategory(ui.category);
 

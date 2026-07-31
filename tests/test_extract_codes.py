@@ -161,8 +161,8 @@ class TestParseCompany:
 
 
 class TestParseHiltonSheet:
-    """The 'Hilton Code' sheet had no tests, which is how it shipped 24 codes
-    that were words cut off the front of employers' names.
+    """The 'Hilton Code' sheet had no tests, which is how it shipped 23 codes
+    that were words cut off the front of an employer's name or a sentence.
 
     Every row here is "N-number / account-number Employer", so every real code
     on this sheet carries a digit. That is the property the parser leans on.
