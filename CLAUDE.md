@@ -116,18 +116,31 @@ misattribute its failure to the user.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON. Remove a vendor from `vendors.ts` without regenerating and the popup
   dies in `refreshPlan`; the `data` job doesn't assert the ids are known.
-- Nine Hilton codes sit under a company called `Unattributed`. Six are there
-  because the workbook cell beside them really was a margin note. The other
-  three are a worse story: row 56 reads `N0394181 / 0000394181 Fiat (Americas
-only)` — an ordinary employer row — but `looks_like_code('FIAT')` is true, so
-  the brand name was eaten as a third code and only the qualifier was left to be
-  the company. **Fiat is not in the database at all**, and `FIAT` ships as a
-  Hilton code.
-- Same root cause, four times: `LET`, `ME` and `ADD` are English words taken off
-  the front of `Let me add a few I've umulated for EMEA…`, and `FIAT` is a brand
-  name. `looks_like_code`'s letters-only branch cannot tell any of them from a
-  real code.
-- Two real employers are lost outright. `Benjamin Moore` (row 24, `à / 560002892
-Benjamin Moore and Company`) is dropped because the stray leading `à` isn't
-  code-shaped, so the row collects no codes at all and is skipped. `Fiat` is
-  lost as described above. Neither can be found by name in the picker.
+- Three Hilton codes sit under a company called `Unattributed`, because the
+  workbook cell beside them really was a qualifier rather than an employer.
+  That is now the only reason anything lands there.
+
+  It used to be nine, and the other six were a parser bug rather than a
+  spreadsheet one: `parse_hilton_sheet` consumed leading code-shaped tokens
+  with `looks_like_code`'s letters-only branch **on**, so it ate the first
+  words of the employer's own name. `FIAT` came off row 56, `LET`/`ME`/`ADD`
+  off the front of a sentence. Every code on that sheet carries a digit, so the
+  branch is now off for that caller and the sheet holds no letters-only code at
+  all. `MH` (company `Explore More`) is the one that remains anywhere, and it
+  comes from a grid sheet, where letters-only codes are legitimate.
+
+  Same fix recovered thirty employers. Some — `Bank of America`, `Koch
+Industries` — were published under a fragment of their name (`America`,
+  `Industries`), and `Koch` and `Shaw Industries` had _merged_ into a single
+  six-code company belonging to neither. Others were dropped whole: `BP`,
+  `Dell`, `UPS` and `3M` have names that are entirely code-shaped, so the loop
+  consumed the row and left nothing to be the company. The loop now never
+  consumes the last token, since every row on this sheet ends with the
+  employer. `Benjamin Moore` (row 24, `à / 560002892 Benjamin Moore and
+Company`) is back too — a single stray character ahead of the codes is
+  skipped as decoration.
+
+- Every `continue` in `extract_codes.py` used to drop a row in silence while
+  the summary counted only what it kept, which is how `Benjamin Moore` stayed
+  lost. Skipped rows now print to stderr and the `data` job shows them. One row
+  is skipped today, and it really is a margin note.

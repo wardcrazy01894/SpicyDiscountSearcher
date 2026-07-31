@@ -197,6 +197,14 @@ NAME_EDGE = " -–—/*.,;:"
 # are still real codes; only the attribution was invented.
 UNATTRIBUTED = "Unattributed"
 
+# Rows the parser looked at and could not use. Every `continue` below is a
+# decision to drop somebody's data, and until now each was silent: the summary
+# at the end counts what was *kept*, so a change that quietly lost forty
+# employers still printed a healthy-looking total. "Benjamin Moore" was lost
+# this way for the entire life of the file. Reported to stderr, so the `data`
+# job shows it and a reviewer can see the number move.
+SKIPPED: list[str] = []
+
 
 def parse_company(text: str) -> tuple[str | None, str | None]:
     """Split a company cell into a name and whatever qualified it.
@@ -252,6 +260,15 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
     """The 'Hilton Code' sheet is free text: 'N0001542 / 0232757100 3M'.
 
     Leading code-shaped tokens belong to Hilton; the remainder is the company.
+
+    Every code on this sheet carries a digit -- the whole sheet is
+    "N-number / account-number Employer". Letter-only tokens are therefore
+    never codes here, they are the first words of the employer's name, so this
+    is the one caller that must switch that branch off. Leaving it on ate
+    'BANK' and 'OF' out of "Bank of America", merged "Koch Industries" and
+    "Shaw Industries" into a single company called "Industries", and dropped
+    "BP", "Dell" and "UPS" entirely -- their names are *nothing but*
+    code-shaped words, so the loop consumed the row and left no company at all.
     """
     records: list[dict] = []
     for row in rows:
@@ -259,9 +276,23 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         if not line:
             continue
         tokens = [t for t in re.split(r"[/\s]+", line) if t]
+        # A single stray character ahead of the codes is decoration, not data:
+        # row 24 reads "à / 560002892 Benjamin Moore and Company", and bailing
+        # on it collected no codes and skipped a real employer. Only one
+        # character, so a genuine short code like "3M" is untouched.
+        if tokens and len(tokens[0]) == 1 and not looks_like_code(tokens[0].upper()):
+            tokens = tokens[1:]
         codes: list[str] = []
         idx = 0
-        while idx < len(tokens) and looks_like_code(tokens[idx].upper()):
+        # Never consume the last token. Every row on this sheet ends with the
+        # employer, so a row whose name is itself code-shaped has nothing left
+        # to be the company and gets dropped wholesale. That is how "3M" -- the
+        # example in this very docstring -- lost both its Hilton codes, along
+        # with "BP" and "Sixt". Reserving the final token costs nothing: a row
+        # that is only codes is not a row this sheet contains.
+        while idx < len(tokens) - 1 and looks_like_code(
+            tokens[idx].upper(), allow_letters_only=False
+        ):
             code = tokens[idx].upper()
             if code not in codes:
                 codes.append(code)
@@ -269,8 +300,17 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         # Same treatment as the grid sheets: this column is free text, so it
         # also holds bare qualifiers ("(Americas only)") and outright prose,
         # every one of which became its own company in the picker.
-        company, note = parse_company(" ".join(tokens[idx:]).strip(" -–—"))
+        rest = tokens[idx:]
+        # A short all-lowercase word ahead of the name is a typo in the source,
+        # not part of the employer: row 30 reads "... 560047583 is Campbell
+        # Hausfield and Powerex". Employers are capitalised throughout this
+        # sheet, and the length cap keeps a genuine lowercase-initial brand
+        # (eBay, iRobot -- neither is *entirely* lowercase anyway) out of reach.
+        while rest and rest[0].isalpha() and rest[0].islower() and len(rest[0]) <= 3:
+            rest = rest[1:]
+        company, note = parse_company(" ".join(rest).strip(" -–—"))
         if not codes or (not company and not note):
+            SKIPPED.append(f"Hilton Code: {line[:80]}")
             continue
         if not company:
             company = UNATTRIBUTED
@@ -302,6 +342,7 @@ def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
             # Rejected text still names *something*; an empty cell names
             # nothing and stays skipped, as it always was.
             if not company_note:
+                SKIPPED.append(f"{name}: {raw_company[:80]}")
                 continue
             company = UNATTRIBUTED
         for offset, vendor in enumerate(layout):
@@ -349,6 +390,7 @@ def main() -> int:
         return 1
 
     workbook = openpyxl.load_workbook(WORKBOOK, data_only=True)
+    SKIPPED.clear()
     records: list[dict] = []
     for sheet in workbook.worksheets:
         rows = list(sheet.iter_rows(values_only=True))
@@ -413,6 +455,12 @@ def main() -> int:
     print(f"wrote {OUT.relative_to(ROOT)}: {len(companies)} companies, {total} codes")
     for vendor, count in sorted(per_vendor.items(), key=lambda kv: -kv[1]):
         print(f"  {vendor:12} {count}")
+
+    # Counting only what was kept is how a parser loses employers quietly.
+    if SKIPPED:
+        print(f"\nskipped {len(SKIPPED)} row(s) that named something:", file=sys.stderr)
+        for line in SKIPPED:
+            print(f"  - {line}", file=sys.stderr)
     return 0
 
 
