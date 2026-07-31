@@ -50,9 +50,12 @@ ALLOWED_HOSTS = frozenset(
         # this workbook has no docProps part at all today, but the remediation
         # this very script prints ("editing it in Excel is enough") is exactly
         # what creates one, which would have turned a required check red on a
-        # clean file.
+        # clean file. `schemas.libreoffice.org` is the same story one step
+        # further along: a contributor without Excel reaches for LibreOffice,
+        # which writes a loext namespace into xl/workbook.xml on every save.
         "schemas.microsoft.com",
         "schemas.openxmlformats.org",
+        "schemas.libreoffice.org",
         "purl.org",
         "w3.org",
         "www.w3.org",
@@ -105,6 +108,13 @@ TAG_RE = re.compile(r"<[^>]+>")
 # the legacy <author> element covers the format this workbook happens to use
 # and none of the format the next edit will use.
 DISPLAY_NAME_RE = re.compile(r"""displayName\s*=\s*(["'])(.*?)\1""")
+
+# Excel writes a legacy comments part alongside every threaded comment, whose
+# author element holds the thread's GUID rather than a person: `tc={1B2C-...}`.
+# Machine boilerplate, and unlike an unrecognised host there is no allowlist to
+# add it to -- a contributor who hit this would face a red required check with
+# no way out but patching this file.
+THREAD_ID_RE = re.compile(r"^tc=\{[0-9A-Fa-f-]+\}$")
 
 # One comment at a time. Stripping tags from a whole part and then anchoring on
 # end-of-line finds a signature only when it is the *last* comment in the part:
@@ -229,8 +239,9 @@ def scan(workbook: Path) -> list[str]:
             # An author is a named human. Excel writes an empty element when
             # the comment is anonymous, which is the state we want to hold.
             for author in sorted(set(AUTHOR_RE.findall(text))):
-                if author.strip():
-                    problems.append(f"{name}: comment author {author.strip()!r}")
+                stripped = author.strip()
+                if stripped and not THREAD_ID_RE.match(stripped):
+                    problems.append(f"{name}: comment author {stripped!r}")
 
             for creator in sorted(set(CREATOR_RE.findall(text))):
                 if creator.strip():
@@ -268,15 +279,20 @@ def main() -> int:
     # Every workbook under data/source, not the one path that exists today: a
     # second one dropped in beside it would otherwise be silently unscanned,
     # which is the same shape of blind spot this script exists to close.
-    workbooks = sorted(SOURCE_DIR.glob("*.xlsx"))
+    # Every spreadsheet format, not just the one extension in use today: a
+    # macro-enabled .xlsm is the same zip of XML and would have been scanned by
+    # nothing at all.
+    workbooks = sorted(
+        book for pattern in ("*.xlsx", "*.xlsm", "*.xlsb") for book in SOURCE_DIR.glob(pattern)
+    )
     if not workbooks:
         print(f"no workbook found under {SOURCE_DIR}", file=sys.stderr)
         return 1
 
-    problems = [problem for book in workbooks for problem in scan(book)]
+    # Attributed per book, so two books do not produce one undifferentiated list.
+    problems = [f"{book.name}: {problem}" for book in workbooks for problem in scan(book)]
     if problems:
-        names = ", ".join(book.name for book in workbooks)
-        print(f"{len(problems)} problem(s) in {names}:", file=sys.stderr)
+        print(f"{len(problems)} problem(s) found:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         print(

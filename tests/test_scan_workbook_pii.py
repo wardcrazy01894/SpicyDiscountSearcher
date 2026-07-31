@@ -238,6 +238,72 @@ def test_reads_a_single_quoted_display_name(tmp_path: Path) -> None:
     assert "Ada Lovelace" in problems[0]
 
 
+def test_a_libreoffice_save_scans_clean(tmp_path: Path) -> None:
+    """Same shape as the docProps case: the tool tells you to edit the file,
+    and a contributor without Excel reaches for LibreOffice, which writes its
+    own namespace into xl/workbook.xml on every save."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/workbook.xml": (
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                '<extLst><ext xmlns:loext="http://schemas.libreoffice.org/" '
+                'uri="{7626C862-2A13-11E5-B345-FEFF819CDC9F}"/></extLst></workbook>'
+            )
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_a_threaded_comment_shim_is_not_a_person(tmp_path: Path) -> None:
+    """Excel writes a legacy comments part beside every threaded comment, whose
+    author element holds the thread GUID. There is no allowlist for an author,
+    so reporting it would leave a contributor with a red required check and no
+    way out but patching this file."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                "<comments><authors>"
+                "<author>tc={1B2C3D4E-5F60-7A8B-9C0D-1E2F3A4B5C6D}</author>"
+                "</authors></comments>"
+            )
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_a_real_author_beside_a_shim_is_still_caught(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                "<comments><authors>"
+                "<author>tc={1B2C3D4E-5F60-7A8B-9C0D-1E2F3A4B5C6D}</author>"
+                "<author>Ada Lovelace</author>"
+                "</authors></comments>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_a_dot_prefixed_host_is_reported_under_its_real_name(tmp_path: Path) -> None:
+    """An earlier lookbehind blocked a leading dot, so this matched from the
+    wrong character and reported 'stg.hilton.com' — a host nobody wrote. The
+    job still failed, which is why nothing caught it; the *name* was wrong.
+    """
+    book = make_workbook(
+        tmp_path,
+        {"xl/sharedStrings.xml": "<sst><si><t>see ...stay-stg.hilton.com/fortive</t></si></sst>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "'stay-stg.hilton.com'" in problems[0]
+
+
 def test_ignores_ordinary_margin_notes(tmp_path: Path) -> None:
     """This workbook is full of dashed qualifiers. They are not signatures,
     and flagging them would train everyone to ignore the scanner."""
