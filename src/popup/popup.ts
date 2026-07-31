@@ -59,6 +59,17 @@ interface UiState {
   companies: Set<string>;
   /** Mirrors the background's run state, so plan edits can't re-arm Run. */
   running: boolean;
+  /**
+   * A START_RUN sent but not yet answered.
+   *
+   * `running` only becomes true when a reply lands, so between the click and
+   * the background answering — a window create and a storage write — every
+   * `refreshPlan` trigger re-armed the button: a max-codes keystroke, a vendor
+   * chip, a company checkbox. That is the window a double-click sends its
+   * second START_RUN in, and it is also why "the button stays disabled after a
+   * failed send" was not true before this flag existed.
+   */
+  pendingStart: boolean;
 }
 
 const ui: UiState = {
@@ -66,6 +77,7 @@ const ui: UiState = {
   vendors: new Set<VendorId>(),
   companies: new Set<string>(),
   running: false,
+  pendingStart: false,
 };
 
 function money(amount: number, currency: string): string {
@@ -256,7 +268,7 @@ function refreshPlan(): void {
   // checkbox and max-codes keystroke, all reachable mid-run, and re-arming the
   // button let a second submit silently cancel the race in flight and discard
   // the quotes it had already collected.
-  runBtn.disabled = ui.running;
+  runBtn.disabled = ui.running || ui.pendingStart;
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
@@ -539,6 +551,9 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
 function renderRun(state: RunState | null): void {
   const running = Boolean(state && !state.finishedAt);
   ui.running = running;
+  // The background has answered, so the click is no longer in flight and
+  // `running` is authoritative from here.
+  ui.pendingStart = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
@@ -760,7 +775,11 @@ function applyReply(reply: StateMessage | null): void {
     renderRun(reply.state);
     return;
   }
-  // Leave whatever is on screen alone — the run may well still be going.
+  // Leave whatever is on screen alone — the run may well still be going. That
+  // includes leaving Run disabled if a START_RUN turned it off: a rejection
+  // does not prove non-delivery, so re-arming it would offer the user a second
+  // race on top of one that may already be opening tabs. Reopening the popup
+  // is the recovery, and it re-arms correctly from GET_STATE.
   planSummary.textContent = 'Could not reach the extension background. Try reopening the popup.';
   planSummary.classList.add('is-warning');
 }
@@ -785,6 +804,15 @@ form.addEventListener('submit', (event) => {
   };
 
   void saveForm();
+  // Disabled here, synchronously, not when the reply lands. `ui.running` is
+  // only set by applyReply, so between the click and the background answering
+  // — a window create and a storage write — the button stayed live and a
+  // second press sent a second START_RUN. That opened a second minimised
+  // window and doubled the tabs pointed at every vendor. A double-click was
+  // enough. The background shares the run already starting rather than
+  // building a new one; this is the half that stops the message being sent.
+  ui.pendingStart = true;
+  runBtn.disabled = true;
   void send({ type: 'START_RUN', plan }).then(applyReply);
 });
 
