@@ -18,5 +18,3 @@ select = [
   "SIM", # simplify — the readability rules that catch real tangles
   "RUF", # ruff's own, incl. mutable class attrs and unused noqa
 ]
-
-
