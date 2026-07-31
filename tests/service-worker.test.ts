@@ -531,3 +531,62 @@ describe('a run the browser interrupted', () => {
     expect(chromeMock.session.has('runWindow')).toBe(false);
   });
 });
+
+describe('two starts arriving at once', () => {
+  it('opens one window and one set of tabs, not two', async () => {
+    // cancelRun() returns immediately when `active` is null, so both messages
+    // sailed past it and both built a run: two minimised windows, twice the
+    // concurrency cap, twice the load on every vendor. A double-click on Run
+    // was enough, because the popup only disabled the button when the reply
+    // came back.
+    await bootWorker();
+    const both = Promise.all([
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+    ]);
+    await both;
+    await settle(1_000);
+
+    expect(chromeMock.windowsCreated).toHaveLength(1);
+    expect(chromeMock.tabs.size).toBeLessThanOrEqual(2);
+  });
+
+  it('leaves no window behind', async () => {
+    // The first run's window id was overwritten in storage by the second, so
+    // nothing could ever find it again — minimised, holding a new-tab page,
+    // invisible to the user.
+    await bootWorker();
+    await Promise.all([
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+    ]);
+    await settle(120_000);
+
+    expect(chromeMock.windows.size).toBe(0);
+  });
+
+  it('answers the second caller with the run that is starting', async () => {
+    // Not an error: from the user's side one Run press produced one race,
+    // which is what they asked for.
+    await bootWorker();
+    const [, second] = await Promise.all([
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) }),
+    ]);
+    await settle();
+
+    expect((second as { type: string }).type).toBe('RUN_STATE');
+  });
+
+  it('still allows a fresh run once the first has settled', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(120_000);
+    const before = chromeMock.windowsCreated.length;
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    expect(chromeMock.windowsCreated.length).toBe(before + 1);
+  });
+});

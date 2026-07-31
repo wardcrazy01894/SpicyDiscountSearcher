@@ -83,7 +83,20 @@ cap is lifted — they were unpinned until someone checked.
 
 `START_RUN` is deliberately not retried on a failed `sendMessage`: a rejection
 doesn't prove non-delivery, and a retry starts a second race that opens real
-tabs before cancelling the first.
+tabs before cancelling the first. For the same reason the Run button stays
+disabled after a failed send — reopening the popup is the recovery, and it
+re-arms correctly from `GET_STATE`.
+
+Two `START_RUN`s can also arrive without any retry, because the popup only
+disabled Run when the reply came back: a double-click sent two. `cancelRun()`
+returns immediately when `active` is null, so both passed it and both built a
+run — two minimised windows, twice the cap, twice the load on every vendor, and
+the first window orphaned permanently because `runWindow` had been overwritten.
+Guarded on both sides now: `starting` in the worker (checked and set with no
+`await` between, since an async guard is not a guard) and a synchronous
+`disabled` in the popup. The second caller is answered with the run that _is_
+starting rather than an error — one Run press, one race, which is what was
+asked for.
 
 ## Diagnosing a run afterwards
 

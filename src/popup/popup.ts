@@ -693,7 +693,11 @@ function applyReply(reply: StateMessage | null): void {
     renderRun(reply.state);
     return;
   }
-  // Leave whatever is on screen alone — the run may well still be going.
+  // Leave whatever is on screen alone — the run may well still be going. That
+  // includes leaving Run disabled if a START_RUN turned it off: a rejection
+  // does not prove non-delivery, so re-arming it would offer the user a second
+  // race on top of one that may already be opening tabs. Reopening the popup
+  // is the recovery, and it re-arms correctly from GET_STATE.
   planSummary.textContent = 'Could not reach the extension background. Try reopening the popup.';
   planSummary.classList.add('is-warning');
 }
@@ -718,6 +722,14 @@ form.addEventListener('submit', (event) => {
   };
 
   void saveForm();
+  // Disabled here, synchronously, not when the reply lands. `ui.running` is
+  // only set by applyReply, so between the click and the background answering
+  // — a window create and a storage write — the button stayed live and a
+  // second press sent a second START_RUN. That opened a second minimised
+  // window and doubled the tabs pointed at every vendor. A double-click was
+  // enough. The background refuses the second one too; this is the half that
+  // stops it being sent.
+  runBtn.disabled = true;
   void send({ type: 'START_RUN', plan }).then(applyReply);
 });
 

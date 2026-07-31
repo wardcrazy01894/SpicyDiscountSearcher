@@ -298,7 +298,33 @@ async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
   }
 }
 
+/**
+ * Set for the window between entering startRun and `active` being assigned.
+ *
+ * `cancelRun()` returns immediately when `active` is null, so two START_RUN
+ * messages arriving before either finished both sailed past it and both built
+ * a run. The result was two live races: two minimised windows, twice the
+ * concurrency cap, twice the load on every vendor — a direct breach of the
+ * politeness contract — and the first run's window orphaned permanently,
+ * because `runWindow` had already been overwritten by the second.
+ *
+ * A double-click on Run was enough to do it.
+ */
+let starting = false;
+
 async function startRun(plan: SearchPlan): Promise<RunState> {
+  // Checked and set with no await in between, which is the whole point: an
+  // async guard is not a guard.
+  if (starting) throw new Error('a run is already starting');
+  starting = true;
+  try {
+    return await beginRun(plan);
+  } finally {
+    starting = false;
+  }
+}
+
+async function beginRun(plan: SearchPlan): Promise<RunState> {
   await cancelRun();
 
   const quotes = plan.candidates.map((candidate) => makeQuote(candidate, plan));
@@ -370,8 +396,24 @@ chrome.runtime.onMessage.addListener(
     void (async () => {
       switch (message.type) {
         case 'START_RUN': {
-          const state = await startRun(message.plan);
-          sendResponse({ type: 'RUN_STATE', state } satisfies StateMessage);
+          try {
+            const state = await startRun(message.plan);
+            sendResponse({ type: 'RUN_STATE', state } satisfies StateMessage);
+          } catch {
+            // A second START_RUN while the first is still setting up. Answer
+            // with the run that *is* starting rather than an error: from the
+            // user's side one Run press produced one race, which is exactly
+            // what they asked for.
+            // NOT through reapInterrupted when a run is live: it mutates in
+            // place, stamping every unfinished quote `interrupted` and setting
+            // finishedAt. Replying to the *second* click would then have killed
+            // the race the *first* one started — caught by the test below,
+            // which saw zero windows opened.
+            sendResponse({
+              type: 'RUN_STATE',
+              state: active ? active.state : reapInterrupted(await loadPersisted()),
+            } satisfies StateMessage);
+          }
           return;
         }
         case 'CANCEL_RUN': {
