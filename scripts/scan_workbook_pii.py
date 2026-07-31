@@ -116,6 +116,27 @@ DISPLAY_NAME_RE = re.compile(r"""displayName\s*=\s*(["'])(.*?)\1""")
 # no way out but patching this file.
 THREAD_ID_RE = re.compile(r"^tc=\{[0-9A-Fa-f-]+\}$")
 
+# Producers stamp their own name into dc:creator when nobody set one. openpyxl
+# does it on every save -- and openpyxl is this repo's own workbook tooling, so
+# scripting the scrub, the most natural way to fix a leak, would have failed
+# the gate on the fix. Same category as the namespace hosts: boilerplate, not a
+# person. Matched whole and case-insensitively, so "Calc Jenkins" is still a
+# name.
+PRODUCER_NAMES = frozenset(
+    {
+        "openpyxl",
+        "microsoft excel",
+        "microsoft office user",
+        "libreoffice",
+        "libreoffice calc",
+        "calc",
+        "apache poi",
+        "google sheets",
+        "xlsxwriter",
+        "pandas",
+    }
+)
+
 # One comment at a time. Stripping tags from a whole part and then anchoring on
 # end-of-line finds a signature only when it is the *last* comment in the part:
 # a second sticky note anywhere after it joins on and the anchor never matches.
@@ -226,11 +247,13 @@ def check_host(name: str, host: str) -> str | None:
 def scan(workbook: Path) -> list[str]:
     """Return a list of problems; empty means the workbook is clean."""
     problems: list[str] = []
+    readable = 0
 
     with zipfile.ZipFile(workbook) as archive:
         for name in archive.namelist():
             if not name.endswith((".xml", ".vml", ".rels")):
                 continue
+            readable += 1
             text = archive.read(name).decode("utf-8", errors="replace")
 
             for email in sorted(set(EMAIL_RE.findall(text))):
@@ -244,8 +267,9 @@ def scan(workbook: Path) -> list[str]:
                     problems.append(f"{name}: comment author {stripped!r}")
 
             for creator in sorted(set(CREATOR_RE.findall(text))):
-                if creator.strip():
-                    problems.append(f"{name}: document author {creator.strip()!r}")
+                stripped = creator.strip()
+                if stripped and stripped.lower() not in PRODUCER_NAMES:
+                    problems.append(f"{name}: document author {stripped!r}")
 
             # Threaded comments keep the commenter in xl/persons/, never in an
             # <author> element.
@@ -272,6 +296,17 @@ def scan(workbook: Path) -> list[str]:
                 if problem:
                     problems.append(problem)
 
+    # "I could not read any of it" is not "it is clean", and a gate that says
+    # the second when it means the first is worse than no gate. A .xlsb stores
+    # its parts as .bin, so every one is skipped above -- a book carrying a
+    # name and a staging host scanned green and exited 0. Silence here is the
+    # exact false confidence this script exists to remove.
+    if readable == 0:
+        problems.append(
+            "no readable XML parts -- this format cannot be scanned, so it "
+            "cannot be cleared either"
+        )
+
     return problems
 
 
@@ -290,7 +325,15 @@ def main() -> int:
         return 1
 
     # Attributed per book, so two books do not produce one undifferentiated list.
-    problems = [f"{book.name}: {problem}" for book in workbooks for problem in scan(book)]
+    problems: list[str] = []
+    for book in workbooks:
+        try:
+            problems.extend(f"{book.name}: {problem}" for problem in scan(book))
+        except (zipfile.BadZipFile, OSError) as error:
+            # Per book, so one unreadable file does not hide the ones sorted
+            # after it behind a traceback. Unreadable is still a problem: it
+            # means this book was not cleared.
+            problems.append(f"{book.name}: could not be opened ({error})")
     if problems:
         print(f"{len(problems)} problem(s) found:", file=sys.stderr)
         for problem in problems:

@@ -385,6 +385,135 @@ def test_catches_the_other_places_a_name_hides(
 
 
 def test_ignores_parts_that_are_not_markup(tmp_path: Path) -> None:
-    """Styles and binary parts are noise; only readable XML is scanned."""
-    book = make_workbook(tmp_path, {"xl/media/image1.png": "ada@example.org"})
+    """Styles and binary parts are noise; only readable XML is scanned.
+
+    Alongside a real XML part, because a book with *nothing* readable is a
+    different case with its own test — it is reported rather than cleared.
+    """
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/sharedStrings.xml": "<sst><si><t>ok</t></si></sst>",
+            "xl/media/image1.png": "ada@example.org",
+        },
+    )
     assert scanner.scan(book) == []
+
+
+def test_a_producer_name_is_not_a_person(tmp_path: Path) -> None:
+    """openpyxl stamps its own name into dc:creator on every save — and
+    openpyxl is this repo's workbook tooling, so scripting the scrub (the most
+    natural way to fix a leak) would have failed the gate on the fix."""
+    book = make_workbook(
+        tmp_path,
+        {"docProps/core.xml": "<cp:coreProperties><dc:creator>openpyxl</dc:creator></cp:coreProperties>"},
+    )
+    assert scanner.scan(book) == []
+
+
+def test_a_person_named_in_the_same_field_still_fires(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {
+            "docProps/core.xml": (
+                "<cp:coreProperties><dc:creator>Ada Lovelace</dc:creator></cp:coreProperties>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_reads_relationship_parts(tmp_path: Path) -> None:
+    """Where the incident host actually lived. A hyperlink entered as a link
+    rather than as display text exists ONLY in a .rels part."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/worksheets/_rels/sheet1.xml.rels": (
+                '<Relationships><Relationship Id="rId1" '
+                'Target="http://stay-stg.hilton.com/fortive/" TargetMode="External"/>'
+                "</Relationships>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "stay-stg.hilton.com" in problems[0]
+
+
+def test_a_format_it_cannot_read_is_not_declared_clean(tmp_path: Path) -> None:
+    """A .xlsb stores its parts as .bin, so every one is skipped — and a book
+    carrying a name and a staging host scanned green. "I could not read any of
+    it" is not "it is clean", and a gate that says the second when it means the
+    first is worse than no gate at all."""
+    book = make_workbook(tmp_path, {"xl/workbook.bin": "Demilade Boyejo stay-stg.hilton.com"})
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "cannot be scanned" in problems[0]
+
+
+def test_a_marker_beats_an_allowlisted_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason the marker check runs first. Pinned against an allowlist that
+    actually contains the host, because testing it with an unlisted one proves
+    only that unlisted hosts fire."""
+    monkeypatch.setattr(
+        scanner, "ALLOWED_HOSTS", scanner.ALLOWED_HOSTS | {"stay-stg.hilton.com"}
+    )
+    book = make_workbook(
+        tmp_path,
+        {"xl/sharedStrings.xml": "<sst><si><t>https://stay-stg.hilton.com/x</t></si></sst>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "non-production host" in problems[0]
+
+
+class TestMain:
+    """The exit code is the only thing CI consumes, and nothing tested it —
+    `main: always return 0` survived the whole suite."""
+
+    @staticmethod
+    def source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        source = tmp_path / "source"
+        source.mkdir()
+        monkeypatch.setattr(scanner, "SOURCE_DIR", source)
+        return source
+
+    def test_returns_zero_for_a_clean_book(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = self.source(tmp_path, monkeypatch)
+        make_workbook(source, {"xl/sharedStrings.xml": "<sst><si><t>ok</t></si></sst>"}).rename(
+            source / "clean.xlsx"
+        )
+        assert scanner.main() == 0
+
+    def test_returns_one_and_names_the_book(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = self.source(tmp_path, monkeypatch)
+        make_workbook(
+            source,
+            {"xl/sharedStrings.xml": "<sst><si><t>http://stay-stg.hilton.com/x</t></si></sst>"},
+        ).rename(source / "dirty.xlsx")
+        assert scanner.main() == 1
+        err = capsys.readouterr().err
+        assert "dirty.xlsx: xl/sharedStrings.xml:" in err
+
+    def test_returns_one_when_there_is_nothing_to_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self.source(tmp_path, monkeypatch)
+        assert scanner.main() == 1
+
+    def test_a_corrupt_book_is_a_problem_not_a_traceback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = self.source(tmp_path, monkeypatch)
+        (source / "corrupt.xlsx").write_bytes(b"not a zip at all")
+        make_workbook(source, {"xl/sharedStrings.xml": "<sst/>"}).rename(source / "zz-clean.xlsx")
+        assert scanner.main() == 1
