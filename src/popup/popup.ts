@@ -392,7 +392,7 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   name.title = quote.candidate.companyName;
   const code = document.createElement('span');
   code.className = 'code';
-  // getVendor().label and .codeLabel, not the raw internal id. Both have been
+  // The vendor's own label and codeLabel, not the raw internal id. Both have been
   // populated for every vendor since the first commit and read by nothing, so
   // the row said "national · XZ42PWC" where the vendor's own site says
   // "National Contract ID XZ42PWC".
@@ -400,8 +400,8 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   // getVendor throws — one unrecognised id would empty the whole list instead
   // of degrading one row to the raw id.
   const vendor = findVendor(quote.candidate.vendor);
-  const who_ = vendor ? `${vendor.label} ${vendor.codeLabel}` : quote.candidate.vendor;
-  code.textContent = `${who_} · ${quote.candidate.code}`;
+  const vendorLabel = vendor ? `${vendor.label} ${vendor.codeLabel}` : quote.candidate.vendor;
+  code.textContent = `${vendorLabel} · ${quote.candidate.code}`;
   who.append(name, code);
 
   const right = document.createElement('span');
