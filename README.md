@@ -168,7 +168,8 @@ Requires Node `^22.22.2 || ^24.15.0 || >=26.0.0`, which is jsdom's own range
 copied verbatim — it rules out 23.x, 25.x and Node 24 below 24.15, and every
 other dependency permits a superset of it. A test-only dependency therefore
 sets the supported runtime for everyone, including anyone who only wants to
-build. CI builds on 22 and runs the tests on 22 and 24.
+build. CI builds on 22 and runs the tests on 22, 24 and 26 — every version
+that range claims.
 
 ```bash
 npm run build        # typecheck + both vite builds
@@ -197,7 +198,7 @@ context, so adding a version never means editing branch protection:
 | Job                        | What it does                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------- |
 | `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit`      |
-| `test`                     | aggregates `test node 22` and `test node 24` (vitest on each)                     |
+| `test`                     | aggregates `test node 22`, `24` and `26` (vitest on each)                         |
 | `data`                     | ruff lint + format, pytest, then regenerates the database and fails if it differs |
 | `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook        |
 

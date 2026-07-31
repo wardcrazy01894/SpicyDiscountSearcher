@@ -121,8 +121,8 @@ jobs:
   # Named `test-matrix`, not `test`, on purpose. A matrix job produces one check
   # context per leg, never a single one: GitHub appends the matrix values unless
   # the name already interpolates them. `name: test` gave `test (22)` and
-  # `test (24)`; the interpolated name below gives `test node 22` and `test node
-  # 24`. Either way there is no context called `test`, so making *this* the
+  # `test (24)`; the interpolated name below gives one `test node NN` per leg.
+  # Either way there is no context called `test`, so making *this* the
   # `test` job meant the required context never reported and every PR blocked
   # forever. Verified: it did exactly that. The job below keeps the name.
   test-matrix:
