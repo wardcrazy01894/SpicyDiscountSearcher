@@ -893,7 +893,7 @@
     },
     {
       "slug": "bain-co",
-      "name": "Bain & Co.",
+      "name": "Bain & Co",
       "codes": [
         {
           "vendor": "avis",
@@ -1317,7 +1317,7 @@
     },
     {
       "slug": "booz-co",
-      "name": "Booz & Co ///",
+      "name": "Booz & Co",
       "codes": [
         {
           "vendor": "hyatt",
@@ -4656,7 +4656,7 @@
     },
     {
       "slug": "mclane-company-inc",
-      "name": "McLane Company Inc.",
+      "name": "McLane Company Inc",
       "codes": [
         {
           "vendor": "hilton",

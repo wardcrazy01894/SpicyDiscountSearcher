@@ -158,13 +158,35 @@ def parse_cell(text: str) -> tuple[list[str], str | None, str | None]:
     return codes, note, url
 
 
-# Text that is a remark rather than an employer: a sentence, a percentage, or
-# the kind of hedge people type into a spreadsheet margin.
-PROSE_RE = re.compile(r"\.\s+\S|%|\bYMMV\b", re.IGNORECASE)
+# Marks of a remark rather than an employer, whatever its length.
+REMARK_RE = re.compile(
+    r"\.{2,}"  # an ellipsis
+    r"|^[A-Za-z]+:"  # "NOTE: have not been confirmed"
+    r"|%"  # nobody writes a percentage into their own name
+    r"|\bYMMV\b",
+    re.IGNORECASE,
+)
+
+# A sentence boundary: lowercase, full stop, capital. Case-sensitive on
+# purpose — with IGNORECASE this also matched "St. Jude Medical", because
+# [a-z]{2} then happily accepted "St".
+SENTENCE_RE = re.compile(r"[a-z]{2}\.\s+[A-Z]")
+
+# How many words before a sentence boundary means prose rather than a name.
+# "Sun Microsystems Inc. USA" is four words and a legitimate employer.
+SENTENCE_WORDS = 5
+
+# Longer than any employer writes its own name.
+MAX_NAME_WORDS = 8
 
 # A bare number leading the company column is a code someone typed one cell to
-# the left, not part of anybody's name.
-LEADING_CODE_RE = re.compile(r"^(\d[\d-]{3,})\s+(.*)$")
+# the left. Six digits minimum, so "1-800 Contacts", "1901 Group" and "24-7
+# Intouch" keep their names.
+LEADING_CODE_RE = re.compile(r"^(\d[\d-]{5,})\s+(.*)$")
+
+# Separators and decoration left behind once a parenthetical comes out, e.g.
+# "Booz & Co (Now Strategy&) ///".
+NAME_EDGE = " -–—/*.,;:"
 
 # Where codes go when the cell beside them was a remark, not an employer. They
 # are still real codes; only the attribution was invented.
@@ -194,7 +216,7 @@ def parse_company(text: str) -> tuple[str | None, str | None]:
         notes.append(match.group(1).strip())
         return " "
 
-    name = re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip()
+    name = re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip(NAME_EDGE).strip()
 
     while True:
         leading = LEADING_CODE_RE.match(name)
@@ -204,9 +226,19 @@ def parse_company(text: str) -> tuple[str | None, str | None]:
         name = leading.group(2).strip()
 
     words = name.split()
-    # Sentence-shaped, long enough that no one would call it a company, or
-    # nothing left once the qualifiers came out.
-    if not name or PROSE_RE.search(name) or len(words) > 6 or (name[0].islower() and len(words) > 2):
+    # Nothing left once the qualifiers came out, an outright remark, too long
+    # for a name, or sentence-shaped *and* long enough that the stop is not an
+    # abbreviation. A lowercase-first rule used to live here too; it rejected
+    # "eBay Enterprise Global" and caught nothing these do not.
+    prose = (
+        not name
+        # Against the original: stripping decoration removes the trailing dots
+        # that made an ellipsis recognisable in the first place.
+        or REMARK_RE.search(text)
+        or len(words) > MAX_NAME_WORDS
+        or (SENTENCE_RE.search(name) and len(words) > SENTENCE_WORDS)
+    )
+    if prose:
         return None, re.sub(r"\s+", " ", text).strip()
 
     return name, "; ".join(n for n in notes if n) or None

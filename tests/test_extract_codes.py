@@ -96,10 +96,21 @@ class TestParseCompany:
     @pytest.mark.parametrize(
         "prose",
         [
-            "(Americas only)",
-            "(LON, AMS)",
-            "a few I have accumulated for EMEA. Again, YMMV.",
-            "seems to offer 40% off, with breakfast, provided the booking starts on a Friday",
+            # One fixture per guard, each rejected by that guard ALONE. The
+            # first version of these tests used realistic prose, which every
+            # guard caught — so deleting any single guard left all of them
+            # green and none of the three decisions was actually pinned.
+            pytest.param("Acme 50% owned", id="percent-only"),
+            pytest.param("NOTE: still to confirm", id="label-only"),
+            pytest.param("Acme Holdings and more...", id="ellipsis-only"),
+            pytest.param("Acme YMMV", id="ymmv-only"),
+            pytest.param("Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota", id="too-long"),
+            # Six words: past SENTENCE_WORDS but inside MAX_NAME_WORDS, so the
+            # sentence rule is the only thing that can reject it.
+            pytest.param("Renamed last year. Check before booking", id="sentence-only"),
+            # And the ones actually in the workbook.
+            pytest.param("(Americas only)", id="qualifier-only"),
+            pytest.param("(LON, AMS)", id="cities-only"),
         ],
     )
     def test_refuses_to_call_a_remark_a_company(self, prose: str) -> None:
@@ -112,6 +123,30 @@ class TestParseCompany:
 
     def test_an_empty_cell_names_nothing_at_all(self) -> None:
         assert extract_codes.parse_company("") == (None, None)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # Being too eager here is the quiet failure: the employer's codes
+            # still ship, filed under Unattributed, where nobody can find them
+            # by name and nothing goes red.
+            "St. Jude Medical",
+            "A.G. Edwards & Sons",
+            "Sun Microsystems Inc. USA",
+            "eBay Enterprise Global",
+            "lululemon athletica inc",
+            "1-800 Contacts",
+            "1901 Group",
+            "Ernst & Young LLP Global Business Travel",
+        ],
+    )
+    def test_does_not_refuse_a_real_employer(self, name: str) -> None:
+        assert extract_codes.parse_company(name)[0] == name
+
+    def test_strips_decoration_left_by_a_removed_parenthetical(self) -> None:
+        # Otherwise "Booz & Co ///" wins the slug merge against a clean
+        # "Booz & Co" and the published name gets worse, not better.
+        assert extract_codes.parse_company("Booz & Co (Now Strategy&) ///")[0] == "Booz & Co"
 
 
 class TestSlugify:
