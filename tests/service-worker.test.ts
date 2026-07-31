@@ -575,7 +575,12 @@ describe('two starts arriving at once', () => {
     ]);
     await settle();
 
-    expect((second as { type: string }).type).toBe('RUN_STATE');
+    const reply = second as { type: string; state: RunState | null };
+    expect(reply.type).toBe('RUN_STATE');
+    // Not null, and not a stale finished run — the test name says "the run
+    // that is starting", and type alone would pass for either.
+    expect(reply.state).not.toBeNull();
+    expect(reply.state?.finishedAt).toBeUndefined();
   });
 
   it('still allows a fresh run once the first has settled', async () => {

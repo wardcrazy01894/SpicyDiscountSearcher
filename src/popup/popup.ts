@@ -57,6 +57,17 @@ interface UiState {
   companies: Set<string>;
   /** Mirrors the background's run state, so plan edits can't re-arm Run. */
   running: boolean;
+  /**
+   * A START_RUN sent but not yet answered.
+   *
+   * `running` only becomes true when a reply lands, so between the click and
+   * the background answering — a window create and a storage write — every
+   * `refreshPlan` trigger re-armed the button: a max-codes keystroke, a vendor
+   * chip, a company checkbox. That is the window a double-click sends its
+   * second START_RUN in, and it is also why "the button stays disabled after a
+   * failed send" was not true before this flag existed.
+   */
+  pendingStart: boolean;
 }
 
 const ui: UiState = {
@@ -64,6 +75,7 @@ const ui: UiState = {
   vendors: new Set<VendorId>(),
   companies: new Set<string>(),
   running: false,
+  pendingStart: false,
 };
 
 function money(amount: number, currency: string): string {
@@ -254,7 +266,7 @@ function refreshPlan(): void {
   // checkbox and max-codes keystroke, all reachable mid-run, and re-arming the
   // button let a second submit silently cancel the race in flight and discard
   // the quotes it had already collected.
-  runBtn.disabled = ui.running;
+  runBtn.disabled = ui.running || ui.pendingStart;
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
@@ -481,6 +493,9 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
 function renderRun(state: RunState | null): void {
   const running = Boolean(state && !state.finishedAt);
   ui.running = running;
+  // The background has answered, so the click is no longer in flight and
+  // `running` is authoritative from here.
+  ui.pendingStart = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
@@ -729,6 +744,7 @@ form.addEventListener('submit', (event) => {
   // window and doubled the tabs pointed at every vendor. A double-click was
   // enough. The background refuses the second one too; this is the half that
   // stops it being sent.
+  ui.pendingStart = true;
   runBtn.disabled = true;
   void send({ type: 'START_RUN', plan }).then(applyReply);
 });
