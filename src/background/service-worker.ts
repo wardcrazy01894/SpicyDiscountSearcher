@@ -319,10 +319,12 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
   //
   // Sharing the in-flight promise rather than refusing outright, because the
   // second caller then gets the run that really is starting. Refusing meant
-  // answering it from `active`, which on the very first burst is still null —
-  // so the popup received `state: null`, read it as "no run", and re-armed the
-  // button. The strengthened test caught that; a `type === 'RUN_STATE'`
-  // assertion had not.
+  // answering it from `active` — and `active` is never nulled, so after an
+  // earlier run has finished it still points at *that* one. The refused caller
+  // received a state carrying `finishedAt`, which the popup reads as "no run in
+  // progress" and re-arms the button on, defeating the guard it had just
+  // passed. On a fresh worker the refusal was fine: `active` is assigned before
+  // the catch body runs a microtask later.
   if (startingRun) return startingRun;
   const pending = (startingRun = beginRun(plan));
   try {

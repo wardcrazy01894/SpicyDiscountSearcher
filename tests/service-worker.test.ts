@@ -595,3 +595,30 @@ describe('two starts arriving at once', () => {
     expect(chromeMock.windowsCreated.length).toBe(before + 1);
   });
 });
+
+describe('a second start arriving after an earlier run has finished', () => {
+  it('answers with the run that is starting, not the one that ended', async () => {
+    // `active` is never nulled, so it still points at the finished run while a
+    // new one is being built. Answering the refused caller from `active` handed
+    // it that finished state — and the popup reads `finishedAt` as "no run in
+    // progress" and re-arms the button, which is the whole thing this guards.
+    //
+    // This is the case the earlier version actually got wrong. The burst on a
+    // *fresh* worker did not: `active` is assigned before the refusal's catch
+    // body runs, so that caller already saw the live run.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(120_000);
+    expect((await getState())?.finishedAt).toBeDefined();
+
+    const [, second] = await Promise.all([
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) }),
+      chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) }),
+    ]);
+    const reply = second as { state: RunState | null };
+
+    expect(reply.state).not.toBeNull();
+    expect(reply.state?.finishedAt).toBeUndefined();
+    await settle(120_000);
+  });
+});

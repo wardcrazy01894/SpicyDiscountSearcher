@@ -742,8 +742,8 @@ form.addEventListener('submit', (event) => {
   // — a window create and a storage write — the button stayed live and a
   // second press sent a second START_RUN. That opened a second minimised
   // window and doubled the tabs pointed at every vendor. A double-click was
-  // enough. The background refuses the second one too; this is the half that
-  // stops it being sent.
+  // enough. The background shares the run already starting rather than
+  // building a new one; this is the half that stops the message being sent.
   ui.pendingStart = true;
   runBtn.disabled = true;
   void send({ type: 'START_RUN', plan }).then(applyReply);

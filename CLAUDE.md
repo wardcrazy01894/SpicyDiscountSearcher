@@ -95,8 +95,12 @@ Guarded on both sides now. In the worker, `startingRun` holds the in-flight
 promise and a concurrent call awaits it, so both callers get the same run — read
 and assigned with no `await` between, since an async guard is not a guard, which
 is exactly how `cancelRun()` failed at this. Sharing rather than refusing
-matters: answering the second caller from `active` returned `null` on the very
-first burst, because `active` is not set yet.
+matters because `active` is never nulled: after an earlier run has finished it
+still points at that one, so a refused caller was answered with a state carrying
+`finishedAt` — which the popup reads as "no run in progress" and re-arms the
+button on, defeating the guard it had just passed. The second caller also
+silently loses its own plan and receives the first one's; the popup cannot send
+two different plans today, but nothing enforces that.
 
 In the popup, `ui.pendingStart` is set synchronously on submit and cleared when
 a reply renders. Without it `runBtn.disabled` was re-armed by the next
