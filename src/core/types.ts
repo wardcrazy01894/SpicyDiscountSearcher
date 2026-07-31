@@ -41,7 +41,11 @@ export interface CodeRecord {
   code: string | null;
   note: string | null;
   url: string | null;
-  /** Workbook sheets that listed this code; more sources means more confidence. */
+  /**
+   * Workbook sheets that listed this code. Written by extract_codes.py and
+   * deliberately unread here: it is provenance for the data pipeline, not
+   * something the extension acts on.
+   */
   sources: string[];
 }
 
@@ -174,6 +178,7 @@ export interface Quote {
   report?: ProbeReport;
   /** Set when the evidence says this page is not the search we asked for. */
   suspect?: 'landed-elsewhere';
+  /** Paired with finishedAt to show how long a vendor took to answer. */
   startedAt?: number;
   finishedAt?: number;
 }
@@ -186,9 +191,7 @@ export interface SearchPlan {
 }
 
 export interface RunState {
-  runId: string;
   plan: SearchPlan;
   quotes: Quote[];
-  startedAt: number;
   finishedAt?: number;
 }

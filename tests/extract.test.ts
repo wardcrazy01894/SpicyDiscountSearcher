@@ -1,11 +1,13 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  VENDOR_SELECTORS,
   bestOffer,
   classifyBasis,
+  extract,
   extractOffers,
   findPrices,
   parseAmount,
@@ -418,6 +420,55 @@ describe('extractOffers', () => {
       </main>`;
 
     expect(extractOffers(document, 'hertz').find((o) => o.amount === 210)?.basis).toBe('total');
+  });
+});
+
+describe('the per-vendor selector path', () => {
+  // No entry in VENDOR_SELECTORS defines `offer`, so this branch never runs
+  // against real vendors and every ProbeReport says "generic-sweep". That
+  // makes it unreachable, not optional: CLAUDE.md promises extraction "tries
+  // per-vendor CSS first and falls back to a generic sweep", and the day
+  // someone fills in a selector this has to do what the doc says. Pinned with
+  // an injected config so the capability is proven rather than assumed.
+  const CONFIG = VENDOR_SELECTORS as Record<string, unknown>;
+  const original = CONFIG['hertz'];
+
+  afterEach(() => {
+    CONFIG['hertz'] = original;
+  });
+
+  it('reads one offer per node and reports the branch it used', () => {
+    CONFIG['hertz'] = {
+      container: 'main',
+      offer: '.veh',
+      label: '.name',
+      price: '.amt',
+    };
+    document.body.innerHTML = `
+      <main>
+        <div class="veh"><span class="name">Compact</span><span class="amt">Estimated total $210.00</span></div>
+        <div class="veh"><span class="name">Midsize</span><span class="amt">Estimated total $240.00</span></div>
+      </main>`;
+
+    const result = extract(document, 'hertz');
+    expect(result.path).toBe('vendor-selectors');
+    expect(result.offers.map((o) => [o.label, o.amount])).toEqual([
+      ['Compact', 210],
+      ['Midsize', 240],
+    ]);
+  });
+
+  // Note this one passes with the branch deleted — the sweep would run anyway.
+  // It is here to pin the *reported branch*, which is the part that would go
+  // wrong silently if the fallback stopped labelling itself.
+  it('reports the sweep when the selectors match nothing', () => {
+    CONFIG['hertz'] = { container: 'main', offer: '.gone-in-a-redesign' };
+    document.body.innerHTML =
+      '<main><li><h3>Compact</h3><span>Estimated total</span><span>$210.00</span></li></main>';
+
+    const result = extract(document, 'hertz');
+    expect(result.path).toBe('generic-sweep');
+    expect(result.offers.find((o) => o.amount === 210)?.label).toBe('Compact');
   });
 });
 

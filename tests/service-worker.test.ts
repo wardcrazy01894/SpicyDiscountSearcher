@@ -469,9 +469,7 @@ describe('a run the browser interrupted', () => {
     // button on every open for the rest of the session — and Cancel could not
     // clear it, because cancelRun() returns early with no active run.
     const zombie: RunState = {
-      runId: 'run-1',
       plan: plan(2),
-      startedAt: Date.now(),
       quotes: [
         {
           id: 'hertz:H1',

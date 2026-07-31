@@ -14,8 +14,10 @@ import type { Offer, ProbeReport } from '../core/types.js';
 
 const POLL_INTERVAL_MS = 1_500;
 const RETRY_DELAY_MS = 250;
-/** Two identical reads in a row is our stand-in for "the page settled". */
-const STABLE_READS_REQUIRED = 2;
+/** Repeats, not reads: one repeat means two identical reads in a row. The
+ * constant used to say 2 and be compared as `>= STABLE_READS_REQUIRED - 1`,
+ * so the name and the arithmetic disagreed about what was being counted. */
+const STABLE_REPEATS_REQUIRED = 1;
 
 /**
  * Deliver the one payload this script exists to produce, with a single retry.
@@ -93,7 +95,7 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
     stableReads = current === previous ? stableReads + 1 : 0;
     previous = current;
 
-    if (stableReads >= STABLE_READS_REQUIRED - 1) {
+    if (stableReads >= STABLE_REPEATS_REQUIRED) {
       await send({ type: 'PROBE_RESULT', offers, report: report(offers, path) });
       return;
     }

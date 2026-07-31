@@ -24,5 +24,3 @@ export interface StateMessage {
   type: 'RUN_STATE';
   state: RunState | null;
 }
-
-export const RUN_STATE_EVENT = 'RUN_STATE' as const;

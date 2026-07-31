@@ -16,14 +16,17 @@ export function companyBySlug(slug: string): Company | undefined {
   return DB.companies.find((c) => c.slug === slug);
 }
 
-/** Case-insensitive substring match on company name, ordered best-first. */
-export function searchCompanies(query: string, vendor?: VendorId): Company[] {
+/**
+ * Case-insensitive substring match on company name, ordered best-first.
+ *
+ * No vendor filter: it took one, no caller ever passed it, and the popup
+ * reimplemented the same predicate inline because it needs to filter on the
+ * several vendors actually selected rather than one.
+ */
+export function searchCompanies(query: string): Company[] {
   const needle = query.trim().toLowerCase();
-  const pool = vendor
-    ? DB.companies.filter((c) => c.codes.some((code) => code.vendor === vendor && code.code))
-    : DB.companies;
-  if (!needle) return pool;
-  const matches = pool.filter((c) => c.name.toLowerCase().includes(needle));
+  if (!needle) return DB.companies;
+  const matches = DB.companies.filter((c) => c.name.toLowerCase().includes(needle));
   // Prefix matches are almost always what someone typing "del" wants.
   return matches.sort((a, b) => {
     const aPrefix = a.name.toLowerCase().startsWith(needle) ? 0 : 1;

@@ -25,7 +25,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { VENDORS, getVendor, vendorsFor } from '../core/vendors.js';
+import { VENDORS, findVendor, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -80,7 +80,9 @@ function money(amount: number, currency: string): string {
 
 function renderVendorChips(): void {
   const vendors = vendorsFor(ui.category);
-  // Default to every vendor in the category the first time it's shown.
+  // Whenever nothing is selected — not only on first open. Deliberate: an
+  // empty selection cannot race anything, so it is treated as "no preference"
+  // rather than "race nothing".
   if (ui.vendors.size === 0) for (const vendor of vendors) ui.vendors.add(vendor.id);
 
   vendorChips.replaceChildren(
@@ -235,7 +237,7 @@ function vendorBreakdown(candidates: Candidate[]): string {
     .sort(
       ([aVendor, aCount], [bVendor, bCount]) => bCount - aCount || aVendor.localeCompare(bVendor),
     )
-    .map(([vendor, count]) => `${getVendor(vendor).label} ${count}`)
+    .map(([vendor, count]) => `${findVendor(vendor)?.label ?? vendor} ${count}`)
     .join(' · ');
 }
 
@@ -367,7 +369,13 @@ function evidenceLine(quote: Quote): HTMLElement | null {
       : report.path === 'vendor-selectors'
         ? 'vendor selectors'
         : 'unknown branch';
-  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}`;
+  // Clamped and fixed-width: a clock that steps backwards mid-run would
+  // otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
+  const took =
+    quote.startedAt && quote.finishedAt
+      ? ` · ${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`
+      : '';
+  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}${took}`;
   if (report.title) line.title = report.title;
   return line;
 }
@@ -384,7 +392,16 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   name.title = quote.candidate.companyName;
   const code = document.createElement('span');
   code.className = 'code';
-  code.textContent = `${quote.candidate.vendor} · ${quote.candidate.code}`;
+  // The vendor's own label and codeLabel, not the raw internal id. Both have been
+  // populated for every vendor since the first commit and read by nothing, so
+  // the row said "national · XZ42PWC" where the vendor's own site says
+  // "National Contract ID XZ42PWC".
+  // Soft lookup: this renders a snapshot from chrome.storage.session, and
+  // getVendor throws — one unrecognised id would empty the whole list instead
+  // of degrading one row to the raw id.
+  const vendor = findVendor(quote.candidate.vendor);
+  const vendorLabel = vendor ? `${vendor.label} ${vendor.codeLabel}` : quote.candidate.vendor;
+  code.textContent = `${vendorLabel} · ${quote.candidate.code}`;
   who.append(name, code);
 
   const right = document.createElement('span');
