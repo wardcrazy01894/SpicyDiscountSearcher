@@ -118,8 +118,13 @@ jobs:
         # the other, the extension ships codes that no longer match the source.
         run: git diff --exit-code -- src/data/codes.generated.json
 
-  test:
-    name: test
+  # Named `test-matrix`, not `test`, on purpose. A matrix job's check context is
+  # `test (22)` / `test (24)` — GitHub appends the matrix values whatever `name`
+  # says — so making *this* the `test` job would have meant the required context
+  # `test` never reported again and every PR blocked forever. Verified: it did
+  # exactly that. The aggregating job below keeps that name.
+  test-matrix:
+    name: test node ${{ matrix.node }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -141,6 +146,26 @@ jobs:
         run: npm ci
       - name: Run tests (vitest)
         run: npm test
+
+  # The required check. Reports one context named `test` whatever the matrix is
+  # called, and fails if any leg did — so adding a Node version does not mean
+  # editing branch protection, and a red leg still blocks.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: test-matrix
+    if: always()
+    steps:
+      - name: Every Node version passed
+        # `needs.*.result` is 'success' only when every leg succeeded; skipped
+        # or cancelled counts as not-passed, which is what we want from a gate.
+        run: |
+          if [ "${{ needs.test-matrix.result }}" != "success" ]; then
+            echo "test-matrix result: ${{ needs.test-matrix.result }}"
+            exit 1
+          fi
+          echo "all Node versions passed"
 
   secret-scan:
     name: secret scan
