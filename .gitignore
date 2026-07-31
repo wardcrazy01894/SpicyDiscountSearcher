@@ -15,3 +15,7 @@ dist/
 
 # Local-only harness settings.
 .claude/settings.local.json
+
+# Python test artefacts.
+.pytest_cache/
+__pycache__/

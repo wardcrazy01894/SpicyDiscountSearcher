@@ -23,7 +23,7 @@ describe('the generated code database', () => {
     // workbook edit updates both numbers together and nothing else can move
     // them.
     const companies = allCompanies();
-    expect(companies.length).toBe(225);
+    expect(companies.length).toBe(217);
     expect(companies.flatMap((c) => c.codes).length).toBe(546);
   });
 
@@ -68,6 +68,28 @@ describe('the generated code database', () => {
 
     const accenture = companyBySlug('accenture');
     expect(accenture?.codes.some((c) => c.vendor === 'marriott' && c.code === 'ACC')).toBe(true);
+  });
+});
+
+describe('company names', () => {
+  it('publishes no margin notes as employers', () => {
+    // The workbook's first column is a name column by convention only: it also
+    // held "(Americas only)", "(LON, AMS)" and a sentence about breakfast,
+    // each of which reached the picker as a company you could select.
+    for (const company of allCompanies()) {
+      expect(company.name).not.toMatch(/^\(|%|\.\s/);
+      // Matches MAX_NAME_WORDS in extract_codes.py; two different limits meant
+      // a name the parser accepts could still fail here.
+      expect(company.name.split(/\s+/).length).toBeLessThanOrEqual(8);
+    }
+  });
+
+  it('keeps the codes those notes were attached to', () => {
+    // They are real Hilton codes; only the attribution was invented. Dropping
+    // them would trade working codes for a naming fix.
+    const unattributed = allCompanies().find((c) => c.name === 'Unattributed');
+    expect(unattributed?.codes.length).toBeGreaterThan(0);
+    expect(unattributed?.codes.every((c) => c.note)).toBe(true);
   });
 });
 
