@@ -80,7 +80,9 @@ function money(amount: number, currency: string): string {
 
 function renderVendorChips(): void {
   const vendors = vendorsFor(ui.category);
-  // Default to every vendor in the category the first time it's shown.
+  // Whenever nothing is selected — not only on first open. Deliberate: an
+  // empty selection cannot race anything, so it is treated as "no preference"
+  // rather than "race nothing".
   if (ui.vendors.size === 0) for (const vendor of vendors) ui.vendors.add(vendor.id);
 
   vendorChips.replaceChildren(
@@ -367,7 +369,11 @@ function evidenceLine(quote: Quote): HTMLElement | null {
       : report.path === 'vendor-selectors'
         ? 'vendor selectors'
         : 'unknown branch';
-  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}`;
+  const took =
+    quote.startedAt && quote.finishedAt
+      ? ` · ${Math.round((quote.finishedAt - quote.startedAt) / 100) / 10}s`
+      : '';
+  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}${took}`;
   if (report.title) line.title = report.title;
   return line;
 }
@@ -384,7 +390,12 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   name.title = quote.candidate.companyName;
   const code = document.createElement('span');
   code.className = 'code';
-  code.textContent = `${quote.candidate.vendor} · ${quote.candidate.code}`;
+  // getVendor().label and .codeLabel, not the raw internal id. Both have been
+  // populated for every vendor since the first commit and read by nothing, so
+  // the row said "national · XZ42PWC" where the vendor's own site says
+  // "National Contract ID XZ42PWC".
+  const vendor = getVendor(quote.candidate.vendor);
+  code.textContent = `${vendor.label} ${vendor.codeLabel} · ${quote.candidate.code}`;
   who.append(name, code);
 
   const right = document.createElement('span');

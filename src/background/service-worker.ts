@@ -299,12 +299,7 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
   await cancelRun();
 
   const quotes = plan.candidates.map((candidate) => makeQuote(candidate, plan));
-  const state: RunState = {
-    runId: `run-${Date.now()}`,
-    plan,
-    quotes,
-    startedAt: Date.now(),
-  };
+  const state: RunState = { plan, quotes };
   const run: ActiveRun = {
     state,
     tabs: new Map(),
