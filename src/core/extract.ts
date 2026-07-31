@@ -17,7 +17,23 @@ import type { Offer, PriceBasis, VendorId } from './types.js';
  * value — the cross-currency comparison the bucketing exists to prevent,
  * arriving inside a single bucket where nothing downstream can see it.
  */
-const CURRENCY = String.raw`CA\$|NZ\$|US\$|A\$|C\$|R\$|\$|€|£|USD|EUR|GBP|CAD|AUD|NZD`;
+const CURRENCY_SYMBOL = String.raw`CA\$|NZ\$|US\$|A\$|C\$|R\$|\$|€|£`;
+
+/**
+ * Three-letter codes, and they must stand alone.
+ *
+ * Without the boundaries this is a car-rental extension that reads model names
+ * as money: `CAD` is the start of **Cadillac** and `AUD` of **Audi**, and the
+ * suffix branch of PRICE_RE is `(NUMBER)\s*(CURRENCY)`. So "2024 Cadillac
+ * Escalade" yielded 2024 CAD and "2023 Audi Q5" yielded 2023 AUD — and since
+ * `unknown` outranks `per-day` in BASIS_PREFERENCE, that model year became the
+ * page's headline price, beating every real rate on it. Every vendor lists
+ * model years, so every quote landed in the same phantom CAD bucket and the
+ * race was decided on model years.
+ */
+const CURRENCY_CODE = String.raw`\b(?:USD|EUR|GBP|CAD|AUD|NZD|BRL)\b`;
+
+const CURRENCY = `${CURRENCY_SYMBOL}|${CURRENCY_CODE}`;
 
 /**
  * A number as a price is written.
@@ -57,6 +73,7 @@ const SYMBOL_TO_CURRENCY: Record<string, string> = {
   NZ$: 'NZD',
   NZD: 'NZD',
   R$: 'BRL',
+  BRL: 'BRL',
 };
 
 // A rental or hotel stay below this is almost certainly a fee, a tax line, or a

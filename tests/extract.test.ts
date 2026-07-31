@@ -724,6 +724,15 @@ describe('an inclusive word after the price is not a licence', () => {
     'Taxes and fees: $57.20. Free cancellation',
     'Taxes and fees $57.20, breakfast included',
   ])('keeps the rate as the headline beside %s', (fee) => {
+    // The stronger property, and the one the code delivers: the fee is absent
+    // from the offer list, not merely outranked by a cheaper real rate.
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189.00 per night</div>
+      <div class="fees">${fee}</div>
+    </div></main>`;
+    const offers = extractOffers(document, 'hilton');
+    expect(offers.map((o) => o.amount)).toEqual([189]);
     expect(beside(fee)).toBe('189/per-day');
   });
 
@@ -745,4 +754,44 @@ describe('an inclusive word after the price is not a licence', () => {
       expect(extractOffers(document, 'hertz')).toEqual([]);
     },
   );
+});
+
+describe('model names are not money', () => {
+  it.each([
+    '2024 Cadillac Escalade',
+    '2023 Audi Q5 or similar',
+    'Seats 5 Audi A3',
+    '5 audio inputs',
+    '2022 Cadillac CT5',
+  ])('finds no price in %s', (text) => {
+    // On a car-rental extension `CAD` is the start of Cadillac and `AUD` of
+    // Audi, and the suffix branch reads `(number) (currency)`. Unbounded, the
+    // model year became a price — and because `unknown` outranks `per-day` in
+    // BASIS_PREFERENCE, it became the *headline* price, beating every real
+    // rate on the page. Every vendor lists model years, so every quote landed
+    // in the same phantom CAD bucket and the race was decided on model years.
+    expect(findPrices(text)).toEqual([]);
+  });
+
+  it.each([
+    ['412 USD', 'USD'],
+    ['USD 412', 'USD'],
+    ['412 CAD', 'CAD'],
+    ['CAD 412', 'CAD'],
+    ['412 AUD', 'AUD'],
+  ])('still reads %s as a standalone code', (text, currency) => {
+    expect(findPrices(text)).toEqual([{ amount: 412, currency }]);
+  });
+
+  it('does not let a model year outrank a real rate on the page', () => {
+    document.body.innerHTML = `
+      <main>
+        <div class="card"><h3>2024 Cadillac Escalade</h3><div>$89.00 per day</div></div>
+        <div class="card"><h3>2023 Audi Q5 or similar</h3><div>$95.00 per day</div></div>
+      </main>`;
+    const offers = extractOffers(document, 'hertz');
+    expect(offers.map((o) => o.amount).sort((a, b) => a - b)).toEqual([89, 95]);
+    expect(bestOffer(offers)?.amount).toBe(89);
+    expect(bestOffer(offers)?.currency).toBe('USD');
+  });
 });
