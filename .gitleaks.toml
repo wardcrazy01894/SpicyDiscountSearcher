@@ -14,17 +14,23 @@ paths = [
   '''src/data/codes\.generated\.json''',
   '''data/source/.*\.xlsx''',
   '''README\.md''',
+  # The lockfile's `integrity` hashes are long base64 and trip the entropy
+  # heuristic. Scoped to this rule rather than listed globally below: a
+  # lockfile is a real place credentials land — an authenticated registry URL,
+  # a leftover `_auth` or `_authToken` line — and a global entry would have
+  # exempted it from the AWS, GitHub-PAT and private-key rules too.
+  '''package-lock\.json''',
 ]
 
-# Scoped to one rule above rather than listed here, so the config says what it
-# means: a global entry exempts a path from *every* rule.
+# Everything is scoped to the one rule above, and there is deliberately no
+# global `[allowlist]` block: a global entry exempts a path from *every* rule,
+# which is a much bigger promise than "this file trips the entropy heuristic".
+# `package-lock.json` used to live here and now sits with the rest.
 #
 # gitleaks still never reads the .xlsx: it skips binaries by extension before
 # any repo config applies, and a debug run reports "scanned ~0 bytes" for the
-# workbook with no config at all. That gap is now covered outside gitleaks —
+# workbook with no config at all. That gap is covered outside gitleaks —
 # `scripts/scan_workbook_pii.py` unzips the workbook and scans its XML, and it
 # runs in the same `secret scan` job right after this. It looks at the working
 # tree rather than history, so it answers "what ships", not "what was ever
 # committed"; gitleaks with fetch-depth: 0 still owns the history question.
-[allowlist]
-paths = ['''package-lock\.json''']
