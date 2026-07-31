@@ -99,6 +99,30 @@ cap is lifted — they were unpinned until someone checked.
 doesn't prove non-delivery, and a retry starts a second race that opens real
 tabs before cancelling the first.
 
+Two `START_RUN`s can also arrive without any retry, because the popup only
+disabled Run when the reply came back: a double-click sent two. `cancelRun()`
+returns immediately when `active` is null, so both passed it and both built a
+run — two minimised windows, twice the cap, twice the load on every vendor, and
+the first window orphaned permanently because `runWindow` had been overwritten.
+
+Guarded on both sides now. In the worker, `startingRun` holds the in-flight
+promise and a concurrent call awaits it, so both callers get the same run — read
+and assigned with no `await` between, since an async guard is not a guard, which
+is exactly how `cancelRun()` failed at this. Sharing rather than refusing
+matters because `active` is never nulled: after an earlier run has finished it
+still points at that one, so a refused caller was answered with a state carrying
+`finishedAt` — which the popup reads as "no run in progress" and re-arms the
+button on, defeating the guard it had just passed. The second caller also
+silently loses its own plan and receives the first one's; the popup cannot send
+two different plans today, but nothing enforces that.
+
+In the popup, `ui.pendingStart` is set synchronously on submit and cleared when
+a reply renders. Without it `runBtn.disabled` was re-armed by the next
+`refreshPlan` — a max-codes keystroke, a vendor chip, a company checkbox — since
+`ui.running` only becomes true once the background answers. That window is
+exactly where a double-click's second message went, and it is why "the button
+stays disabled after a failed send" was false until this flag existed.
+
 ## Diagnosing a run afterwards
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,

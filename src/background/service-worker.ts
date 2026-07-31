@@ -474,7 +474,43 @@ async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
   }
 }
 
+/**
+ * Set for the window between entering startRun and `active` being assigned.
+ *
+ * `cancelRun()` returns immediately when `active` is null, so two START_RUN
+ * messages arriving before either finished both sailed past it and both built
+ * a run. The result was two live races: two minimised windows, twice the
+ * concurrency cap, twice the load on every vendor — a direct breach of the
+ * politeness contract — and the first run's window orphaned permanently,
+ * because `runWindow` had already been overwritten by the second.
+ *
+ * A double-click on Run was enough to do it.
+ */
+let startingRun: Promise<RunState> | null = null;
+
 async function startRun(plan: SearchPlan): Promise<RunState> {
+  // Read and assigned with no await in between, which is the whole point: an
+  // async guard is not a guard, and that is exactly how `cancelRun()` failed
+  // at this job.
+  //
+  // Sharing the in-flight promise rather than refusing outright, because the
+  // second caller then gets the run that really is starting. Refusing meant
+  // answering it from `active` — and `active` is never nulled, so after an
+  // earlier run has finished it still points at *that* one. The refused caller
+  // received a state carrying `finishedAt`, which the popup reads as "no run in
+  // progress" and re-arms the button on, defeating the guard it had just
+  // passed. On a fresh worker the refusal was fine: `active` is assigned before
+  // the catch body runs a microtask later.
+  if (startingRun) return startingRun;
+  const pending = (startingRun = beginRun(plan));
+  try {
+    return await pending;
+  } finally {
+    if (startingRun === pending) startingRun = null;
+  }
+}
+
+async function beginRun(plan: SearchPlan): Promise<RunState> {
   await cancelRun();
 
   const quotes = plan.candidates.map((candidate) => makeQuote(candidate, plan));
@@ -547,6 +583,9 @@ chrome.runtime.onMessage.addListener(
     void (async () => {
       switch (message.type) {
         case 'START_RUN': {
+          // No refusal path any more: a concurrent START_RUN shares the run
+          // that is already starting, so both callers get the same state and
+          // one Run press produces one race.
           const state = await startRun(message.plan);
           sendResponse({ type: 'RUN_STATE', state } satisfies StateMessage);
           return;
