@@ -96,7 +96,13 @@ jobs:
       - name: Lint the parser (ruff)
         # Directories, not one named file. Naming the single file that exists
         # today means the next Python file added is silently never linted.
+        # Rules come from ruff.toml — the default set is E4/E7/E9 plus F, which
+        # is close to nothing on a parser this size.
         run: pipx run ruff==0.14.2 check scripts tests
+      - name: Format check the parser (ruff)
+        # The TypeScript side has had prettier as a required check since the
+        # start; the Python side had no formatting gate at all.
+        run: pipx run ruff==0.14.2 format --check scripts tests
 
       - name: Test the parser (pytest)
         # The freshness check below cannot catch a parser that is wrong in the
@@ -112,21 +118,67 @@ jobs:
         # the other, the extension ships codes that no longer match the source.
         run: git diff --exit-code -- src/data/codes.generated.json
 
-  test:
-    name: test
+  # Named `test-matrix`, not `test`, on purpose. A matrix job produces one check
+  # context per leg, never a single one: GitHub appends the matrix values unless
+  # the name already interpolates them. `name: test` gave `test (22)` and
+  # `test (24)`; the interpolated name below gives one `test node NN` per leg.
+  # Either way there is no context called `test`, so making *this* the
+  # `test` job meant the required context never reported and every PR blocked
+  # forever. Verified: it did exactly that. The job below keeps the name.
+  test-matrix:
+    name: test node ${{ matrix.node }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      # Every version package.json claims. CI ran only 22, so 24 — what local
+      # development actually uses — and 26 both went untested while `engines`
+      # advertised them. `setup-node` downloads versions the runner image does
+      # not cache, so an uncached 26 costs a little time, not a failure.
+      # The build job stays single-version so the artifact is deterministic.
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: npm
       - name: Install dependencies (locked)
         run: npm ci
       - name: Run tests (vitest)
         run: npm test
+
+  # The required check. Reports one context named `test` whatever the matrix is
+  # called, and fails if any leg did — so adding a Node version does not mean
+  # editing branch protection, and a red leg still blocks.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: test-matrix
+    # always(), unlike the workbook scan below which deliberately uses
+    # !cancelled(). The difference is that this context is *required*, and a
+    # required job skipped by a conditional reports **Success** — GitHub counts
+    # `success`, `skipped` and `neutral` alike — so `!cancelled()` would post a
+    # green `test` for a run that checked nothing. That is the failure mode
+    # here, not a stuck PR. GitHub's own guidance for required checks that
+    # `needs` another job is to use `always()`.
+    #
+    # The cost is that a run superseded by cancel-in-progress posts a red
+    # `test` against the SHA nobody is merging.
+    if: always()
+    steps:
+      - name: Every Node version passed
+        # `needs.*.result` is 'success' only when every leg succeeded; skipped
+        # or cancelled counts as not-passed, which is what we want from a gate.
+        run: |
+          if [ "${{ needs.test-matrix.result }}" != "success" ]; then
+            echo "test-matrix result: ${{ needs.test-matrix.result }}"
+            exit 1
+          fi
+          echo "all Node versions passed"
 
   secret-scan:
     name: secret scan

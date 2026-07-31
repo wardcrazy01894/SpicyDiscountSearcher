@@ -60,9 +60,9 @@ def render(size: int) -> bytes:
                     nx, ny = x / size, y / size
                     on_slash = abs(nx + ny - 1.0) < 0.085
                     dot_r = 0.135
-                    in_dot = (nx - 0.30) ** 2 + (ny - 0.30) ** 2 < dot_r**2 or (
-                        nx - 0.70
-                    ) ** 2 + (ny - 0.70) ** 2 < dot_r**2
+                    in_dot = (nx - 0.30) ** 2 + (ny - 0.30) ** 2 < dot_r**2 or (nx - 0.70) ** 2 + (
+                        ny - 0.70
+                    ) ** 2 < dot_r**2
                     if on_slash or in_dot:
                         r, g, b = MARK
 
@@ -78,9 +78,7 @@ def render(size: int) -> bytes:
             else:
                 # Un-weight the colour by coverage so edge pixels stay saturated.
                 covered = max(1, a_acc // 255)
-                rows.extend(
-                    (r_acc // covered, g_acc // covered, b_acc // covered, alpha)
-                )
+                rows.extend((r_acc // covered, g_acc // covered, b_acc // covered, alpha))
 
     return bytes(rows)
 

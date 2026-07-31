@@ -116,18 +116,13 @@ def split_codes(text: str) -> tuple[list[str], list[str]]:
     like "Hampton Inn, Homewood Suites" is a brand list, not a code list.
     """
     tokens = tokenize(text)
-    prose = [
-        tok
-        for tok in tokens
-        if not looks_like_code(tok) and tok.upper() not in STOPWORDS
-    ]
+    prose = [tok for tok in tokens if not looks_like_code(tok) and tok.upper() not in STOPWORDS]
     allow_letters_only = not prose
     codes: list[str] = []
     for token in tokens:
         code = token.upper()
-        if looks_like_code(code, allow_letters_only=allow_letters_only):
-            if code not in codes:
-                codes.append(code)
+        if looks_like_code(code, allow_letters_only=allow_letters_only) and code not in codes:
+            codes.append(code)
     return codes, prose
 
 
@@ -191,7 +186,7 @@ LEADING_CODE_RE = re.compile(r"^(\d[\d-]{5,})\s+(.*)$")
 
 # Separators and decoration left behind once a parenthetical comes out, e.g.
 # "Booz & Co (Now Strategy&) ///".
-NAME_EDGE = " -–—/*.,;:"
+NAME_EDGE = " -–—/*.,;:"  # noqa: RUF001
 
 # Where codes go when the cell beside them was a remark, not an employer. They
 # are still real codes; only the attribution was invented.
@@ -242,9 +237,7 @@ def parse_company(text: str) -> tuple[str | None, str | None]:
         notes.append(match.group(1).strip())
         return " "
 
-    name = (
-        re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip(NAME_EDGE).strip()
-    )
+    name = re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip(NAME_EDGE).strip()
 
     while True:
         leading = LEADING_CODE_RE.match(name)
@@ -341,7 +334,7 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         if len(rest) == 1 and ACCOUNT_NUMBER_RE.fullmatch(rest[0]):
             SKIPPED.append(f"Hilton Code (no employer): {line[:80]}")
             continue
-        company, note = parse_company(" ".join(rest).strip(" -–—"))
+        company, note = parse_company(" ".join(rest).strip(" -–—"))  # noqa: RUF001
         if not codes or (not company and not note):
             SKIPPED.append(f"Hilton Code: {line[:80]}")
             continue
@@ -470,9 +463,7 @@ def main() -> int:
     by_company: dict[str, dict] = {}
     for rec in merged.values():
         slug = slugify(rec["company"])
-        entry = by_company.setdefault(
-            slug, {"slug": slug, "name": rec["company"], "codes": []}
-        )
+        entry = by_company.setdefault(slug, {"slug": slug, "name": rec["company"], "codes": []})
         entry["codes"].append(
             {
                 "vendor": rec["vendor"],

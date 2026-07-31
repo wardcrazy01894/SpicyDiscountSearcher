@@ -23,9 +23,7 @@ spec.loader.exec_module(extract_codes)
 
 
 class TestLooksLikeCode:
-    @pytest.mark.parametrize(
-        "token", ["A541100", "N0156333", "260290", "XZ42PWC", "D008400+"]
-    )
+    @pytest.mark.parametrize("token", ["A541100", "N0156333", "260290", "XZ42PWC", "D008400+"])
     def test_accepts_real_codes(self, token: str) -> None:
         assert extract_codes.looks_like_code(token)
 
@@ -80,9 +78,7 @@ class TestParseCell:
 class TestParseCompany:
     """The first column is a name column by convention only."""
 
-    @pytest.mark.parametrize(
-        "name", ["3M", "IBM", "PwC", "Campbell Hausfield and Powerex"]
-    )
+    @pytest.mark.parametrize("name", ["3M", "IBM", "PwC", "Campbell Hausfield and Powerex"])
     def test_keeps_real_names(self, name: str) -> None:
         assert extract_codes.parse_company(name) == (name, None)
 
@@ -118,9 +114,7 @@ class TestParseCompany:
             pytest.param("NOTE: still to confirm", id="label-only"),
             pytest.param("Acme Holdings and more...", id="ellipsis-only"),
             pytest.param("Acme YMMV", id="ymmv-only"),
-            pytest.param(
-                "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota", id="too-long"
-            ),
+            pytest.param("Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota", id="too-long"),
             # Six words: past SENTENCE_WORDS but inside MAX_NAME_WORDS, so the
             # sentence rule is the only thing that can reject it.
             pytest.param("Renamed last year. Check before booking", id="sentence-only"),
@@ -165,10 +159,7 @@ class TestParseCompany:
     def test_strips_decoration_left_by_a_removed_parenthetical(self) -> None:
         # Otherwise "Booz & Co ///" wins the slug merge against a clean
         # "Booz & Co" and the published name gets worse, not better.
-        assert (
-            extract_codes.parse_company("Booz & Co (Now Strategy&) ///")[0]
-            == "Booz & Co"
-        )
+        assert extract_codes.parse_company("Booz & Co (Now Strategy&) ///")[0] == "Booz & Co"
 
 
 class TestParseHiltonSheet:
@@ -310,9 +301,7 @@ class TestParseGridSheet:
     def test_an_empty_row_is_not_worth_reporting(self) -> None:
         # Padding at the bottom of a sheet names nothing and never did.
         extract_codes.SKIPPED.clear()
-        extract_codes.parse_grid_sheet(
-            "Corp Codes", [("Company", "Hilton"), (None, None)]
-        )
+        extract_codes.parse_grid_sheet("Corp Codes", [("Company", "Hilton"), (None, None)])
         assert extract_codes.SKIPPED == []
 
 

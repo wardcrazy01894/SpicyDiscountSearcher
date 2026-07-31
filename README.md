@@ -168,7 +168,8 @@ Requires Node `^22.22.2 || ^24.15.0 || >=26.0.0`, which is jsdom's own range
 copied verbatim — it rules out 23.x, 25.x and Node 24 below 24.15, and every
 other dependency permits a superset of it. A test-only dependency therefore
 sets the supported runtime for everyone, including anyone who only wants to
-build. CI runs 22.
+build. CI builds on 22 and runs the tests on 22, 24 and 26 — every version
+that range claims.
 
 ```bash
 npm run build        # typecheck + both vite builds
@@ -183,17 +184,23 @@ The workbook parser is Python and tested separately:
 ```bash
 pip install 'openpyxl==3.1.5' 'pytest==8.4.2'
 python3 -m pytest tests -q
+
+# lint and formatting, both required checks — same pins CI uses
+pipx run ruff==0.14.2 check scripts tests
+pipx run ruff==0.14.2 format --check scripts tests
 ```
 
-CI runs four jobs on every PR, and `main` is protected on all four — they must
-pass and the branch must be up to date before merge:
+CI runs five jobs on every PR. `main` is protected on four of them — they must
+pass and the branch must be up to date before merge. The fifth, `test node NN`,
+is the Node version matrix; `test` aggregates it into the single required
+context, so adding a version never means editing branch protection:
 
-| Job                        | What it does                                                                 |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit` |
-| `test`                     | vitest                                                                       |
-| `data`                     | ruff, pytest, then regenerates the code database and fails if it differs     |
-| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook   |
+| Job                        | What it does                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit`      |
+| `test`                     | aggregates `test node 22`, `24` and `26` (vitest on each)                         |
+| `data`                     | ruff lint + format, pytest, then regenerates the database and fails if it differs |
+| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook        |
 
 The workbook is a zip of XML, and gitleaks skips it by extension before any
 repo config applies — so the one binary in this repo was the one file no

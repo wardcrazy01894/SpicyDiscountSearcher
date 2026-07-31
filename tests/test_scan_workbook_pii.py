@@ -110,9 +110,7 @@ def test_catches_a_threaded_comment_author(tmp_path: Path) -> None:
     <author> check never looks at."""
     book = make_workbook(
         tmp_path,
-        {
-            "xl/persons/person1.xml": '<person displayName="Ada Lovelace" providerId="AD"/>'
-        },
+        {"xl/persons/person1.xml": '<person displayName="Ada Lovelace" providerId="AD"/>'},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -140,9 +138,7 @@ def test_catches_a_host_written_without_a_scheme(tmp_path: Path) -> None:
     it, so the host that leaked could reappear in exactly that form."""
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>stay-stg.hilton.com/fortive</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>stay-stg.hilton.com/fortive</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -155,9 +151,7 @@ def test_a_marker_beats_the_allowlist(tmp_path: Path) -> None:
     rather than a differently-worded message on a decision already made."""
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>https://staging.example.com/x</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>https://staging.example.com/x</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -189,11 +183,7 @@ def test_a_stock_docprops_part_scans_clean(tmp_path: Path) -> None:
 def test_a_named_creator_in_that_same_part_is_still_caught(tmp_path: Path) -> None:
     book = make_workbook(
         tmp_path,
-        {
-            "docProps/core.xml": STOCK_CORE_XML.replace(
-                "<dc:creator>", "<dc:creator>Ada Lovelace"
-            )
-        },
+        {"docProps/core.xml": STOCK_CORE_XML.replace("<dc:creator>", "<dc:creator>Ada Lovelace")},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -210,9 +200,7 @@ def test_a_named_creator_in_that_same_part_is_still_caught(tmp_path: Path) -> No
         "-Best Western",
     ],
 )
-def test_title_cased_workbook_vocabulary_is_not_a_person(
-    tmp_path: Path, signoff: str
-) -> None:
+def test_title_cased_workbook_vocabulary_is_not_a_person(tmp_path: Path, signoff: str) -> None:
     """Capitalisation alone is not enough in a workbook full of employers and
     hotel brands. One re-capitalised margin note failing a required check is
     how a gate stops being trusted."""
@@ -228,12 +216,8 @@ def test_title_cased_workbook_vocabulary_is_not_a_person(
     assert scanner.scan(book) == []
 
 
-@pytest.mark.parametrize(
-    "signoff", ["-Ada Lovelace.", "-Ada Lovelace (EMEA)", "-Ada Lovelace,"]
-)
-def test_a_signature_with_trailing_punctuation_still_counts(
-    tmp_path: Path, signoff: str
-) -> None:
+@pytest.mark.parametrize("signoff", ["-Ada Lovelace.", "-Ada Lovelace (EMEA)", "-Ada Lovelace,"])
+def test_a_signature_with_trailing_punctuation_still_counts(tmp_path: Path, signoff: str) -> None:
     book = make_workbook(
         tmp_path,
         {
@@ -316,9 +300,7 @@ def test_a_dot_prefixed_host_is_reported_under_its_real_name(tmp_path: Path) -> 
     """
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>see ...stay-stg.hilton.com/fortive</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>see ...stay-stg.hilton.com/fortive</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -348,9 +330,7 @@ def test_catches_a_staging_host_that_shares_a_real_domain(
     names: any suffix rule keyed on `hilton.com` would have passed it."""
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>http://stay-stg.hilton.com/x</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>http://stay-stg.hilton.com/x</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -360,9 +340,7 @@ def test_catches_a_staging_host_that_shares_a_real_domain(
 def test_allows_the_production_host_it_resembles(tmp_path: Path) -> None:
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>https://stay.hilton.com/x</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>https://stay.hilton.com/x</t></si></sst>"},
     )
     assert scanner.scan(book) == []
 
@@ -371,9 +349,7 @@ def test_an_unrecognised_host_needs_a_human(tmp_path: Path) -> None:
     """Not every new host is a leak, but every new host is a decision."""
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>https://example.com/deals</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>https://example.com/deals</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -391,8 +367,7 @@ def test_an_unrecognised_host_needs_a_human(tmp_path: Path) -> None:
         ),
         (
             "docProps/core.xml",
-            "<cp:coreProperties><dc:creator>Alan Turing</dc:creator>"
-            "</cp:coreProperties>",
+            "<cp:coreProperties><dc:creator>Alan Turing</dc:creator></cp:coreProperties>",
             "Alan Turing",
         ),
         (
@@ -434,7 +409,9 @@ def test_a_producer_name_is_not_a_person(tmp_path: Path) -> None:
     book = make_workbook(
         tmp_path,
         {
-            "docProps/core.xml": "<cp:coreProperties><dc:creator>openpyxl</dc:creator></cp:coreProperties>"
+            "docProps/core.xml": (
+                "<cp:coreProperties><dc:creator>openpyxl</dc:creator></cp:coreProperties>"
+            )
         },
     )
     assert scanner.scan(book) == []
@@ -517,9 +494,7 @@ def test_an_authorless_comment_is_not_a_person(tmp_path: Path) -> None:
     """
     book = make_workbook(
         tmp_path,
-        {
-            "xl/comments1.xml": "<comments><authors><author>None</author></authors></comments>"
-        },
+        {"xl/comments1.xml": "<comments><authors><author>None</author></authors></comments>"},
     )
     assert scanner.scan(book) == []
 
@@ -530,14 +505,10 @@ def test_a_marker_beats_an_allowlisted_host(
     """The reason the marker check runs first. Pinned against an allowlist that
     actually contains the host, because testing it with an unlisted one proves
     only that unlisted hosts fire."""
-    monkeypatch.setattr(
-        scanner, "ALLOWED_HOSTS", scanner.ALLOWED_HOSTS | {"stay-stg.hilton.com"}
-    )
+    monkeypatch.setattr(scanner, "ALLOWED_HOSTS", scanner.ALLOWED_HOSTS | {"stay-stg.hilton.com"})
     book = make_workbook(
         tmp_path,
-        {
-            "xl/sharedStrings.xml": "<sst><si><t>https://stay-stg.hilton.com/x</t></si></sst>"
-        },
+        {"xl/sharedStrings.xml": "<sst><si><t>https://stay-stg.hilton.com/x</t></si></sst>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -559,9 +530,9 @@ class TestMain:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         source = self.source(tmp_path, monkeypatch)
-        make_workbook(
-            source, {"xl/sharedStrings.xml": "<sst><si><t>ok</t></si></sst>"}
-        ).rename(source / "clean.xlsx")
+        make_workbook(source, {"xl/sharedStrings.xml": "<sst><si><t>ok</t></si></sst>"}).rename(
+            source / "clean.xlsx"
+        )
         assert scanner.main() == 0
 
     def test_returns_one_and_names_the_book(
@@ -573,9 +544,7 @@ class TestMain:
         source = self.source(tmp_path, monkeypatch)
         make_workbook(
             source,
-            {
-                "xl/sharedStrings.xml": "<sst><si><t>http://stay-stg.hilton.com/x</t></si></sst>"
-            },
+            {"xl/sharedStrings.xml": "<sst><si><t>http://stay-stg.hilton.com/x</t></si></sst>"},
         ).rename(source / "dirty.xlsx")
         assert scanner.main() == 1
         err = capsys.readouterr().err
@@ -592,9 +561,7 @@ class TestMain:
     ) -> None:
         source = self.source(tmp_path, monkeypatch)
         (source / "corrupt.xlsx").write_bytes(b"not a zip at all")
-        make_workbook(source, {"xl/sharedStrings.xml": "<sst/>"}).rename(
-            source / "zz-clean.xlsx"
-        )
+        make_workbook(source, {"xl/sharedStrings.xml": "<sst/>"}).rename(source / "zz-clean.xlsx")
         assert scanner.main() == 1
 
 
@@ -614,9 +581,7 @@ def test_catches_a_manager_in_the_app_properties(tmp_path: Path) -> None:
     name, stamped from the Office installation."""
     book = make_workbook(
         tmp_path,
-        {
-            "docProps/app.xml": "<Properties><Manager>Ada Lovelace</Manager></Properties>"
-        },
+        {"docProps/app.xml": "<Properties><Manager>Ada Lovelace</Manager></Properties>"},
     )
     problems = scanner.scan(book)
     assert len(problems) == 1
@@ -626,9 +591,7 @@ def test_catches_a_manager_in_the_app_properties(tmp_path: Path) -> None:
 def test_a_producer_name_in_app_properties_is_still_boilerplate(tmp_path: Path) -> None:
     book = make_workbook(
         tmp_path,
-        {
-            "docProps/app.xml": "<Properties><Company>Microsoft Excel</Company></Properties>"
-        },
+        {"docProps/app.xml": "<Properties><Company>Microsoft Excel</Company></Properties>"},
     )
     assert scanner.scan(book) == []
 

@@ -1,0 +1,20 @@
+# Ruff runs with its default rule set unless told otherwise — E4/E7/E9 plus F,
+# which catches syntax errors and undefined names and essentially nothing else
+# on a 500-line parser full of regex and dict manipulation. The TypeScript side
+# gets eslint with type-aware rules; this was the weaker half of the same gate.
+#
+# Deliberately not the whole catalogue: every rule here is one whose violations
+# in this repo are worth acting on.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes — undefined names, unused imports
+  "I",   # import sorting, so a new import cannot land anywhere
+  "B",   # bugbear — mutable defaults, loop-variable capture, `except` shape
+  "UP",  # pyupgrade — this repo requires 3.11+, so 3.8-era idioms are noise
+  "SIM", # simplify — the readability rules that catch real tangles
+  "RUF", # ruff's own, incl. mutable class attrs and unused noqa
+]
