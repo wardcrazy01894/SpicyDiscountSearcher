@@ -37,7 +37,12 @@ export interface Vendor {
 /** One discount code for one company at one vendor, as parsed from the workbook. */
 export interface CodeRecord {
   vendor: VendorId;
-  /** Null when the workbook only gave a booking URL, e.g. Deloitte's Hilton link. */
+  /**
+   * Null when the workbook only gave a booking URL, e.g. Deloitte's Hilton
+   * link. `buildCandidates` skips those records, so a URL-only row is
+   * provenance the extension keeps and never surfaces — the booking link is
+   * unreachable from the picker.
+   */
   code: string | null;
   note: string | null;
   url: string | null;
@@ -90,6 +95,11 @@ export interface Candidate {
   companyName: string;
   vendor: VendorId;
   code: string;
+  /**
+   * The workbook's qualifier for this code — "Americas only", "Doubletree,
+   * Embassy Suites only". Carried this far and then dropped: nothing renders
+   * it, so the caveat the spreadsheet attached never reaches the user.
+   */
   note: string | null;
 }
 
@@ -99,6 +109,13 @@ export type QuoteStatus = 'pending' | 'loading' | 'ok' | 'no-price' | 'error' | 
  * What a scraped number actually means. Comparing a nightly rate against a trip
  * total would silently pick the wrong winner, so every offer records its basis
  * and only like-for-like bases are ranked against each other.
+ */
+/**
+ * `per-day` covers per-night too. Car-centric naming in a tool that ships
+ * hotels, and every hotel-facing site undoes it — `perUnitLabel` translates it
+ * to "/night", `basisPhrase` to "nightly rates", `tripUnits` to nights. Not
+ * renamed because the value is persisted in `chrome.storage.session`, so a
+ * rename would misread every snapshot written by an older build.
  */
 export type PriceBasis = 'total' | 'per-day' | 'unknown';
 
@@ -128,7 +145,7 @@ export type QuoteFailure =
   | 'probe-timeout'
   /** The probe polled to its deadline and never saw a price. */
   | 'probe-empty'
-  /** extractOffers threw on this page's markup. */
+  /** `extract` threw on this page's markup. */
   | 'extract-threw'
   /** The user closed the tab mid-probe. */
   | 'tab-closed'
@@ -204,6 +221,17 @@ export interface Quote {
   startedAt?: number;
   finishedAt?: number;
 }
+
+/**
+ * How many vendor tabs may load at once, ever.
+ *
+ * CLAUDE.md names this a politeness invariant and a test pins it — but only
+ * the background's copy. It was written out three times (the worker's clamp,
+ * the popup's clamp, and `max` on the number input), so raising the worker's
+ * alone would have gone uncaught by the popup, and raising the popup's alone
+ * would have shown the user a limit the worker refuses to honour.
+ */
+export const MAX_CONCURRENCY = 6;
 
 export interface SearchPlan {
   trip: Trip;

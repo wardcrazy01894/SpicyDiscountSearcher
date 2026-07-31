@@ -724,6 +724,13 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
   return { offers: sweep(root), path: 'generic-sweep' };
 }
 
+/**
+ * Offers only, without the branch that produced them.
+ *
+ * Superseded by `extract` for production use — `probe.ts` needs the branch for
+ * its report — and kept because it makes the extraction tests terser. Nothing
+ * in src/ calls it.
+ */
 export function extractOffers(doc: Document, vendor: VendorId): Offer[] {
   return extract(doc, vendor).offers;
 }

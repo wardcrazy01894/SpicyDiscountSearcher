@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  cheapest,
+  cheapestComparable,
   classMatrix,
   comparisonGroups,
   estimatedTotal,
   normalizeLabel,
-  rankQuotes,
+  orderForDisplay,
   savings,
   tripUnits,
   unrankedQuotes,
@@ -77,7 +77,7 @@ describe('comparisonGroups', () => {
       quote('total-b', 'ok', [['Compact', 240]]),
     ];
 
-    expect(cheapest(quotes)?.id).toBe('total-a');
+    expect(cheapestComparable(quotes)?.id).toBe('total-a');
     expect(unrankedQuotes(quotes).map((q) => q.id)).toEqual(['daily']);
   });
 
@@ -88,7 +88,7 @@ describe('comparisonGroups', () => {
       quote('usd-b', 'ok', [['Compact', 150]]),
     ];
 
-    expect(cheapest(quotes)?.id).toBe('usd-a');
+    expect(cheapestComparable(quotes)?.id).toBe('usd-a');
     expect(unrankedQuotes(quotes).map((q) => q.id)).toEqual(['eur']);
   });
 
@@ -117,18 +117,21 @@ describe('comparisonGroups', () => {
     ]);
 
     expect(groups[0]?.basis).toBe('total');
-    expect(cheapest([...groups.flatMap((g) => g.quotes)])?.id).toBe('t1');
+    expect(cheapestComparable([...groups.flatMap((g) => g.quotes)])?.id).toBe('t1');
   });
 
   it('ignores quotes that never produced a price', () => {
-    const winner = cheapest([quote('a', 'no-price'), quote('b', 'ok', [['Compact', 199]])]);
+    const winner = cheapestComparable([
+      quote('a', 'no-price'),
+      quote('b', 'ok', [['Compact', 199]]),
+    ]);
     expect(winner?.id).toBe('b');
   });
 });
 
-describe('rankQuotes', () => {
-  it('puts priced results first, cheapest to dearest, failures last', () => {
-    const ranked = rankQuotes([
+describe('orderForDisplay', () => {
+  it('puts priced results first, cheapestComparable to dearest, failures last', () => {
+    const ranked = orderForDisplay([
       quote('c', 'error'),
       quote('a', 'ok', [['Compact', 240]]),
       quote('d', 'loading'),
@@ -138,7 +141,7 @@ describe('rankQuotes', () => {
   });
 
   it('orders every status, not just the three the happy path produces', () => {
-    const ranked = rankQuotes([
+    const ranked = orderForDisplay([
       quote('cancelled', 'cancelled'),
       quote('error', 'error'),
       quote('noprice', 'no-price'),
@@ -157,14 +160,14 @@ describe('rankQuotes', () => {
   });
 
   it('breaks ties between unpriced quotes on company name', () => {
-    const ranked = rankQuotes([quote('zeta', 'error'), quote('alpha', 'error')]);
+    const ranked = orderForDisplay([quote('zeta', 'error'), quote('alpha', 'error')]);
     expect(ranked.map((q) => q.id)).toEqual(['alpha', 'zeta']);
   });
 
   it('lists the comparable race before the codes that quoted something else', () => {
     // A cheaper-looking daily rate sorts below the totals it cannot beat,
     // rather than jumping to the top of the list.
-    const ranked = rankQuotes([
+    const ranked = orderForDisplay([
       quote('daily', 'ok', [['Compact', 29, 'per-day']]),
       quote('total-b', 'ok', [['Compact', 240]]),
       quote('total-a', 'ok', [['Compact', 219]]),
@@ -299,7 +302,7 @@ describe('the class matrix and the quotes it is given', () => {
   // quote quoting mostly euros sits outside a USD reported bucket and the
   // popup lists it as "not ranked". Its stray dollar offers, though, are still
   // offers — and feeding the matrix every quote let one of them hold the
-  // cheapest row. The popup then warned that "another code is cheaper on the
+  // cheapestComparable row. The popup then warned that "another code is cheaper on the
   // classes these results have in common", naming a code it had just told the
   // user was not comparable at all.
   const usdWinner = quote('A', 'ok', [['Economy', 100, 'total', 'USD']]);

@@ -6,14 +6,15 @@ import {
   searchCompanies,
 } from '../core/codes.js';
 import {
-  cheapest,
+  cheapestComparable,
   classMatrix,
   estimatedTotal,
   primaryGroup,
-  rankQuotes,
+  orderForDisplay,
   savings,
   unrankedQuotes,
 } from '../core/compare.js';
+import { MAX_CONCURRENCY } from '../core/types.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
   Candidate,
@@ -556,7 +557,7 @@ function renderRun(state: RunState | null): void {
   ui.pendingStart = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
-  runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
+  runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapestComparable code';
 
   if (!state) {
     results.hidden = true;
@@ -565,8 +566,8 @@ function renderRun(state: RunState | null): void {
   results.hidden = false;
 
   const trip = state.plan.trip;
-  const ranked = rankQuotes(state.quotes);
-  const winner = cheapest(state.quotes);
+  const ranked = orderForDisplay(state.quotes);
+  const winner = cheapestComparable(state.quotes);
   quotesList.replaceChildren(
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
@@ -620,7 +621,7 @@ function renderRun(state: RunState | null): void {
     // quote's headline basis and currency by majority, so a quote whose offers
     // are mostly in euros sits outside the reported bucket and is listed as
     // not ranked — while its stray dollar offers still entered this matrix and
-    // could hold the cheapest row. The popup then warned that "another code is
+    // could hold the cheapestComparable row. The popup then warned that "another code is
     // cheaper on the classes these results have in common", naming a code it
     // had just told the user was not comparable.
     const ranked = primaryGroup(state.quotes)?.quotes ?? [];
@@ -800,7 +801,7 @@ form.addEventListener('submit', (event) => {
   const plan: SearchPlan = {
     trip,
     candidates: capped,
-    concurrency: Math.max(1, Math.min(6, Number(concurrencyInput.value) || 2)),
+    concurrency: Math.max(1, Math.min(MAX_CONCURRENCY, Number(concurrencyInput.value) || 2)),
   };
 
   void saveForm();
@@ -838,6 +839,11 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
 });
 
 async function main(): Promise<void> {
+  // The HTML cannot import the constant, so it is written here instead of
+  // trusted to stay in step. A `max` that disagrees with the worker's clamp
+  // offers the user a concurrency the background silently refuses.
+  concurrencyInput.max = String(MAX_CONCURRENCY);
+
   await restoreForm();
   setCategory(ui.category);
 

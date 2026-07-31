@@ -244,7 +244,7 @@ describe('extractOffers', () => {
 
   it('reads a total whose label sits a level further out', () => {
     // The label and the amount are in separate wrapper divs, so neither is the
-    // other's sibling and closest(CARD_SELECTOR) stops at the amount's own div.
+    // other's sibling, so the ancestor climb has to keep going past div.a.
     // Calling this `unknown` split a real total out of the race it belonged in.
     document.body.innerHTML = `
       <main>

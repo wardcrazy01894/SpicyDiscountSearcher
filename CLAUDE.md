@@ -192,10 +192,14 @@ close). Never pass it a URL or a code.
 - No tests for `src/popup/popup.ts`: it runs `el()` lookups at import time, so
   testing it needs the real HTML in jsdom. Its logic is unpinned.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
-  JSON. Remove a vendor from `vendors.ts` without regenerating and the popup
-  dies in `refreshPlan`; the `data` job doesn't assert the ids are known.
+  JSON, so removing a vendor from `vendors.ts` without regenerating would kill
+  the popup in `refreshPlan`. Not actually reachable: `tests/codes.test.ts`
+  asserts every id in the JSON is known, and `test` is a required check, so it
+  goes red before it can go out. Listed here because the _code_ has no guard of
+  its own.
 - Three Hilton codes sit under a company called `Unattributed`, because the
-  workbook cell beside them really was a qualifier rather than an employer.
+  workbook cell beside them really was a qualifier or a note rather than an
+  employer.
   That is now the only reason anything lands there.
 
   It used to be nine, and the other six were a parser bug rather than a
@@ -237,7 +241,9 @@ close). Never pass it a URL or a code.
   three have no codes beside them at all, and the fourth (`Marriott Codes`
   row 74) is a duplicate of `Codes` row 74, whose code `17885` already ships
   under `Harvard`. `Marriott Codes` is largely a copy of `Codes` with a link
-  pasted over one name cell.
+  pasted over one name cell — but not redundant: 13 published codes have
+  `Marriott Codes` as their only source and 8 have `Codes` as theirs, so
+  dropping either loses data.
 
   The reporting exists for the row that is _not_ a duplicate. Until it printed
   them, a URL row that carried the only copy of a code would have vanished
