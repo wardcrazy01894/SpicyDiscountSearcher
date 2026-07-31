@@ -293,3 +293,40 @@ describe('classMatrix', () => {
     expect(compact?.bestQuoteId).toBe('total');
   });
 });
+
+describe('the class matrix and the quotes it is given', () => {
+  // bestOffer picks a quote's headline basis and currency by majority, so a
+  // quote quoting mostly euros sits outside a USD reported bucket and the
+  // popup lists it as "not ranked". Its stray dollar offers, though, are still
+  // offers — and feeding the matrix every quote let one of them hold the
+  // cheapest row. The popup then warned that "another code is cheaper on the
+  // classes these results have in common", naming a code it had just told the
+  // user was not comparable at all.
+  const usdWinner = quote('A', 'ok', [['Economy', 100, 'total', 'USD']]);
+  const euroMajority = quote('B', 'ok', [
+    ['Economy', 90, 'total', 'EUR'],
+    ['Economy', 95, 'total', 'EUR'],
+    ['Economy', 50, 'total', 'USD'],
+  ]);
+  const usdRival = quote('C', 'ok', [['Economy', 110, 'total', 'USD']]);
+  const all = [usdWinner, euroMajority, usdRival];
+
+  it('leaves the euro-majority quote out of the reported bucket', () => {
+    const ranked = comparisonGroups(all)[0]?.quotes.map((q) => q.id) ?? [];
+    expect(ranked).toContain('A');
+    expect(ranked).not.toContain('B');
+  });
+
+  it('lets a stray offer from an unranked quote win a row when given every quote', () => {
+    // Not the desired behaviour — this is the bug, pinned so the fix below has
+    // something to be a fix of.
+    const rows = classMatrix(all, { basis: 'total', currency: 'USD' });
+    expect(rows.find((r) => r.label === 'economy')?.bestQuoteId).toBe('B');
+  });
+
+  it('does not, when given only the quotes that were actually ranked', () => {
+    const ranked = comparisonGroups(all)[0]?.quotes ?? [];
+    const rows = classMatrix(ranked, { basis: 'total', currency: 'USD' });
+    expect(rows.find((r) => r.label === 'economy')?.bestQuoteId).toBe('A');
+  });
+});
