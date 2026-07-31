@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Script } from 'node:vm';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
@@ -81,13 +82,22 @@ for (const relative of contentScripts) {
   const absolute = join(dist, relative);
   if (!existsSync(absolute)) continue;
   const source = readFileSync(absolute, 'utf8');
-  if (/^\s*(?:import|export)\s/m.test(source) || /\bexport\s*\{/.test(source)) {
-    problems.push(`${relative} — contains module syntax; MV3 content scripts must be classic`);
+  // Parse it as a classic script rather than grepping for `import`. A regex
+  // both misses minified forms (`import{a}from"x"` carries no space) and fires
+  // on the word appearing inside a string literal; parsing asks exactly the
+  // question that matters — would Chrome accept this as a content script?
+  try {
+    new Script(source, { filename: relative });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    problems.push(
+      `${relative} — not loadable as a classic script (MV3 forbids modules): ${detail}`,
+    );
   }
-  if (
-    !source.trimStart().startsWith('"use strict"') &&
-    !source.trimStart().startsWith("'use strict'")
-  ) {
+  // Leading comments skipped, so a licence banner does not read as a missing
+  // directive.
+  const body = source.replace(/^\s*(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)\s*/g, '');
+  if (!/^["']use strict["']/.test(body)) {
     problems.push(`${relative} — not in strict mode; check the bundler's output.strict`);
   }
 }
