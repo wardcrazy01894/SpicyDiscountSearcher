@@ -130,14 +130,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # package.json claims 22, 24 and 26; CI ran only 22, so 24 — what local
-      # development actually uses — went untested. 26 still does: no runner
-      # image ships it yet, so adding it here would fail for a reason that is
-      # not about this repo. The build job stays single-version so the uploaded
-      # artifact is deterministic.
+      # Every version package.json claims. CI ran only 22, so 24 — what local
+      # development actually uses — and 26 both went untested while `engines`
+      # advertised them. `setup-node` downloads versions the runner image does
+      # not cache, so an uncached 26 costs a little time, not a failure.
+      # The build job stays single-version so the artifact is deterministic.
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        node: ['22', '24', '26']
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Set up Node
