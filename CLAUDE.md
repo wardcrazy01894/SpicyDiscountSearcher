@@ -33,8 +33,9 @@ encode other people's websites. They will break. Both are deliberately isolated:
   and doesn't care. Every builder is `'best-effort'` today, so the popup says so
   once for the whole list rather than badging every row.
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
-  **No vendor currently defines an `offer` selector**, so in practice the sweep
-  is the only path that runs against real sites and every `ProbeReport` says
+  All nine vendors define a `container` selector, and those do run — they scope
+  the sweep away from nav and footer. **No vendor defines an `offer` selector**,
+  though, so the per-offer branch never fires and every `ProbeReport` says
   `generic-sweep`. The selector path is kept — and tested with an injected
   config — so it works the day someone fills one in.
 - A vendor redesign therefore degrades to a noisier sweep rather than nothing.
@@ -115,8 +116,18 @@ misattribute its failure to the user.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON. Remove a vendor from `vendors.ts` without regenerating and the popup
   dies in `refreshPlan`; the `data` job doesn't assert the ids are known.
-- Nine Hilton codes sit under a company called `Unattributed` because the
-  workbook cell beside them was a margin note. Three of those codes (`LET`,
-  `ME`, `ADD`) are English words `looks_like_code` swallowed from the note
-  itself, and one real employer (`Benjamin Moore`) is dropped entirely because a
-  stray leading character isn't code-shaped.
+- Nine Hilton codes sit under a company called `Unattributed`. Six are there
+  because the workbook cell beside them really was a margin note. The other
+  three are a worse story: row 56 reads `N0394181 / 0000394181 Fiat (Americas
+only)` — an ordinary employer row — but `looks_like_code('FIAT')` is true, so
+  the brand name was eaten as a third code and only the qualifier was left to be
+  the company. **Fiat is not in the database at all**, and `FIAT` ships as a
+  Hilton code.
+- Same root cause, four times: `LET`, `ME` and `ADD` are English words taken off
+  the front of `Let me add a few I've umulated for EMEA…`, and `FIAT` is a brand
+  name. `looks_like_code`'s letters-only branch cannot tell any of them from a
+  real code.
+- Two real employers are lost outright. `Benjamin Moore` (row 24, `à / 560002892
+Benjamin Moore and Company`) is dropped because the stray leading `à` isn't
+  code-shaped, so the row collects no codes at all and is skipped. `Fiat` is
+  lost as described above. Neither can be found by name in the picker.

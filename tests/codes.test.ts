@@ -16,7 +16,7 @@ const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
 describe('the generated code database', () => {
   it('parsed exactly the rows the workbook holds', () => {
-    // Exact, not a floor. Floors of 150/400 against real values of 225/546 let
+    // Exact, not a floor. Floors of 150/400 against real values of 217/546 let
     // extract_codes.py drop a quarter of the workbook and still ship green,
     // which is the regression the comment claimed to guard. The CI data job
     // already pins this JSON byte-for-byte to the workbook, so a legitimate
