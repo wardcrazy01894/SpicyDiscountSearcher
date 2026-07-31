@@ -175,7 +175,7 @@ COMMENT_BLOCK_RE = re.compile(r"<(comment|threadedComment)\b[^>]*>(.*?)</\1>", r
 # The trailing class matters: "-Ada Lovelace." and "-Ada Lovelace (EMEA)" are
 # the same sign-off, and anchoring hard on the name lost both.
 SIGNOFF_RE = re.compile(
-    r"[-~–—]{1,2}[ \t]*([^\W\d_][\w'’\-]*(?:[ \t]+[^\W\d_][\w'’\-]*)+)"
+    r"[-~–—]{1,2}[ \t]*([^\W\d_][\w'’\-]*(?:[ \t]+[^\W\d_][\w'’\-]*)+)"  # noqa: RUF001
     r"[ \t]*[.!,;)\]]*[ \t]*(?:\([^)]*\))?[ \t]*$",
     re.MULTILINE,
 )

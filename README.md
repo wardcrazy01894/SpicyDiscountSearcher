@@ -185,15 +185,17 @@ pip install 'openpyxl==3.1.5' 'pytest==8.4.2'
 python3 -m pytest tests -q
 ```
 
-CI runs four jobs on every PR, and `main` is protected on all four — they must
-pass and the branch must be up to date before merge:
+CI runs five jobs on every PR. `main` is protected on four of them — they must
+pass and the branch must be up to date before merge. The fifth, `test node NN`,
+is the Node version matrix; `test` aggregates it into the single required
+context, so adding a version never means editing branch protection:
 
-| Job                        | What it does                                                                 |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit` |
-| `test`                     | vitest                                                                       |
-| `data`                     | ruff, pytest, then regenerates the code database and fails if it differs     |
-| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook   |
+| Job                        | What it does                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit`      |
+| `test`                     | aggregates `test node 22` and `test node 24` (vitest on each)                     |
+| `data`                     | ruff lint + format, pytest, then regenerates the database and fails if it differs |
+| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook        |
 
 The workbook is a zip of XML, and gitleaks skips it by extension before any
 repo config applies — so the one binary in this repo was the one file no

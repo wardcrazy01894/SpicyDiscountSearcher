@@ -14,18 +14,27 @@ paths = [
   '''src/data/codes\.generated\.json''',
   '''data/source/.*\.xlsx''',
   '''README\.md''',
-  # The lockfile's `integrity` hashes are long base64 and trip the entropy
-  # heuristic. Scoped to this rule rather than listed globally below: a
-  # lockfile is a real place credentials land — an authenticated registry URL,
-  # a leftover `_auth` or `_authToken` line — and a global entry would have
-  # exempted it from the AWS, GitHub-PAT and private-key rules too.
+  # Belt-and-braces only, and worth being honest about: gitleaks' own default
+  # config has a *global* allowlist covering `package-lock.json` (and every
+  # other lockfile), which `useDefault = true` above inherits. So the lockfile
+  # is already exempt from every rule, including AWS keys, GitHub PATs and
+  # private keys — verified against upstream v8.28.0, and by planting an
+  # `AKIA…` string in it and watching gitleaks report the identical string in
+  # a sibling file and not in the lockfile.
+  #
+  # That is a real gap: a lockfile is somewhere credentials land, in an
+  # authenticated registry URL or a leftover `_auth` line. It is not one this
+  # config can close — `useDefault` merges, and there is no mechanism to
+  # subtract a path from an inherited global allowlist. Recorded rather than
+  # papered over.
   '''package-lock\.json''',
 ]
 
 # Everything is scoped to the one rule above, and there is deliberately no
-# global `[allowlist]` block: a global entry exempts a path from *every* rule,
-# which is a much bigger promise than "this file trips the entropy heuristic".
-# `package-lock.json` used to live here and now sits with the rest.
+# global `[allowlist]` block in *this* file: a global entry exempts a path from
+# every rule, which is a much bigger promise than "this file trips the entropy
+# heuristic". `package-lock.json` used to sit in one and now sits with the rest
+# — though see its note above for what the inherited default already does.
 #
 # gitleaks still never reads the .xlsx: it skips binaries by extension before
 # any repo config applies, and a debug run reports "scanned ~0 bytes" for the

@@ -128,9 +128,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # package.json claims 22, 24 and 26; CI ran only 22, so two of the three
-      # supported lanes were untested — including 24, which is what local dev
-      # actually uses. The build job stays single-version so the uploaded
+      # package.json claims 22, 24 and 26; CI ran only 22, so 24 — what local
+      # development actually uses — went untested. 26 still does: no runner
+      # image ships it yet, so adding it here would fail for a reason that is
+      # not about this repo. The build job stays single-version so the uploaded
       # artifact is deterministic.
       fail-fast: false
       matrix:

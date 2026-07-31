@@ -186,7 +186,7 @@ LEADING_CODE_RE = re.compile(r"^(\d[\d-]{5,})\s+(.*)$")
 
 # Separators and decoration left behind once a parenthetical comes out, e.g.
 # "Booz & Co (Now Strategy&) ///".
-NAME_EDGE = " -–—/*.,;:"
+NAME_EDGE = " -–—/*.,;:"  # noqa: RUF001
 
 # Where codes go when the cell beside them was a remark, not an employer. They
 # are still real codes; only the attribution was invented.
@@ -334,7 +334,7 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         if len(rest) == 1 and ACCOUNT_NUMBER_RE.fullmatch(rest[0]):
             SKIPPED.append(f"Hilton Code (no employer): {line[:80]}")
             continue
-        company, note = parse_company(" ".join(rest).strip(" -–—"))
+        company, note = parse_company(" ".join(rest).strip(" -–—"))  # noqa: RUF001
         if not codes or (not company and not note):
             SKIPPED.append(f"Hilton Code: {line[:80]}")
             continue

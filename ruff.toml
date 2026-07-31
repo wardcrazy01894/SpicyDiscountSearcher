@@ -19,14 +19,4 @@ select = [
   "RUF", # ruff's own, incl. mutable class attrs and unused noqa
 ]
 
-ignore = [
-  # These regexes match en dashes and curly apostrophes deliberately — the
-  # workbook and the vendor pages are full of them, and that is the point.
-  # "Did you mean a hyphen?" is exactly wrong here.
-  "RUF001",
-]
 
-[lint.per-file-ignores]
-# Tests load the module under test via importlib and reach into its internals
-# on purpose; that is the point of the file, not an accident.
-"tests/*" = ["S101"]
