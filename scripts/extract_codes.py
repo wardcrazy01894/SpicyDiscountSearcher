@@ -213,7 +213,10 @@ LEADING_TYPOS = {"is"}
 # An account or N-number, as opposed to an employer whose name happens to be
 # code-shaped ("3M", "BP", "UTC"). Six digits matches LEADING_CODE_RE, which
 # makes the same call about the same kind of token.
-ACCOUNT_NUMBER_RE = re.compile(r"[Nn]?\d{6,}")
+# [0-9] rather than \d: \d is Unicode-wide in Python, so Arabic-Indic digits
+# would match here while CODE_RE (ASCII-only) rejects them, and the two need to
+# agree about what a number is.
+ACCOUNT_NUMBER_RE = re.compile(r"[Nn]?[0-9]{6,}")
 
 
 def parse_company(text: str) -> tuple[str | None, str | None]:
@@ -359,18 +362,30 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
 def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
     layout = SHEET_LAYOUTS[name]
     records: list[dict] = []
-    for row in rows[1:]:  # row 0 is the header
+    # enumerate from 2: row 0 is the header, and spreadsheet rows are 1-based,
+    # so this is the number you type into the Name Box to find the row.
+    for index, row in enumerate(rows[1:], start=2):
         raw_company = clean_cell(row[0] if row else None)
         # The 'Corp Codes' header cell doubles as a stray Hilton link; skip
         # anything that isn't a plain company name.
         if not raw_company:
             continue
         if URL_RE.search(raw_company):
-            # Reported, because this is not always just the header: 'Marriott
-            # Codes' row 74 has a URL where the employer should be and a real
-            # starwood code beside it, and that code is lost here. Naming the
-            # row is the difference between a known gap and an unknown one.
-            SKIPPED.append(f"{name} (url in the name column): {raw_company[:80]}")
+            # Reported rather than dropped in silence. Nothing is lost to these
+            # today -- three of the four have no codes beside them, and the
+            # fourth duplicates a row on another sheet -- but a URL row that
+            # carried the only copy of a code would vanish exactly the way
+            # Benjamin Moore did, and the summary would still look healthy.
+            # The count of codes is what tells those two apart, so say it.
+            codes_here = sum(
+                len(parse_cell(clean_cell(row[col]))[0])
+                for col in range(1, len(row))
+                if col - 1 < len(layout) and layout[col - 1]
+            )
+            SKIPPED.append(
+                f"{name} row {index} (url in the name column, "
+                f"{codes_here} code(s) beside it): {raw_company[:60]}"
+            )
             continue
         company, company_note = parse_company(raw_company)
         if not company:

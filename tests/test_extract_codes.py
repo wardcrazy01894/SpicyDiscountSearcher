@@ -198,12 +198,18 @@ class TestParseHiltonSheet:
         [
             # A name that is *entirely* code-shaped left nothing to be the
             # company, so the row was dropped whole — both codes with it.
+            # BP/Dell/Sixt carry no digit, so the letters-only rule alone
+            # recovers them. 3M does carry one, and is the row that needs the
+            # reserved last token — mutation testing showed the others pass
+            # without it, so it has to be in this list for the rule to be
+            # pinned here at all.
+            ("N0001542 / 0232757100 3M", "3M", ["N0001542", "0232757100"]),
             ("N2728493 / 2728493 BP", "BP", ["N2728493", "2728493"]),
             ("N7654328 / 550000750 Dell", "Dell", ["N7654328", "550000750"]),
             ("0002709212 Sixt", "Sixt", ["0002709212"]),
         ],
     )
-    def test_never_consumes_the_last_token(
+    def test_a_code_shaped_name_is_not_eaten(
         self, line: str, company: str, codes: list[str]
     ) -> None:
         records = self.parse(line)
@@ -271,6 +277,30 @@ class TestParseHiltonSheet:
         # list for exactly this reason.
         company = next(iter({r["company"] for r in self.parse(line)}))
         assert company.split()[0] in {"de", "von", "el"}
+
+
+class TestParseGridSheet:
+    def test_reports_a_url_where_the_employer_should_be(self) -> None:
+        # Nothing is lost to these in today's workbook, but a URL row carrying
+        # the only copy of a code would vanish exactly the way Benjamin Moore
+        # did — and the summary would still look healthy. The code count in the
+        # message is what tells a harmless duplicate from a real loss.
+        extract_codes.SKIPPED.clear()
+        rows = [
+            ("Company", "Hilton", "Marriott"),
+            ("http://www.hotelcorporatecodes.com/83/x", "92836100", None),
+        ]
+        records = extract_codes.parse_grid_sheet("Corp Codes", rows)
+        assert records == []
+        assert len(extract_codes.SKIPPED) == 1
+        assert "1 code(s) beside it" in extract_codes.SKIPPED[0]
+        assert "row 2" in extract_codes.SKIPPED[0]
+
+    def test_an_empty_row_is_not_worth_reporting(self) -> None:
+        # Padding at the bottom of a sheet names nothing and never did.
+        extract_codes.SKIPPED.clear()
+        extract_codes.parse_grid_sheet("Corp Codes", [("Company", "Hilton"), (None, None)])
+        assert extract_codes.SKIPPED == []
 
 
 class TestSlugify:

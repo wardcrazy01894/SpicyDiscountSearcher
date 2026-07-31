@@ -154,7 +154,14 @@ misattribute its failure to the user.
   the summary counted only what it kept, which is how `Benjamin Moore` stayed
   lost. Skipped rows now print to stderr and the `data` job shows them.
 
-  Five rows are skipped today. One is a margin note. The other four have a URL
-  where the employer's name should be — and one of those, `Marriott Codes`
-  row 74, has a real starwood code (`17885`) beside it that is still lost. It
-  was lost before too; the difference is that the regeneration now says so.
+  Five rows are skipped today and **nothing is lost to any of them**. One is a
+  margin note. The other four have a URL where the employer's name should be:
+  three have no codes beside them at all, and the fourth (`Marriott Codes`
+  row 74) is a duplicate of `Codes` row 74, whose code `17885` already ships
+  under `Harvard`. `Marriott Codes` is largely a copy of `Codes` with a link
+  pasted over one name cell.
+
+  The reporting exists for the row that is _not_ a duplicate. Until it printed
+  them, a URL row that carried the only copy of a code would have vanished
+  exactly the way `Benjamin Moore` did, and the summary would still have looked
+  healthy.
