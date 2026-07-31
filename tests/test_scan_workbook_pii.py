@@ -157,6 +157,87 @@ def test_a_marker_beats_the_allowlist(tmp_path: Path) -> None:
     assert "non-production host" in problems[0]
 
 
+STOCK_CORE_XML = (
+    '<?xml version="1.0"?>'
+    '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/'
+    '2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    ' xmlns:dcterms="http://purl.org/dc/terms/"'
+    ' xmlns:dcmitype="http://purl.org/dc/dcmitype/"'
+    ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+    "<dc:creator></dc:creator><cp:lastModifiedBy></cp:lastModifiedBy>"
+    "</cp:coreProperties>"
+)
+
+
+def test_a_stock_docprops_part_scans_clean(tmp_path: Path) -> None:
+    """The remediation this script prints is "edit it in Excel", and doing that
+    is what creates docProps/core.xml. Its Dublin Core and XMLSchema namespace
+    declarations are boilerplate, not content — treating them as unrecognised
+    hosts would red-line a required check on a file with nothing wrong with it.
+    """
+    book = make_workbook(tmp_path, {"docProps/core.xml": STOCK_CORE_XML})
+    assert scanner.scan(book) == []
+
+
+def test_a_named_creator_in_that_same_part_is_still_caught(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {"docProps/core.xml": STOCK_CORE_XML.replace("<dc:creator>", "<dc:creator>Ada Lovelace")},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "signoff",
+    ["-Hampton Inn", "-Americas Only", "-Not Valid", "-Corporate Rate", "-Best Western"],
+)
+def test_title_cased_workbook_vocabulary_is_not_a_person(
+    tmp_path: Path, signoff: str
+) -> None:
+    """Capitalisation alone is not enough in a workbook full of employers and
+    hotel brands. One re-capitalised margin note failing a required check is
+    how a gate stops being trusted."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                f"<comments><commentList><comment><text><t>note\n{signoff}</t>"
+                "</text></comment></commentList></comments>"
+            )
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+@pytest.mark.parametrize("signoff", ["-Ada Lovelace.", "-Ada Lovelace (EMEA)", "-Ada Lovelace,"])
+def test_a_signature_with_trailing_punctuation_still_counts(
+    tmp_path: Path, signoff: str
+) -> None:
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                f"<comments><commentList><comment><text><t>note\n{signoff}</t>"
+                "</text></comment></commentList></comments>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_reads_a_single_quoted_display_name(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path, {"xl/persons/person1.xml": "<person displayName='Ada Lovelace'/>"}
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
 def test_ignores_ordinary_margin_notes(tmp_path: Path) -> None:
     """This workbook is full of dashed qualifiers. They are not signatures,
     and flagging them would train everyone to ignore the scanner."""

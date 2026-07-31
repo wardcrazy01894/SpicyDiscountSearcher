@@ -157,8 +157,10 @@ jobs:
         # This unzips it and reads the parts a spreadsheet hides. Stdlib only,
         # so there is nothing to install.
         #
-        # After gitleaks, and always(): the two look for different things, and
-        # a name found in the workbook must not withhold a credential found in
-        # the history. Same reasoning as the audit step in the build job.
-        if: always()
+        # After gitleaks, and !cancelled(): the two look for different things,
+        # and a name found in the workbook must not withhold a credential found
+        # in the history. Same reasoning as the audit step in the build job.
+        # Not always() — PR runs are superseded by design (cancel-in-progress
+        # above), and there is nothing to learn from a run nobody is waiting on.
+        if: '!cancelled()'
         run: python3 scripts/scan_workbook_pii.py
