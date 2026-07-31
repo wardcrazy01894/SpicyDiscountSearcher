@@ -242,6 +242,36 @@ class TestParseHiltonSheet:
         self.parse("NOTE: these have not been confirmed")
         assert len(extract_codes.SKIPPED) == 1
 
+    def test_refuses_to_make_a_company_out_of_an_account_number(self) -> None:
+        # Reserving the last token has to not publish it as an employer when
+        # the row genuinely has none. No such row is in the workbook; the point
+        # is that if one appears it is reported rather than invented.
+        extract_codes.SKIPPED.clear()
+        records = self.parse("N1234567 / 0001234567")
+        assert records == []
+        assert extract_codes.SKIPPED
+
+    def test_an_employer_whose_name_is_code_shaped_is_still_an_employer(self) -> None:
+        # The other side of the same rule, and the reason it tests the account
+        # -number shape rather than looks_like_code: "3M" passes the latter.
+        records = self.parse("N0001542 / 0232757100 3M")
+        assert {r["company"] for r in records} == {"3M"}
+        assert [r["code"] for r in records] == ["N0001542", "0232757100"]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "N1111111 / 0002222222 de Beers Group",
+            "N1111111 / 0002222222 von der Heyden Group",
+            "N1111111 / 0002222222 el Corte Ingles",
+        ],
+    )
+    def test_keeps_the_particles_in_a_real_name(self, line: str) -> None:
+        # A "short lowercase word" rule would eat these. The typo list is a
+        # list for exactly this reason.
+        company = next(iter({r["company"] for r in self.parse(line)}))
+        assert company.split()[0] in {"de", "von", "el"}
+
 
 class TestSlugify:
     def test_collapses_punctuation(self) -> None:

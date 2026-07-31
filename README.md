@@ -110,9 +110,9 @@ _right_, though — change the parser and commit the regenerated output together
 and it stays green — so `tests/test_extract_codes.py` covers the decisions: what
 counts as a code, what counts as a company, and what is somebody's margin note.
 Three codes are filed under `Unattributed` rather than dropped, because the
-workbook cell beside them was a qualifier rather than an employer. It was nine
-until the `Hilton Code` sheet stopped eating employers' names — see the known
-gaps in `CLAUDE.md` for what that recovered.
+workbook cell beside them was a qualifier or a note rather than an employer. It
+was nine until the `Hilton Code` sheet stopped eating employers' names — see the
+known gaps in `CLAUDE.md` for what that recovered.
 
 Swapping the workbook for a live source later means replacing that one script
 and keeping the JSON shape — nothing else knows where the codes came from.

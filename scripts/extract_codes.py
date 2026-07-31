@@ -205,6 +205,16 @@ UNATTRIBUTED = "Unattributed"
 # job shows it and a reviewer can see the number move.
 SKIPPED: list[str] = []
 
+# Words that appear before an employer's name on the Hilton sheet and are not
+# part of it. A list of known typos rather than a shape rule: "short lowercase
+# word" would also strip the particles out of "de Beers" and "el Corte Ingles".
+LEADING_TYPOS = {"is"}
+
+# An account or N-number, as opposed to an employer whose name happens to be
+# code-shaped ("3M", "BP", "UTC"). Six digits matches LEADING_CODE_RE, which
+# makes the same call about the same kind of token.
+ACCOUNT_NUMBER_RE = re.compile(r"[Nn]?\d{6,}")
+
 
 def parse_company(text: str) -> tuple[str | None, str | None]:
     """Split a company cell into a name and whatever qualified it.
@@ -278,18 +288,23 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         tokens = [t for t in re.split(r"[/\s]+", line) if t]
         # A single stray character ahead of the codes is decoration, not data:
         # row 24 reads "à / 560002892 Benjamin Moore and Company", and bailing
-        # on it collected no codes and skipped a real employer. Only one
-        # character, so a genuine short code like "3M" is untouched.
-        if tokens and len(tokens[0]) == 1 and not looks_like_code(tokens[0].upper()):
+        # on it collected no codes and skipped a real employer. CODE_RE needs
+        # two characters, so a one-character token can never be a code and no
+        # further test is needed -- "3M" is two.
+        if tokens and len(tokens[0]) == 1:
             tokens = tokens[1:]
         codes: list[str] = []
         idx = 0
         # Never consume the last token. Every row on this sheet ends with the
-        # employer, so a row whose name is itself code-shaped has nothing left
-        # to be the company and gets dropped wholesale. That is how "3M" -- the
-        # example in this very docstring -- lost both its Hilton codes, along
-        # with "BP" and "Sixt". Reserving the final token costs nothing: a row
-        # that is only codes is not a row this sheet contains.
+        # employer, so a row whose name is *entirely* code-shaped has nothing
+        # left to be the company and gets dropped wholesale. That is how "3M" --
+        # the example in this very docstring -- lost both its Hilton codes.
+        # ("BP", "Dell" and "UPS" were lost the same way but are recovered by
+        # the letters-only rule above, since none of them carries a digit; 3M
+        # does, so it needs this.) Reserving the final token is safe because a
+        # row that is nothing but codes is not a row this sheet contains -- and
+        # if one ever appears, it is reported below rather than published with a
+        # code as its company name.
         while idx < len(tokens) - 1 and looks_like_code(
             tokens[idx].upper(), allow_letters_only=False
         ):
@@ -301,13 +316,26 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
         # also holds bare qualifiers ("(Americas only)") and outright prose,
         # every one of which became its own company in the picker.
         rest = tokens[idx:]
-        # A short all-lowercase word ahead of the name is a typo in the source,
-        # not part of the employer: row 30 reads "... 560047583 is Campbell
-        # Hausfield and Powerex". Employers are capitalised throughout this
-        # sheet, and the length cap keeps a genuine lowercase-initial brand
-        # (eBay, iRobot -- neither is *entirely* lowercase anyway) out of reach.
-        while rest and rest[0].isalpha() and rest[0].islower() and len(rest[0]) <= 3:
+        # One known typo in the source, named rather than described: row 30
+        # reads "... 560047583 is Campbell Hausfield and Powerex". A general
+        # "short lowercase word" rule would also eat the particles in real
+        # names -- "de Beers", "von der Heyden", "el Corte Ingles" -- so the
+        # rule is a list, and adding to it is a decision somebody makes.
+        while rest and rest[0].lower() in LEADING_TYPOS:
             rest = rest[1:]
+        # Nothing but codes: reserving the last token above would otherwise
+        # publish it as the company name and lose it as a code. No such row
+        # exists in the workbook today; this is here so that if one appears it
+        # is reported rather than quietly turned into a fictitious employer.
+        #
+        # Tested against the account-number shape, not against `looks_like_code`
+        # — every real employer here is code-shaped enough to pass that, which
+        # is the whole reason the last token is reserved. "3M" is a company;
+        # "0232757100" is an account. Six digits is the same floor
+        # LEADING_CODE_RE uses for the same judgement.
+        if len(rest) == 1 and ACCOUNT_NUMBER_RE.fullmatch(rest[0]):
+            SKIPPED.append(f"Hilton Code (no employer): {line[:80]}")
+            continue
         company, note = parse_company(" ".join(rest).strip(" -–—"))
         if not codes or (not company and not note):
             SKIPPED.append(f"Hilton Code: {line[:80]}")
@@ -335,7 +363,14 @@ def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
         raw_company = clean_cell(row[0] if row else None)
         # The 'Corp Codes' header cell doubles as a stray Hilton link; skip
         # anything that isn't a plain company name.
-        if not raw_company or URL_RE.search(raw_company):
+        if not raw_company:
+            continue
+        if URL_RE.search(raw_company):
+            # Reported, because this is not always just the header: 'Marriott
+            # Codes' row 74 has a URL where the employer should be and a real
+            # starwood code beside it, and that code is lost here. Naming the
+            # row is the difference between a known gap and an unknown one.
+            SKIPPED.append(f"{name} (url in the name column): {raw_company[:80]}")
             continue
         company, company_note = parse_company(raw_company)
         if not company:

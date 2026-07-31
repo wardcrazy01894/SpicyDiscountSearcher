@@ -125,22 +125,36 @@ misattribute its failure to the user.
   with `looks_like_code`'s letters-only branch **on**, so it ate the first
   words of the employer's own name. `FIAT` came off row 56, `LET`/`ME`/`ADD`
   off the front of a sentence. Every code on that sheet carries a digit, so the
-  branch is now off for that caller and the sheet holds no letters-only code at
-  all. `MH` (company `Explore More`) is the one that remains anywhere, and it
-  comes from a grid sheet, where letters-only codes are legitimate.
+  branch is now off for that caller, and no Hilton-sheet code is letters-only
+  any more. `MH` (company `Explore More`) is the only letters-only **hilton**
+  code left, and it comes from a grid sheet, where letters-only codes are
+  legitimate — there are around a hundred of them across the other vendors
+  (`ACC`, `DTC`, `MMM`), all untouched.
 
-  Same fix recovered thirty employers. Some — `Bank of America`, `Koch
-Industries` — were published under a fragment of their name (`America`,
-  `Industries`), and `Koch` and `Shaw Industries` had _merged_ into a single
-  six-code company belonging to neither. Others were dropped whole: `BP`,
-  `Dell`, `UPS` and `3M` have names that are entirely code-shaped, so the loop
-  consumed the row and left nothing to be the company. The loop now never
-  consumes the last token, since every row on this sheet ends with the
-  employer. `Benjamin Moore` (row 24, `à / 560002892 Benjamin Moore and
-Company`) is back too — a single stray character ahead of the codes is
-  skipped as decoration.
+  Same fix recovered thirty employers. Most had been published under a fragment
+  of their name — `Bank of America` as `America`, and `Koch Industries` and
+  `Shaw Industries` both as `Industries`, _merged_ into a single six-code
+  company belonging to neither. `BP`, `Dell` and `UPS` were dropped whole: their
+  names are entirely code-shaped, so the loop consumed the row and left nothing
+  to be the company. Those three come back from the letters-only rule alone,
+  since none of them carries a digit.
+
+  `3M` is the one that needed more, and it is the example in the function's own
+  docstring. It carries a digit, so the loop still ate it; the loop therefore
+  never consumes the last token, because every row on this sheet ends with the
+  employer. A row that is genuinely nothing but codes is reported rather than
+  published with an account number as its company name — tested against the
+  account-number shape rather than `looks_like_code`, since every real employer
+  here (`3M`, `BP`, `UTC`) passes the latter.
+
+  `Benjamin Moore` (row 24, `à / 560002892 Benjamin Moore and Company`) is back
+  too — a single stray character ahead of the codes is skipped as decoration.
 
 - Every `continue` in `extract_codes.py` used to drop a row in silence while
   the summary counted only what it kept, which is how `Benjamin Moore` stayed
-  lost. Skipped rows now print to stderr and the `data` job shows them. One row
-  is skipped today, and it really is a margin note.
+  lost. Skipped rows now print to stderr and the `data` job shows them.
+
+  Five rows are skipped today. One is a margin note. The other four have a URL
+  where the employer's name should be — and one of those, `Marriott Codes`
+  row 74, has a real starwood code (`17885`) beside it that is still lost. It
+  was lost before too; the difference is that the regeneration now says so.
