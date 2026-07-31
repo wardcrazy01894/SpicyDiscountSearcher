@@ -9,6 +9,7 @@ import {
   cheapest,
   classMatrix,
   estimatedTotal,
+  primaryGroup,
   rankQuotes,
   savings,
   unrankedQuotes,
@@ -18,6 +19,7 @@ import type {
   Candidate,
   Category,
   PriceBasis,
+  ProbeReport,
   Quote,
   QuoteFailure,
   RunState,
@@ -368,26 +370,80 @@ function describeFailure(quote: Quote): string | null {
   return failure && Object.hasOwn(FAILURE_TEXT, failure) ? FAILURE_TEXT[failure] : null;
 }
 
-/** "landed /en/home · 0 offers · generic sweep" — what the probe actually saw. */
+/**
+ * How long the vendor took, whether or not it said anything.
+ *
+ * Kept out of evidenceLine because it used to live inside it: a quote with no
+ * report rendered no line at all, so `probe-timeout` — the one failure where
+ * the elapsed time is the whole story — showed neither. The timing is
+ * collected for every quote; only the rendering was conditional.
+ *
+ * Clamped and fixed-width: a clock that steps backwards mid-run would
+ * otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
+ */
+function durationText(quote: Quote): string {
+  if (!quote.startedAt || !quote.finishedAt) return '';
+  return `${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`;
+}
+
+function branchText(path: ProbeReport['path']): string {
+  if (path === 'generic-sweep') return 'generic sweep';
+  if (path === 'vendor-selectors') return 'vendor selectors';
+  // Deliberately two possibilities, not one. All the background knows is that
+  // it had no permission to read the tab's URL, which is equally true of a
+  // redirect off the vendor's site and of a load that never committed — an
+  // `about:blank` that hung, or a `chrome-error://` page after a DNS or TLS
+  // failure. Naming only the first would be the same mistake as the "never
+  // navigated" it replaced, pointing the opposite way.
+  if (path === 'left-our-origins') return 'off the vendor’s site, or never got there';
+  // The probe never answered, so the background described the tab instead.
+  return 'no answer from the page';
+}
+
+/** "landed /en/home · 0 offers · generic sweep · 4.2s" — what the probe saw. */
 function evidenceLine(quote: Quote): HTMLElement | null {
   const report = quote.report;
-  if (!report) return null;
+  const took = durationText(quote);
+  // A duration with no report is still worth showing — that is exactly the
+  // timeout case, where "45.0s" is the finding. Only for a quote that actually
+  // ran out of time, though: "gave up after 3.2s" on a row the user cancelled
+  // is both wrong and rude.
+  if (!report) {
+    if (!took || quote.failure !== 'probe-timeout') return null;
+    const bare = document.createElement('p');
+    bare.className = 'evidence';
+    bare.textContent = `gave up after ${took}`;
+    return bare;
+  }
   const line = document.createElement('p');
   line.className = 'evidence';
   const plural = report.offerCount === 1 ? '' : 's';
-  const branch =
-    report.path === 'generic-sweep'
-      ? 'generic sweep'
-      : report.path === 'vendor-selectors'
-        ? 'vendor selectors'
-        : 'unknown branch';
-  // Clamped and fixed-width: a clock that steps backwards mid-run would
-  // otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
-  const took =
-    quote.startedAt && quote.finishedAt
-      ? ` · ${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`
-      : '';
-  line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}${took}`;
+  const observed = report.path === 'not-reached' || report.path === 'left-our-origins';
+  const landed = report.finalPath
+    ? `landed ${report.finalPath}`
+    : report.path === 'left-our-origins'
+      ? 'no permission to read this tab’s address'
+      : 'no path to show';
+  const counted = observed ? '' : ` · ${report.offerCount} offer${plural}`;
+  line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;
+  if (report.title) line.title = report.title;
+  return line;
+}
+
+/**
+ * "the page answered after the deadline" — evidence that arrived too late.
+ *
+ * Its own line rather than folded into the one above, because it contradicts
+ * the failure text sitting beside it: the row says nothing came back, and this
+ * says something did. That contradiction is the diagnosis.
+ */
+function lateAnswerLine(quote: Quote): HTMLElement | null {
+  const report = quote.lateReport;
+  if (!report) return null;
+  const line = document.createElement('p');
+  line.className = 'evidence is-late';
+  const plural = report.offerCount === 1 ? '' : 's';
+  line.textContent = `the page did answer, just after the deadline — ${report.finalPath} · ${report.offerCount} offer${plural} · ${branchText(report.path)}`;
   if (report.title) line.title = report.title;
   return line;
 }
@@ -465,6 +521,8 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   if (quote.status !== 'ok' || quote.suspect) {
     const evidence = evidenceLine(quote);
     if (evidence) item.append(evidence);
+    const late = lateAnswerLine(quote);
+    if (late) item.append(late);
   }
 
   // The failure that does not look like one: a deep link that missed its search
@@ -557,7 +615,16 @@ function renderRun(state: RunState | null): void {
     // different class of car than the others did. Restricted to the bucket the
     // ranking came from: a matrix built from a daily rate on one side and a
     // trip total on the other cannot say anything about fairness.
-    const shared = classMatrix(state.quotes, {
+    //
+    // Built from the ranked quotes, not from every quote. bestOffer picks a
+    // quote's headline basis and currency by majority, so a quote whose offers
+    // are mostly in euros sits outside the reported bucket and is listed as
+    // not ranked — while its stray dollar offers still entered this matrix and
+    // could hold the cheapest row. The popup then warned that "another code is
+    // cheaper on the classes these results have in common", naming a code it
+    // had just told the user was not comparable.
+    const ranked = primaryGroup(state.quotes)?.quotes ?? [];
+    const shared = classMatrix(ranked, {
       basis: spread.basis,
       currency: spread.currency,
     }).filter((row) => row.amounts.size > 1);

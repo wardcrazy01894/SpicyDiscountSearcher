@@ -505,3 +505,293 @@ describe('bestOffer', () => {
     expect(best?.amount).toBe(210);
   });
 });
+
+describe('numbers that are not prices for anything bookable', () => {
+  it('does not let a tax line become the page price, however it is wrapped', () => {
+    // The whole basis machinery cannot save you from a number that was never a
+    // rate. "Total taxes and fees" carries the word `total`, so it was tagged
+    // `total`, and being the cheapest number on the most trusted basis it
+    // became the headline — a hotel reported at $57.20, "88% under the
+    // priciest comparable code", from a page whose real rate was $189/night.
+    document.body.innerHTML = `
+      <main>
+        <div class="hotel">
+          <h3>Hilton Chicago</h3>
+          <div class="rate"><span>$189</span> <span>/night</span></div>
+          <div class="fees">Total taxes and fees: <span>$57.20</span></div>
+        </div>
+      </main>`;
+    const offers = extractOffers(document, 'hilton');
+    expect(offers.map((o) => o.amount)).not.toContain(57.2);
+    expect(bestOffer(offers)?.amount).toBe(189);
+  });
+
+  it('does not let a savings line become the page price', () => {
+    document.body.innerHTML = `
+      <main>
+        <div class="card">
+          <h3>Midsize</h3>
+          <div class="t">Estimated total $412.00</div>
+          <div class="s">Total savings $50.00</div>
+        </div>
+      </main>`;
+    const offers = extractOffers(document, 'hertz');
+    expect(offers.map((o) => o.amount)).not.toContain(50);
+    expect(bestOffer(offers)?.amount).toBe(412);
+  });
+
+  it('keeps a real total that merely mentions its components', () => {
+    // The discriminator is which noun leads the line, not whether the words
+    // "taxes and fees" appear anywhere in it. Rejecting on the words alone
+    // would throw away the most valuable number on the page.
+    document.body.innerHTML = `
+      <main><div class="card"><h3>Economy</h3>
+        <div class="t">Estimated total $412.00 including taxes and fees</div>
+      </div></main>`;
+    const offers = extractOffers(document, 'hertz');
+    expect(offers).toHaveLength(1);
+    expect(offers[0]?.amount).toBe(412);
+    expect(offers[0]?.basis).toBe('total');
+  });
+
+  it('reads a total whose wording runs past the old length cap', () => {
+    // 47 characters. At a 40-character cap this element was skipped, the page
+    // reported `probe-empty`, and which vendors reached the ranking depended
+    // on how verbose their card copy happened to be.
+    const line = 'Estimated total $412.00 including taxes and fees';
+    expect(line.length).toBeGreaterThan(40);
+    document.body.innerHTML = `<main><div class="t">${line}</div></main>`;
+    expect(extractOffers(document, 'hertz').map((o) => o.amount)).toEqual([412]);
+  });
+});
+
+describe('prices split across elements', () => {
+  it('reads a rate whose unit sits in a sibling span', () => {
+    // The fast path returned textContent whenever nothing struck-through sat
+    // below — which is almost every element — so the boundary space this is
+    // all for was inserted only by accident. "$132.00per night" classified
+    // `unknown`, and a nightly rate landed in the bucket with trip totals.
+    document.body.innerHTML = '<main><div class="rate">$132.00<span>per night</span></div></main>';
+    const offers = extractOffers(document, 'hilton');
+    expect(offers[0]?.basis).toBe('per-day');
+  });
+
+  it('reads it the same way when a was-price is present', () => {
+    // Same markup, same rate, plus an unrelated struck-through price. The old
+    // code gave two different answers for the identical number depending on
+    // whether this element existed.
+    document.body.innerHTML =
+      '<main><div class="rate"><s>$180</s>$132.00<span>per night</span></div></main>';
+    const offers = extractOffers(document, 'hilton');
+    expect(offers[0]?.basis).toBe('per-day');
+    expect(offers.map((o) => o.amount)).not.toContain(180);
+  });
+
+  it('still refuses to join two numbers into a bigger one', () => {
+    document.body.innerHTML = '<main><div class="p">$<span>12</span>,<span>500</span></div></main>';
+    expect(extractOffers(document, 'hertz').map((o) => o.amount)).toEqual([12500]);
+  });
+});
+
+describe('currencies that are not US dollars', () => {
+  it.each([
+    ['CA$150.00', 'CAD'],
+    ['C$150.00', 'CAD'],
+    ['A$150.00', 'AUD'],
+    ['NZ$150.00', 'NZD'],
+  ])('reads %s as %s rather than USD', (text, currency) => {
+    // A Canadian dollar filed as USD buckets with real US prices and wins on
+    // face value — a cross-currency comparison arriving inside a single
+    // bucket, where the guard against exactly that cannot see it.
+    expect(findPrices(text)).toEqual([{ amount: 150, currency }]);
+  });
+
+  it('still reads a plain dollar as USD', () => {
+    expect(findPrices('$150.00')).toEqual([{ amount: 150, currency: 'USD' }]);
+    expect(findPrices('US$150.00')).toEqual([{ amount: 150, currency: 'USD' }]);
+  });
+});
+
+describe('labels', () => {
+  it('does not give a promo banner the first card class', () => {
+    // The outward walk ended at the results container, and headingText()
+    // querySelectors whatever it is handed — so the banner inherited the first
+    // card's <h3>. That price then beat every real rate AND looked comparable
+    // to them, so classMatrix saw the winner leading its own class and said
+    // nothing. A wrong label defeats the check meant to catch a wrong winner.
+    document.body.innerHTML = `
+      <main>
+        <div class="promo">Weekend deals from $19/day</div>
+        <div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>
+        <div class="card"><h3>Midsize</h3><div>$34.99 per day</div></div>
+      </main>`;
+    const offers = extractOffers(document, 'hertz');
+    const banner = offers.find((o) => o.amount === 19);
+    expect(banner).toBeDefined();
+    expect(banner?.label).toBeNull();
+    // The real cards keep theirs.
+    expect(offers.find((o) => o.amount === 29.99)?.label).toBe('Economy');
+    expect(offers.find((o) => o.amount === 34.99)?.label).toBe('Midsize');
+  });
+
+  it('still lets a card inherit a heading from its own wrapper', () => {
+    // The documented, accepted limit — a heading one level up is still this
+    // card's heading. Only the container itself is out of bounds.
+    document.body.innerHTML = `
+      <main><div class="card">
+        <div class="hdr"><h3>Economy</h3></div>
+        <div class="p">$29.99 per day</div>
+      </div></main>`;
+    expect(extractOffers(document, 'hertz')[0]?.label).toBe('Economy');
+  });
+});
+
+describe('fee lines and the prices that live beside them', () => {
+  const only = (html: string): string[] => {
+    document.body.innerHTML = `<main><div class="t">${html}</div></main>`;
+    return extractOffers(document, 'hertz').map((o) => `${o.amount}/${o.basis}`);
+  };
+
+  it.each([
+    'Total taxes and fees: $57.20',
+    'Taxes and fees $57.20',
+    'Total savings $50.00',
+    'Resort fee $35.00',
+  ])('drops %s', (line) => {
+    expect(only(line)).toEqual([]);
+  });
+
+  it.each([
+    // Every one of these leads with a fee noun and quotes a real rate. An
+    // earlier version of this fix rejected the lot, which is worse than the bug
+    // it was fixing: a lost price drops the vendor out of the race silently.
+    ['Fees included — $412 total', '412/total'],
+    ['Fees and taxes included: $412.00', '412/unknown'],
+    ['Deposit waived · $210 total', '210/total'],
+    ['Savings Rate $89/day', '89/per-day'],
+    ['Discount rate $89.00/day', '89/per-day'],
+    ['Estimated total $412.00 including taxes and fees', '412/total'],
+  ])('keeps the real price in %s', (line, expected) => {
+    expect(only(line)).toEqual([expected]);
+  });
+
+  it('suppresses a savings badge sharing an element with a total', () => {
+    // Cannot be split by text alone, and emitting both makes the $50 a `total`
+    // that wins outright. Losing the $412 costs a vendor its place in the race;
+    // keeping the $50 crowns the wrong one.
+    expect(only('Save $50 · $412 total')).toEqual([]);
+  });
+
+  it('does not let an ambiguous wrapper emit a daily rate as the headline', () => {
+    // Both numbers classify `unknown`, and `unknown` outranks `per-day`, so the
+    // $29 became the page price and bucketed with real trip totals.
+    document.body.innerHTML = `<main><div class="card">
+      <span>Economy</span> $29 per day, estimated total $210 for 3 days
+    </div></main>`;
+    expect(bestOffer(extractOffers(document, 'hertz'))).toBeNull();
+  });
+
+  it('still finds the rate when the fee sits in its own element', () => {
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189<span>/night</span></div>
+      <div class="fees">Taxes and fees: <span>$57.20</span></div>
+    </div></main>`;
+    const offers = extractOffers(document, 'hilton');
+    expect(offers.map((o) => o.amount)).toEqual([189]);
+    expect(bestOffer(offers)?.amount).toBe(189);
+  });
+});
+
+describe('an inclusive word after the price is not a licence', () => {
+  const beside = (fee: string): string | null => {
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189.00 per night</div>
+      <div class="fees">${fee}</div>
+    </div></main>`;
+    const best = bestOffer(extractOffers(document, 'hilton'));
+    return best ? `${best.amount}/${best.basis}` : null;
+  };
+
+  it.each([
+    // Amenity copy mentions "free" and "included" constantly. Tested against
+    // the whole string, the inclusive rule was an escape hatch wide enough to
+    // undo the fix — and worse than before the cap was raised, because these
+    // elements used to be dropped for length instead.
+    'Total taxes and fees $57.20 (VAT included)',
+    'Taxes and fees $57.20 · Free cancellation',
+    'Taxes and fees: $57.20. Free cancellation',
+    'Taxes and fees $57.20, breakfast included',
+  ])('keeps the rate as the headline beside %s', (fee) => {
+    // The stronger property, and the one the code delivers: the fee is absent
+    // from the offer list, not merely outranked by a cheaper real rate.
+    document.body.innerHTML = `<main><div class="card">
+      <h3>Deluxe King</h3>
+      <div class="rate">$189.00 per night</div>
+      <div class="fees">${fee}</div>
+    </div></main>`;
+    const offers = extractOffers(document, 'hilton');
+    expect(offers.map((o) => o.amount)).toEqual([189]);
+    expect(beside(fee)).toBe('189/per-day');
+  });
+
+  it.each([
+    ['Fees included — $412 total', '412/total'],
+    ['Fees and taxes included: $412.00', '412/unknown'],
+    ['Deposit waived · $210 total', '210/total'],
+  ])('still keeps %s, where the inclusive word comes first', (line, expected) => {
+    document.body.innerHTML = `<main><div class="t">${line}</div></main>`;
+    expect(extractOffers(document, 'hertz').map((o) => `${o.amount}/${o.basis}`)).toEqual([
+      expected,
+    ]);
+  });
+
+  it.each(['Plus taxes and fees $57.20', 'Additional fees $57.20'])(
+    'recognises %s as a fee line',
+    (line) => {
+      document.body.innerHTML = `<main><div class="t">${line}</div></main>`;
+      expect(extractOffers(document, 'hertz')).toEqual([]);
+    },
+  );
+});
+
+describe('model names are not money', () => {
+  it.each([
+    '2024 Cadillac Escalade',
+    '2023 Audi Q5 or similar',
+    'Seats 5 Audi A3',
+    '5 audio inputs',
+    '2022 Cadillac CT5',
+  ])('finds no price in %s', (text) => {
+    // On a car-rental extension `CAD` is the start of Cadillac and `AUD` of
+    // Audi, and the suffix branch reads `(number) (currency)`. Unbounded, the
+    // model year became a price — and because `unknown` outranks `per-day` in
+    // BASIS_PREFERENCE, it became the *headline* price, beating every real
+    // rate on the page. Every vendor lists model years, so every quote landed
+    // in the same phantom CAD bucket and the race was decided on model years.
+    expect(findPrices(text)).toEqual([]);
+  });
+
+  it.each([
+    ['412 USD', 'USD'],
+    ['USD 412', 'USD'],
+    ['412 CAD', 'CAD'],
+    ['CAD 412', 'CAD'],
+    ['412 AUD', 'AUD'],
+  ])('still reads %s as a standalone code', (text, currency) => {
+    expect(findPrices(text)).toEqual([{ amount: 412, currency }]);
+  });
+
+  it('does not let a model year outrank a real rate on the page', () => {
+    document.body.innerHTML = `
+      <main>
+        <div class="card"><h3>2024 Cadillac Escalade</h3><div>$89.00 per day</div></div>
+        <div class="card"><h3>2023 Audi Q5 or similar</h3><div>$95.00 per day</div></div>
+      </main>`;
+    const offers = extractOffers(document, 'hertz');
+    expect(offers.map((o) => o.amount).sort((a, b) => a - b)).toEqual([89, 95]);
+    expect(bestOffer(offers)?.amount).toBe(89);
+    expect(bestOffer(offers)?.currency).toBe('USD');
+  });
+});

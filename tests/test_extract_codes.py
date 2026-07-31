@@ -160,6 +160,149 @@ class TestParseCompany:
         assert extract_codes.parse_company("Booz & Co (Now Strategy&) ///")[0] == "Booz & Co"
 
 
+class TestParseHiltonSheet:
+    """The 'Hilton Code' sheet had no tests, which is how it shipped 24 codes
+    that were words cut off the front of employers' names.
+
+    Every row here is "N-number / account-number Employer", so every real code
+    on this sheet carries a digit. That is the property the parser leans on.
+    """
+
+    @staticmethod
+    def parse(*lines: str) -> list[dict]:
+        return extract_codes.parse_hilton_sheet([(line,) for line in lines])
+
+    def test_reads_the_ordinary_shape(self) -> None:
+        records = self.parse("N0001542 / 0232757100 3M")
+        assert [r["code"] for r in records] == ["N0001542", "0232757100"]
+        assert {r["company"] for r in records} == {"3M"}
+
+    def test_does_not_eat_a_multi_word_employer(self) -> None:
+        # "Bank of America" shipped as codes BANK and OF, under a company
+        # called "America".
+        records = self.parse("N0710081 / 0052752100 Bank of America")
+        assert [r["code"] for r in records] == ["N0710081", "0052752100"]
+        assert {r["company"] for r in records} == {"Bank of America"}
+
+    def test_keeps_two_employers_apart(self) -> None:
+        # Both collapsed to a company called "Industries" and merged into one
+        # six-code entry belonging to neither.
+        records = self.parse(
+            "N0870150 / 0560001396 Koch Industries",
+            "N9886588 / 0550000139 Shaw Industries",
+        )
+        assert {r["company"] for r in records} == {"Koch Industries", "Shaw Industries"}
+
+    @pytest.mark.parametrize(
+        ("line", "company", "codes"),
+        [
+            # A name that is *entirely* code-shaped left nothing to be the
+            # company, so the row was dropped whole — both codes with it.
+            # BP/Dell/Sixt carry no digit, so the letters-only rule alone
+            # recovers them. 3M does carry one, and is the row that needs the
+            # reserved last token — mutation testing showed the others pass
+            # without it, so it has to be in this list for the rule to be
+            # pinned here at all.
+            ("N0001542 / 0232757100 3M", "3M", ["N0001542", "0232757100"]),
+            ("N2728493 / 2728493 BP", "BP", ["N2728493", "2728493"]),
+            ("N7654328 / 550000750 Dell", "Dell", ["N7654328", "550000750"]),
+            ("0002709212 Sixt", "Sixt", ["0002709212"]),
+        ],
+    )
+    def test_a_code_shaped_name_is_not_eaten(
+        self, line: str, company: str, codes: list[str]
+    ) -> None:
+        records = self.parse(line)
+        assert [r["code"] for r in records] == codes
+        assert {r["company"] for r in records} == {company}
+
+    def test_recovers_a_row_behind_a_stray_character(self) -> None:
+        # Row 24: the leading "à" is not code-shaped, so the loop collected
+        # nothing and a real employer was skipped in silence.
+        records = self.parse("à / 560002892 Benjamin Moore and Company")
+        assert [r["code"] for r in records] == ["560002892"]
+        assert {r["company"] for r in records} == {"Benjamin Moore and Company"}
+
+    def test_drops_a_lowercase_typo_before_the_name(self) -> None:
+        records = self.parse("N2687918 / 560047583 is Campbell Hausfield and Powerex")
+        assert {r["company"] for r in records} == {"Campbell Hausfield and Powerex"}
+
+    def test_still_refuses_a_margin_note(self) -> None:
+        # This one produced three codes — LET, ME and ADD — off the front of a
+        # sentence. It is a note, so it should yield nothing at all.
+        extract_codes.SKIPPED.clear()
+        records = self.parse("Let me add a few I've umulated for EMEA. Again, YMMV.")
+        assert records == []
+        assert extract_codes.SKIPPED, "a dropped row must not be dropped silently"
+
+    def test_a_qualifier_still_lands_under_unattributed(self) -> None:
+        # Row 56 is a real employer row — "Fiat (Americas only)" — and Fiat was
+        # absent from the database entirely because FIAT was eaten as a code.
+        records = self.parse("N0394181 / 0000394181 Fiat (Americas only)")
+        assert [r["code"] for r in records] == ["N0394181", "0000394181"]
+        assert {r["company"] for r in records} == {"Fiat"}
+        assert all(r["note"] == "Americas only" for r in records)
+
+    def test_records_what_it_skips(self) -> None:
+        extract_codes.SKIPPED.clear()
+        self.parse("NOTE: these have not been confirmed")
+        assert len(extract_codes.SKIPPED) == 1
+
+    def test_refuses_to_make_a_company_out_of_an_account_number(self) -> None:
+        # Reserving the last token has to not publish it as an employer when
+        # the row genuinely has none. No such row is in the workbook; the point
+        # is that if one appears it is reported rather than invented.
+        extract_codes.SKIPPED.clear()
+        records = self.parse("N1234567 / 0001234567")
+        assert records == []
+        assert extract_codes.SKIPPED
+
+    def test_an_employer_whose_name_is_code_shaped_is_still_an_employer(self) -> None:
+        # The other side of the same rule, and the reason it tests the account
+        # -number shape rather than looks_like_code: "3M" passes the latter.
+        records = self.parse("N0001542 / 0232757100 3M")
+        assert {r["company"] for r in records} == {"3M"}
+        assert [r["code"] for r in records] == ["N0001542", "0232757100"]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "N1111111 / 0002222222 de Beers Group",
+            "N1111111 / 0002222222 von der Heyden Group",
+            "N1111111 / 0002222222 el Corte Ingles",
+        ],
+    )
+    def test_keeps_the_particles_in_a_real_name(self, line: str) -> None:
+        # A "short lowercase word" rule would eat these. The typo list is a
+        # list for exactly this reason.
+        company = next(iter({r["company"] for r in self.parse(line)}))
+        assert company.split()[0] in {"de", "von", "el"}
+
+
+class TestParseGridSheet:
+    def test_reports_a_url_where_the_employer_should_be(self) -> None:
+        # Nothing is lost to these in today's workbook, but a URL row carrying
+        # the only copy of a code would vanish exactly the way Benjamin Moore
+        # did — and the summary would still look healthy. The code count in the
+        # message is what tells a harmless duplicate from a real loss.
+        extract_codes.SKIPPED.clear()
+        rows = [
+            ("Company", "Hilton", "Marriott"),
+            ("http://www.hotelcorporatecodes.com/83/x", "92836100", None),
+        ]
+        records = extract_codes.parse_grid_sheet("Corp Codes", rows)
+        assert records == []
+        assert len(extract_codes.SKIPPED) == 1
+        assert "1 code(s) beside it" in extract_codes.SKIPPED[0]
+        assert "row 2" in extract_codes.SKIPPED[0]
+
+    def test_an_empty_row_is_not_worth_reporting(self) -> None:
+        # Padding at the bottom of a sheet names nothing and never did.
+        extract_codes.SKIPPED.clear()
+        extract_codes.parse_grid_sheet("Corp Codes", [("Company", "Hilton"), (None, None)])
+        assert extract_codes.SKIPPED == []
+
+
 class TestSlugify:
     def test_collapses_punctuation(self) -> None:
         assert extract_codes.slugify("Ernst & Young") == "ernst-young"
