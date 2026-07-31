@@ -531,3 +531,372 @@ describe('a run the browser interrupted', () => {
     expect(chromeMock.session.has('runWindow')).toBe(false);
   });
 });
+
+describe('a quote that timed out', () => {
+  it('describes the tab the probe never reported on', async () => {
+    // probe-timeout is the commonest failure and was the only one carrying no
+    // evidence at all: the popup suppresses the whole evidence line when there
+    // is no report, so the row said "no answer before the deadline" and
+    // nothing else. A consent interstitial, a redirect to a country picker and
+    // a page that never finished loading were indistinguishable — while the
+    // background held a tab handle that answers the question.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    const tab = chromeMock.tabs.get(tabId)!;
+    tab.url = 'https://www.hertz.com/rentacar/privacy-consent?redirect=x';
+    tab.title = 'Before you continue';
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout');
+    expect(quote?.report?.path).toBe('not-reached');
+    expect(quote?.report?.finalPath).toBe('/rentacar/privacy-consent');
+    expect(quote?.report?.title).toBe('Before you continue');
+  });
+
+  it('keeps the query string out of the report it builds', async () => {
+    // Same rule the probe's own report follows: the query carries the discount
+    // code and the user's itinerary, and this one is built from a tab url that
+    // has both.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.get(tabId)!.url = 'https://www.hertz.com/results?cdp=H1&pickup=SFO';
+
+    await settle(60_000);
+
+    const report = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout')?.report;
+    expect(report?.finalPath).toBe('/results');
+    expect(JSON.stringify(report)).not.toContain('H1');
+    expect(JSON.stringify(report)).not.toContain('SFO');
+  });
+
+  it('still settles when the tab has already gone', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    // The tab vanishes before the deadline — the background has nothing left
+    // to read, and must not turn that into an unhandled rejection.
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.delete(tabId);
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.finishedAt).toBeDefined();
+    expect(quote?.report).toBeUndefined();
+  });
+});
+
+describe('an answer that arrives after the deadline', () => {
+  it('records it instead of dropping it on the floor', async () => {
+    // The probe's loop runs while Date.now() < deadline, so it can begin its
+    // final extract one millisecond inside the window and spend arbitrary time
+    // there. That reply used to be discarded entirely — offers, best price and
+    // report — while the quote kept a probe-timeout saying nothing came back.
+    // "The vendor never answered" and "the deadline is too short" need
+    // opposite fixes.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+
+    const before = (await getState())?.quotes[0];
+    expect(before?.failure).toBe('probe-timeout');
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, offerCount: 1 },
+    });
+    await settle();
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.lateReport?.offerCount).toBe(1);
+    expect(quote?.lateReport?.finalPath).toBe(REPORT.finalPath);
+  });
+
+  it('does not resurrect the quote or rewrite its verdict', async () => {
+    // The evidence is worth keeping; the result is not. Accepting a late
+    // payload as the answer would let a page that missed its deadline win a
+    // race the user already saw settled.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+    const finishedAt = (await getState())?.quotes[0]?.finishedAt;
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: REPORT,
+    });
+    await settle();
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.failure).toBe('probe-timeout');
+    expect(quote?.status).toBe('no-price');
+    expect(quote?.best).toBeNull();
+    expect(quote?.offers).toEqual([]);
+    expect(quote?.finishedAt).toBe(finishedAt);
+  });
+});
+
+describe('the orphan-window reaper', () => {
+  it('forgets an id whose window is genuinely gone', async () => {
+    // The ordinary case: the user closed it themselves. Holding the id would
+    // make every future worker retry a window that does not exist.
+    chromeMock = installChromeMock();
+    chromeMock.session.set('runWindow', 9999);
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chromeMock.session.has('runWindow')).toBe(false);
+  });
+
+  it('keeps the id of a window it could not close', async () => {
+    // The key used to be dropped before the close was even attempted, so a
+    // failed close left a window nothing could ever find again — it is
+    // minimised and holds a new-tab page, so the user cannot see it to close
+    // it either. The stored id is the only handle on it.
+    chromeMock = installChromeMock();
+    const orphan = (await chrome.windows.create({}))!.id!;
+    chromeMock.session.set('runWindow', orphan);
+    // Still open, but refusing to close — chrome does this when the window is
+    // in a state it will not tear down.
+    const windows = chrome.windows as unknown as { remove: (id: number) => Promise<void> };
+    windows.remove = () => Promise.reject(new Error('cannot remove window'));
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chromeMock.session.get('runWindow')).toBe(orphan);
+    expect(chromeMock.windows.has(orphan)).toBe(true);
+  });
+});
+
+describe('a timed-out tab the extension cannot see', () => {
+  it('says so, rather than claiming the tab never navigated', async () => {
+    // The manifest grants no `tabs` permission — PR #5 dropped it — so
+    // chrome omits url and title for a tab whose current URL is not one of
+    // our nine vendor hosts. An off-origin redirect is therefore invisible,
+    // and it is *also* exactly when the content script stops running, i.e. a
+    // leading cause of probe-timeout. Reporting "never navigated" there was a
+    // confident wrong answer in the case this whole feature exists for.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    const tab = chromeMock.tabs.get(tabId)!;
+    tab.url = 'https://consent.example-cdn.com/gate?next=hertz';
+    tab.title = 'Before you continue';
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout');
+    expect(quote?.report?.path).toBe('left-our-origins');
+    expect(quote?.report?.finalPath).toBe('');
+    // Nothing invented from a field chrome did not give us.
+    expect(quote?.report?.title).toBe('');
+  });
+
+  it('still reads a tab that stayed on the vendor', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    const tab = chromeMock.tabs.get(tabId)!;
+    tab.url = 'https://www.hertz.com/rentacar/privacy-consent?x=1';
+    tab.title = 'Before you continue';
+
+    await settle(60_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout');
+    expect(quote?.report?.path).toBe('not-reached');
+    expect(quote?.report?.finalPath).toBe('/rentacar/privacy-consent');
+  });
+});
+
+describe('what a content script is allowed to claim', () => {
+  it('refuses a forged "the background observed this" branch', async () => {
+    // Same doctrine as PROBE_FAILURES: `not-reached` and `left-our-origins`
+    // are the background's own knowledge, built from the tab after the probe
+    // went silent. A page that could send one would be forging the
+    // background's testimony, and the popup would print "no answer from the
+    // page" about a page that had just answered.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'not-reached' },
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.report?.path).toBe('generic-sweep');
+    // The observations themselves are still the probe's, and still kept.
+    expect(quote?.report?.finalPath).toBe(REPORT.finalPath);
+    expect(quote?.report?.offerCount).toBe(REPORT.offerCount);
+  });
+
+  it('keeps a branch it is allowed to claim', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'vendor-selectors' },
+    });
+    await settle(1_000);
+
+    expect((await getState())?.quotes[0]?.report?.path).toBe('vendor-selectors');
+  });
+});
+
+describe('the reaper and a run that starts underneath it', () => {
+  it('does not delete a window id that changed while it was closing', async () => {
+    // The interleave: the reaper reads orphan id 3 and calls windows.remove,
+    // which is real IPC and takes tens of ms. During it a run starts, creates
+    // its own window, and writes that id to the same key. A bare delete
+    // afterwards drops the *live* run's id — and if the worker is then
+    // suspended, the next wake finds no key and the minimised window leaks
+    // permanently, invisibly. That is the exact leak this function exists to
+    // fix, caused by the function itself.
+    chromeMock = installChromeMock();
+    const orphan = (await chrome.windows.create({}))!.id!;
+    chromeMock.session.set('runWindow', orphan);
+
+    let releaseRemove = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      releaseRemove = resolve;
+    });
+    const windows = chrome.windows as unknown as { remove: (id: number) => Promise<void> };
+    const realRemove = windows.remove;
+    windows.remove = async (id: number) => {
+      await held;
+      return realRemove(id);
+    };
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A run claims the key while the close is still in flight.
+    chromeMock.session.set('runWindow', 999);
+    releaseRemove();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chromeMock.session.get('runWindow')).toBe(999);
+    windows.remove = realRemove;
+  });
+});
+
+describe('a report a page could have forged', () => {
+  it('keeps the query string out of a page-supplied path', async () => {
+    // "Path only, never the query string" is the rule because the query holds
+    // the discount code and the itinerary. It was enforced for the report the
+    // *background* builds and merely trusted for the one the page sends —
+    // which is persisted to storage and rendered.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, finalPath: '/search?cdp=SECRET&pickup=TPA' },
+    });
+    await settle(1_000);
+
+    const state = await getState();
+    expect(state?.quotes[0]?.report?.finalPath).toBe('/search');
+    expect(JSON.stringify(state)).not.toContain('SECRET');
+  });
+
+  it('caps the strings a page can put into storage', async () => {
+    // Unbounded, these fill chrome.storage.session's quota — and publish()
+    // swallows that into a warn, so the run would silently stop persisting.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, title: 'X'.repeat(5_000), offerCount: -7 },
+    });
+    await settle(1_000);
+
+    const report = (await getState())?.quotes[0]?.report;
+    expect(report?.title.length).toBeLessThanOrEqual(200);
+    // Rendered verbatim, so "-7 offers" was reachable.
+    expect(report?.offerCount).toBe(0);
+  });
+
+  it('sanitizes a late report too, not only a live one', async () => {
+    // The late branch is a separate call site, and was separately trusted.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await settle(60_000);
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'not-reached', finalPath: '/late?cdp=SECRET' },
+    });
+    await settle();
+
+    const late = (await getState())?.quotes[0]?.lateReport;
+    expect(late?.path).toBe('generic-sweep');
+    expect(late?.finalPath).toBe('/late');
+  });
+});
+
+describe('a tab whose navigation never landed', () => {
+  it('does not claim it left the vendor, because that is not knowable', async () => {
+    // An absent url means only "no permission to read this tab's address".
+    // That is equally true of an off-origin redirect and of a load that never
+    // committed. Round 1 blocked because "never navigated" was wrong for the
+    // first; asserting the second would be the same mistake reversed.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.tabs.get(tabId)!.url = '';
+
+    await settle(60_000);
+
+    const report = (await getState())?.quotes.find((q) => q.failure === 'probe-timeout')?.report;
+    // Same code as the off-origin case on purpose: the background cannot tell
+    // them apart, so it does not pretend to.
+    expect(report?.path).toBe('left-our-origins');
+    expect(report?.finalPath).toBe('');
+  });
+});
