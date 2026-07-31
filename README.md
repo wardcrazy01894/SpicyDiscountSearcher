@@ -176,7 +176,7 @@ The workbook parser is Python and tested separately:
 
 ```bash
 pip install 'openpyxl==3.1.5' 'pytest==8.4.2'
-python3 -m pytest tests/test_extract_codes.py -q
+python3 -m pytest tests -q
 ```
 
 CI runs four jobs on every PR, and `main` is protected on all four — they must

@@ -59,6 +59,104 @@ def test_catches_a_name_signed_into_a_comment_body(tmp_path: Path) -> None:
     assert "signed" in problems[0]
 
 
+def test_still_catches_a_signature_that_is_not_the_last_comment(
+    tmp_path: Path,
+) -> None:
+    """The reason this scanner parses per comment rather than per part.
+
+    Stripping tags from the whole part joins every comment into one string, so
+    an end-of-line anchor only ever matched the *final* comment. This workbook
+    already carries an unrelated note, so had the leaked name landed on that
+    sheet the scanner would have reported nothing at all.
+    """
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                "<comments><commentList>"
+                "<comment><text><t>QQ: any IHG codes?\n\t-Ada Lovelace</t></text></comment>"
+                "<comment><text><t>Not valid (as of 4/13/22)</t></text></comment>"
+                "</commentList></comments>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_catches_a_name_split_across_formatting_runs(tmp_path: Path) -> None:
+    """Excel breaks one comment into several <r><t> runs whenever formatting
+    changes mid-sentence, which can fall in the middle of a name."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/comments1.xml": (
+                "<comments><commentList><comment><text>"
+                "<r><t>thanks\n\t-Ada </t></r><r><t>Lovelace</t></r>"
+                "</text></comment></commentList></comments>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_catches_a_threaded_comment_author(tmp_path: Path) -> None:
+    """Excel 365 and Excel for the web write threaded comments, which keep the
+    commenter's real name as a displayName attribute in a part the legacy
+    <author> check never looks at."""
+    book = make_workbook(
+        tmp_path,
+        {"xl/persons/person1.xml": '<person displayName="Ada Lovelace" providerId="AD"/>'},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_reads_threaded_comment_bodies_too(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {
+            "xl/threadedComments/threadedComment1.xml": (
+                "<threadedComments><threadedComment id='1'>"
+                "<text>looks right to me\n-Ana Müller</text>"
+                "</threadedComment></threadedComments>"
+            )
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1, "a non-ASCII name is still a name"
+    assert "Ana Müller" in problems[0]
+
+
+def test_catches_a_host_written_without_a_scheme(tmp_path: Path) -> None:
+    """The workbook writes hyperlink display text with no https:// in front of
+    it, so the host that leaked could reappear in exactly that form."""
+    book = make_workbook(
+        tmp_path,
+        {"xl/sharedStrings.xml": "<sst><si><t>stay-stg.hilton.com/fortive</t></si></sst>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "stay-stg.hilton.com" in problems[0]
+
+
+def test_a_marker_beats_the_allowlist(tmp_path: Path) -> None:
+    """Adding a staging host to ALLOWED_HOSTS in a hurry must not silence it.
+    The marker check runs first precisely so the second rule is a real backstop
+    rather than a differently-worded message on a decision already made."""
+    book = make_workbook(
+        tmp_path,
+        {"xl/sharedStrings.xml": "<sst><si><t>https://staging.example.com/x</t></si></sst>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "non-production host" in problems[0]
+
+
 def test_ignores_ordinary_margin_notes(tmp_path: Path) -> None:
     """This workbook is full of dashed qualifiers. They are not signatures,
     and flagging them would train everyone to ignore the scanner."""

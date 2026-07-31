@@ -52,25 +52,61 @@ ALLOWED_HOSTS = frozenset(
 )
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
-HOST_RE = re.compile(r"https?://([A-Za-z0-9.-]+)")
 AUTHOR_RE = re.compile(r"<author>(.*?)</author>", re.DOTALL)
 CREATOR_RE = re.compile(r"<(?:dc:creator|cp:lastModifiedBy)>(.*?)</", re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
 
-# A hand-typed sign-off: a dash at the end of a comment followed by two or more
-# capitalised words. This is the shape the leaked name actually took --
-# "...I can't see anything\n\t-Demilade Boyejo" -- and an `<author>` check alone
-# does not see it, because the name was in the comment *body*, not the element
-# Excel fills in. Two words is the discriminator that keeps "- Americas only"
-# and "-Hilton only" (real notes in this workbook) from tripping it.
+# Excel 365 and Excel for the web write *threaded* comments, which are a
+# different pair of parts entirely: the body in xl/threadedComments/, and the
+# commenter's real name as a displayName attribute in xl/persons/. A workbook
+# edited in modern Excel puts the name here and nowhere else, so checking only
+# the legacy <author> element covers the format this workbook happens to use
+# and none of the format the next edit will use.
+DISPLAY_NAME_RE = re.compile(r'displayName\s*=\s*"([^"]*)"')
+
+# One comment at a time. Stripping tags from a whole part and then anchoring on
+# end-of-line finds a signature only when it is the *last* comment in the part:
+# a second sticky note anywhere after it joins on and the anchor never matches.
+# This workbook already carries an unrelated note ("Not valid (as of 4/13/22)"),
+# so had the leaked name landed on that sheet, a part-wide scan would have
+# reported nothing at all on the very incident it exists to catch.
+COMMENT_BLOCK_RE = re.compile(
+    r"<(comment|threadedComment)\b[^>]*>(.*?)</\1>", re.DOTALL
+)
+
+# A hand-typed sign-off: a dash near the end of a line, then a name. This is the
+# shape the leak actually took -- "...I can't see anything\n\t-Demilade Boyejo"
+# -- and an <author> check cannot see it, because the name was in the comment
+# *body*, not the element Excel fills in.
+#
+# The name is captured loosely and validated in Python: a character class like
+# [A-Z][a-z]+ is ASCII-only and would miss "José García" or "Ana Müller", which
+# is not exotic for a workbook with an EMEA contributor thread. Horizontal
+# whitespace only, so the match cannot run across a line break.
 SIGNOFF_RE = re.compile(
-    r"[-~—]{1,2}\s*([A-Z][a-z]+(?:\s+[A-Z][A-Za-z'\-]+)+)\s*$",
+    r"[-~–—]{1,2}[ \t]*([^\W\d_][\w'’\-]*(?:[ \t]+[^\W\d_][\w'’\-]*)+)[ \t]*$",
     re.MULTILINE,
 )
 
-# Substrings that mark a non-production host. Redundant against the allowlist
-# above -- kept so that if someone widens the allowlist in a hurry, the obvious
-# case still gets a second look rather than sailing through.
+HOST_RE = re.compile(r"https?://([A-Za-z0-9.-]+)")
+
+# Hosts written without a scheme. The workbook already does this -- hyperlink
+# display text reads "www.hotelcorporatecodes.com/87/marriott-hotels-..." with
+# no https:// in front of it -- so a scheme-anchored pattern alone would miss
+# "stay-stg.hilton.com/fortive" pasted the same way, which is exactly how the
+# host that leaked was written in the cell.
+# The lookbehind keeps the domain half of an email address out of this: it is
+# already reported as an email, and reporting it twice trains people to skim.
+BARE_HOST_RE = re.compile(
+    r"(?<![@\w.])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
+    r"(?:com|net|org|io|co|uk|de|fr|eu|gov|edu|info|biz|travel))\b",
+    re.IGNORECASE,
+)
+
+# Substrings that mark a non-production host. Checked *before* the allowlist,
+# so widening ALLOWED_HOSTS in a hurry cannot wave one of these through -- which
+# is the whole point of keeping a second rule, and was not true when this list
+# was consulted after the allowlist had already returned.
 SUSPICIOUS_HOST_MARKERS = (
     "-stg",
     "stg-",
@@ -86,6 +122,42 @@ SUSPICIOUS_HOST_MARKERS = (
     "corp.",
     "localhost",
 )
+
+
+def looks_like_a_person(phrase: str) -> bool:
+    """Two or more capitalised words, i.e. a name rather than a qualifier.
+
+    Two words is what separates "Demilade Boyejo" from this workbook's real
+    margin notes -- "- Americas only", "-Hilton only". Validated here rather
+    than in the pattern so that non-ASCII capitals count.
+    """
+    words = phrase.split()
+    return len(words) >= 2 and all(word[:1].isupper() for word in words)
+
+
+def comment_bodies(text: str) -> list[str]:
+    """The readable text of each comment in a part, one entry per comment.
+
+    Tags inside a comment are dropped without a separator on purpose: Excel
+    splits one comment across several <r><t> runs whenever the formatting
+    changes mid-sentence, so "<t>-Demilade </t><t>Boyejo</t>" is a single
+    sentence and joining it with anything but "" would break the name in half.
+    """
+    return [TAG_RE.sub("", body) for _, body in COMMENT_BLOCK_RE.findall(text)]
+
+
+def check_host(name: str, host: str) -> str | None:
+    """One hostname, or None if it is allowed."""
+    lowered = host.lower().rstrip(".")
+    marker = next((m for m in SUSPICIOUS_HOST_MARKERS if m in lowered), None)
+    if marker:
+        return f"{name}: non-production host {host!r} (matched {marker!r})"
+    if lowered in ALLOWED_HOSTS:
+        return None
+    return (
+        f"{name}: unrecognised host {host!r} -- if it belongs, "
+        f"add it to ALLOWED_HOSTS in {Path(__file__).name}"
+    )
 
 
 def scan(workbook: Path) -> list[str]:
@@ -111,31 +183,27 @@ def scan(workbook: Path) -> list[str]:
                 if creator.strip():
                     problems.append(f"{name}: document author {creator.strip()!r}")
 
-            # Sign-offs hide in the comment body, so read the text Excel shows
-            # rather than the elements it fills in.
-            if "comments" in name or name.endswith(".vml"):
-                body = TAG_RE.sub("", text)
-                for signature in sorted(set(SIGNOFF_RE.findall(body))):
-                    problems.append(
-                        f"{name}: comment signed {signature.strip()!r}"
-                    )
+            # Threaded comments keep the commenter in xl/persons/, never in an
+            # <author> element.
+            for person in sorted(set(DISPLAY_NAME_RE.findall(text))):
+                if person.strip():
+                    problems.append(f"{name}: comment author {person.strip()!r}")
 
-            for host in sorted(set(HOST_RE.findall(text))):
-                lowered = host.lower()
-                if lowered in ALLOWED_HOSTS:
-                    continue
-                marker = next(
-                    (m for m in SUSPICIOUS_HOST_MARKERS if m in lowered), None
-                )
-                if marker:
-                    problems.append(
-                        f"{name}: non-production host {host!r} (matched {marker!r})"
-                    )
-                else:
-                    problems.append(
-                        f"{name}: unrecognised host {host!r} -- if it belongs, "
-                        f"add it to ALLOWED_HOSTS in {Path(__file__).name}"
-                    )
+            # Sign-offs hide in the comment body, so read what Excel shows.
+            # Per comment, never per part -- see COMMENT_BLOCK_RE.
+            signatures: set[str] = set()
+            for body in comment_bodies(text):
+                for candidate in SIGNOFF_RE.findall(body):
+                    if looks_like_a_person(candidate):
+                        signatures.add(candidate.strip())
+            for signature in sorted(signatures):
+                problems.append(f"{name}: comment signed {signature!r}")
+
+            hosts = set(HOST_RE.findall(text)) | set(BARE_HOST_RE.findall(text))
+            for host in sorted(hosts):
+                problem = check_host(name, host)
+                if problem:
+                    problems.append(problem)
 
     return problems
 
