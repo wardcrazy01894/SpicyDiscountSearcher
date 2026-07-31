@@ -35,15 +35,6 @@ jobs:
           cache: npm
       - name: Install dependencies (locked)
         run: npm ci
-      - name: Audit dependencies (informational)
-        # NOT --omit=dev. There are no runtime dependencies at all, so that
-        # audited an empty tree and always passed — while the dev tree is what
-        # vite bundles into dist/, i.e. the code users actually load.
-        # Still informational: the current tree has known advisories whose only
-        # fixes are major bumps, tracked by the dependabot config added here.
-        # Once those land this should lose continue-on-error and gate for real.
-        run: npm audit --audit-level=high
-        continue-on-error: true
       - name: Type check (tsc)
         run: npm run typecheck
       - name: Lint (eslint)
@@ -56,7 +47,25 @@ jobs:
         # A manifest that points at a file the build never emitted installs
         # fine and then fails silently, so verify every referenced path exists.
         run: node scripts/check-dist.mjs
+      - name: Audit dependencies
+        # Last, deliberately. npm audit hits the registry at run time, so a new
+        # advisory with no fix available turns a green PR red overnight — and
+        # from step three it would abort before typecheck, lint or build had
+        # said anything, on every PR, since this job is required.
+        #
+        # NOT --omit=dev. There are no runtime dependencies at all, so that
+        # audited an empty tree and always passed — while the dev tree is what
+        # vite bundles into dist/, i.e. the code users actually load.
+        # No continue-on-error: the tree is clean at every severity, so this
+        # gates — and at moderate, since a moderate advisory still ends up in
+        # the bundle users load.
+        run: npm audit --audit-level=moderate
+
       - name: Upload unpacked extension
+        # always(): a registry-side advisory failing the audit step above must
+        # not also withhold the built extension, which is exactly what you want
+        # to inspect when a run goes red for a reason unrelated to your change.
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: spicy-discount-searcher-unpacked

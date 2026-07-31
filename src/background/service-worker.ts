@@ -193,7 +193,10 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
     // Minimised keeps a dozen rental-car pages out of the user's face while
     // they load. Brave and Chrome both still render and run scripts in it.
     const created = await chrome.windows.create({ state: 'minimized', focused: false });
-    if (created.id === undefined) throw new Error('could not open a background window');
+    // windows.create can resolve undefined — @types/chrome 0.2 says so and the
+    // older typings did not, so this was a live "cannot read id of undefined"
+    // waiting for the one call that failed.
+    if (created?.id === undefined) throw new Error('could not open a background window');
     run.windowId = created.id;
     // Recorded so a restarted worker can close what this one orphaned.
     await chrome.storage.session.set({ [WINDOW_KEY]: created.id }).catch(() => {});

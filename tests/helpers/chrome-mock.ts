@@ -49,6 +49,8 @@ export interface ChromeHarness {
   userClosesTab: (tabId: number) => void;
   /** Make the next `storage.session.set` reject, once. */
   failNextSessionWrite: () => void;
+  /** Make the next `windows.create` resolve undefined, as Chrome may. */
+  failNextWindowCreate: () => void;
   restore: () => void;
 }
 
@@ -66,6 +68,7 @@ export function installChromeMock(): ChromeHarness {
   let nextTabId = 100;
   let nextWindowId = 1;
   let failSessionWrite = false;
+  let failWindowCreate = false;
 
   const readArea =
     (store: Map<string, unknown>) =>
@@ -140,6 +143,12 @@ export function installChromeMock(): ChromeHarness {
     windows: {
       create: (options: chrome.windows.CreateData = {}) => {
         windowOptions.push({ ...options });
+        // chrome.windows.create is typed Promise<Window | undefined> and can
+        // genuinely resolve undefined.
+        if (failWindowCreate) {
+          failWindowCreate = false;
+          return Promise.resolve(undefined);
+        }
         const id = nextWindowId++;
         windows.add(id);
         windowsCreated.push(id);
@@ -195,6 +204,9 @@ export function installChromeMock(): ChromeHarness {
     },
     failNextSessionWrite: () => {
       failSessionWrite = true;
+    },
+    failNextWindowCreate: () => {
+      failWindowCreate = true;
     },
     restore: () => {
       (globalThis as { chrome?: unknown }).chrome = previous;

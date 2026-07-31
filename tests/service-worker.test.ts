@@ -95,6 +95,27 @@ describe('starting a run', () => {
     expect(chromeMock.windows.size).toBe(0);
   });
 
+  it('fails the quotes cleanly when no window can be opened', async () => {
+    // chrome.windows.create is typed Promise<Window | undefined> and can
+    // resolve undefined. The older typings said otherwise, so reading .id was
+    // a crash waiting for the one call that failed.
+    await bootWorker();
+    chromeMock.failNextWindowCreate();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(2_000);
+
+    const state = await getState();
+    const failed = state?.quotes.find((q) => q.status === 'error');
+    expect(failed?.failure).toBe('tab-open');
+    expect(failed?.message).toContain('could not open a background window');
+    // Exactly one casualty. windowPromise is cleared in the catch, so the next
+    // candidate opens a window of its own rather than inheriting the failure —
+    // without that reset every remaining quote would fail the same way.
+    expect(state?.quotes.filter((q) => q.failure === 'tab-open')).toHaveLength(1);
+    expect(chromeMock.windows.size).toBe(1);
+    expect(chromeMock.tabs.size).toBe(1);
+  });
+
   it('finishes the run even when the state cannot be persisted', async () => {
     // An unguarded publish() rejection escaped runQuote, rejected the
     // Promise.all in startRun and skipped teardown entirely, leaving the
