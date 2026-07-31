@@ -187,7 +187,14 @@ pass and the branch must be up to date before merge:
 | `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit` |
 | `test`                     | vitest                                                                       |
 | `data`                     | ruff, pytest, then regenerates the code database and fails if it differs     |
-| `secret scan`              | gitleaks over the full branch history                                        |
+| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook   |
+
+The workbook is a zip of XML, and gitleaks skips it by extension before any
+repo config applies — so the one binary in this repo was the one file no
+scanner read. `scripts/scan_workbook_pii.py` unzips it and checks the parts a
+spreadsheet hides: comment authors and signed-off comment bodies, document
+properties, and every hostname against an allowlist of exact names. A new host
+fails the job until someone adds it, which is the point.
 
 `npm audit` runs after every other check in the build job on purpose: a new
 advisory appearing overnight shouldn't abort before typecheck and lint have said

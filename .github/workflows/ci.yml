@@ -94,12 +94,16 @@ jobs:
         # freshness check below, so the repo's first ground rule went unchecked.
         run: pip install 'openpyxl==3.1.5' 'pytest==8.4.2'
       - name: Lint the parser (ruff)
-        run: pipx run ruff==0.14.2 check scripts tests/test_extract_codes.py
+        # Directories, not one named file. Naming the single file that exists
+        # today means the next Python file added is silently never linted.
+        run: pipx run ruff==0.14.2 check scripts tests
 
       - name: Test the parser (pytest)
         # The freshness check below cannot catch a parser that is wrong in the
         # same way twice — it regenerates both sides. These cover the decisions.
-        run: python3 -m pytest tests/test_extract_codes.py -q
+        # Same reason as ruff above for pointing at the directory: a test file
+        # nothing runs is worse than no test file, because it reads as covered.
+        run: python3 -m pytest tests -q
 
       - name: Regenerate the code database
         run: python3 scripts/extract_codes.py
@@ -132,6 +136,18 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0 # full history so gitleaks can scan all commits on the branch
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Scan the workbook for personal data
+        # gitleaks drops the .xlsx by extension before any repo config applies
+        # (.gitleaks.toml says so itself), so the one binary in this repo is
+        # the one file it never reads — which is exactly how a contributor's
+        # name and an internal staging host reached a public repo in 9bbf418.
+        # This unzips it and reads the parts a spreadsheet hides. Stdlib only,
+        # so there is nothing to install.
+        run: python3 scripts/scan_workbook_pii.py
       - name: Scan for secrets (gitleaks)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
