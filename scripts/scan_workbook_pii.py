@@ -98,7 +98,12 @@ NOT_PEOPLE_WORDS = frozenset(
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 AUTHOR_RE = re.compile(r"<author>(.*?)</author>", re.DOTALL)
-CREATOR_RE = re.compile(r"<(?:dc:creator|cp:lastModifiedBy)>(.*?)</", re.DOTALL)
+# `Manager` is a person's name and `Company` an employer's, both stamped from
+# the Office installation into docProps/app.xml — a part this already reads and
+# was not checking.
+CREATOR_RE = re.compile(
+    r"<(?:dc:creator|cp:lastModifiedBy|Manager|Company)>(.*?)</", re.DOTALL
+)
 TAG_RE = re.compile(r"<[^>]+>")
 
 # Excel 365 and Excel for the web write *threaded* comments, which are a

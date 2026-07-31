@@ -568,3 +568,23 @@ def test_an_openpyxl_round_trip_of_the_real_workbook_is_clean() -> None:
         out = Path(tmp) / "round-trip.xlsx"
         openpyxl.load_workbook(scanner.WORKBOOK).save(out)
         assert scanner.scan(out) == []
+
+
+def test_catches_a_manager_in_the_app_properties(tmp_path: Path) -> None:
+    """`docProps/app.xml` was read and never checked. `<Manager>` is a person's
+    name, stamped from the Office installation."""
+    book = make_workbook(
+        tmp_path,
+        {"docProps/app.xml": "<Properties><Manager>Ada Lovelace</Manager></Properties>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_a_producer_name_in_app_properties_is_still_boilerplate(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {"docProps/app.xml": "<Properties><Company>Microsoft Excel</Company></Properties>"},
+    )
+    assert scanner.scan(book) == []
