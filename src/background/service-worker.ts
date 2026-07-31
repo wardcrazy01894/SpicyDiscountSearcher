@@ -157,6 +157,28 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
 }
 
 /**
+ * The only extraction branches a content script is allowed to claim.
+ *
+ * Same rule as PROBE_FAILURES below, for the same reason. `not-reached` and
+ * `left-our-origins` are things only the background can know — it built them
+ * from the tab after the probe went silent — so a page that could send one
+ * would be forging the background's own testimony, and the popup would print
+ * "no answer from the page" about a page that had just answered.
+ */
+const PROBE_PATHS = new Set<ProbeReport['path']>(['vendor-selectors', 'generic-sweep']);
+
+/** Take a report from a content script, keeping only what it may assert. */
+function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefined {
+  if (!report) return undefined;
+  if (PROBE_PATHS.has(report.path)) return report;
+  // Not rejected outright: the landed path, title and count are still the
+  // probe's own observations and are still worth having. Only the claim about
+  // *who* observed them is refused, and it falls back to the branch the probe
+  // would have used.
+  return { ...report, path: 'generic-sweep' };
+}
+
+/**
  * The only failures a content script is allowed to claim.
  *
  * It runs in a page we do not control, so anything else it sends is not a
@@ -360,12 +382,31 @@ async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
   if (quote.failure !== 'probe-timeout' || quote.report) return;
   try {
     const tab = await chrome.tabs.get(tabId);
+    // `url` and `title` are populated only for a tab whose *current* URL
+    // matches one of our host permissions. This extension holds no `tabs`
+    // permission — PR #5 dropped it on purpose — so an undefined url is not
+    // "the tab never navigated", it is "the tab is somewhere we are not
+    // allowed to look". That is itself the most useful thing we can say: it
+    // means the page left the vendor's origin, which is also exactly when the
+    // content script stops running and the probe goes silent. Reporting it as
+    // "never navigated" would have been a confident wrong answer in the very
+    // case this function exists for.
+    const landed = tab.url ?? '';
+    if (!landed) {
+      quote.report = {
+        finalPath: '',
+        title: '',
+        offerCount: 0,
+        path: 'left-our-origins',
+      };
+      return;
+    }
     let finalPath = '';
     try {
-      finalPath = new URL(tab.url ?? '').pathname;
+      finalPath = new URL(landed).pathname;
     } catch {
-      // No url at all means the tab never navigated, which is itself the
-      // answer; an empty path renders as such rather than inventing one.
+      // A url we can see but cannot parse. Rare, and an empty path reads as
+      // "no path to show" rather than as a claim about where it went.
     }
     quote.report = {
       finalPath,
@@ -527,8 +568,10 @@ chrome.runtime.onMessage.addListener(
           // keeps only the report from an already-settled quote, so this can
           // add evidence and cannot change a verdict.
           const lateId = tabId === undefined ? undefined : active?.retiredTabs.get(tabId);
+          const reported = sanitizeReport(message.report);
           if (active && quoteId === undefined && lateId !== undefined) {
-            finishQuote(active, lateId, { report: message.report });
+            const late = sanitizeReport(message.report);
+            if (late) finishQuote(active, lateId, { report: late });
             await publish();
           }
           if (active && quoteId !== undefined) {
@@ -538,8 +581,8 @@ chrome.runtime.onMessage.addListener(
               status: best ? 'ok' : 'no-price',
               offers: message.offers,
               best,
-              report: message.report,
-              ...(landedElsewhere(quote, message.report) ? { suspect: 'landed-elsewhere' } : {}),
+              ...(reported ? { report: reported } : {}),
+              ...(landedElsewhere(quote, reported) ? { suspect: 'landed-elsewhere' } : {}),
               // bestOffer only returns null for an empty list, and the probe
               // never sends one — it reports PROBE_FAILED instead. Kept as a
               // real guard rather than a message describing a state it cannot
@@ -556,8 +599,10 @@ chrome.runtime.onMessage.addListener(
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
           // Same as PROBE_RESULT: evidence from a retired tab, nothing more.
           const lateId = tabId === undefined ? undefined : active?.retiredTabs.get(tabId);
+          const reported = sanitizeReport(message.report);
           if (active && quoteId === undefined && lateId !== undefined && message.report) {
-            finishQuote(active, lateId, { report: message.report });
+            const late = sanitizeReport(message.report);
+            if (late) finishQuote(active, lateId, { report: late });
             await publish();
           }
           if (active && quoteId !== undefined) {
@@ -571,11 +616,11 @@ chrome.runtime.onMessage.addListener(
               // message the script did send.
               ...(PROBE_FAILURES.has(message.failure) ? { failure: message.failure } : {}),
               message: message.message,
-              report: message.report,
+              ...(reported ? { report: reported } : {}),
               // "no price because the link missed its search" and "no price
               // because the results page was empty" is exactly the distinction
               // this is for, and the evidence is already in hand.
-              ...(landedElsewhere(failed, message.report) ? { suspect: 'landed-elsewhere' } : {}),
+              ...(landedElsewhere(failed, reported) ? { suspect: 'landed-elsewhere' } : {}),
             });
             await publish();
           }
@@ -635,8 +680,16 @@ async function reapOrphanWindow(): Promise<void> {
     // minimised and holds a new-tab page, so nobody will close it by hand.
     if (await windowStillOpen(windowId)) return;
   }
-  // Only once the window is gone. Dropping the key first is what turned a
-  // failed close into a permanent, invisible leak.
+  // Compare-and-delete, not a bare delete. Everything above is awaited IPC, and
+  // a run can start and claim its own window during it: the reaper reads
+  // orphan id 3, `startRun` sets `active` while `windowId` is still null (the
+  // create has not resolved), the guard above therefore passes, and by the time
+  // `windows.remove(3)` returns the key holds the *live* run's id. Deleting it
+  // then loses the only handle on a window that is about to be orphaned for
+  // real — the exact leak this function exists to fix, caused by the function
+  // itself.
+  const now = await chrome.storage.session.get(WINDOW_KEY).catch(() => null);
+  if (now && now[WINDOW_KEY] !== windowId) return;
   await chrome.storage.session.remove(WINDOW_KEY).catch((error: unknown) => {
     warn('could not forget an orphaned window id', error);
   });

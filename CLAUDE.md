@@ -104,6 +104,22 @@ with `path: 'not-reached'` — same path-only rule. Without it the commonest
 failure was the one with no evidence at all, and "Hertz always times out" could
 not be told apart from a consent interstitial or a country picker.
 
+It cannot always read it. The manifest holds no `tabs` permission — PR #5
+dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
+current URL is not one of the nine vendor hosts. That is not a gap to paper
+over with a permission: an invisible tab means the page left the vendor's
+origin, which is _also_ when the content script stops running, so it is a
+diagnosis in itself and gets its own `path: 'left-our-origins'`. The chrome
+fake models this, having previously returned `url` unconditionally and hidden
+the bug.
+
+`not-reached` and `left-our-origins` are the background's own knowledge, so a
+content script may not claim either — `PROBE_PATHS` enforces that at ingest,
+exactly as `PROBE_FAILURES` does for failure codes. A forged branch is
+downgraded rather than dropped: the landed path, title and count are still the
+probe's own observations and worth keeping; only the claim about who made them
+is refused.
+
 `Quote.lateReport` is evidence that arrived _after_ the quote was settled. A
 page can begin its final extract a millisecond inside the deadline and send
 after it; that reply used to be discarded whole while the quote kept a

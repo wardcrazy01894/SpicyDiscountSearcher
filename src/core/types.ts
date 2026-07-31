@@ -153,13 +153,17 @@ export interface ProbeReport {
   /**
    * Which extraction branch produced the offers.
    *
-   * `not-reached` means the probe never answered and this report was built by
-   * the background from the tab itself. Without it a `probe-timeout` carried no
-   * evidence at all — the commonest failure was the one with nothing attached,
-   * so "Hertz always times out" could not be told apart from a consent
-   * interstitial, a country picker, or a page that never finished loading.
+   * The last two are the background's own knowledge and a content script may
+   * never claim them — same doctrine as `QuoteFailure`, enforced the same way,
+   * by an allowlist at ingest. A page that could say `not-reached` could forge
+   * "the background observed this".
+   *
+   * `not-reached`: the probe never answered, so the background described the
+   * tab instead. `left-our-origins`: it could not even do that, because the tab
+   * had navigated somewhere this extension holds no permission to read — which
+   * is also precisely when the content script stops running.
    */
-  path: 'vendor-selectors' | 'generic-sweep' | 'not-reached';
+  path: 'vendor-selectors' | 'generic-sweep' | 'not-reached' | 'left-our-origins';
 }
 
 export interface Quote {

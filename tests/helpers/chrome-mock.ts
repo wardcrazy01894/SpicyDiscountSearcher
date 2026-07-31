@@ -10,6 +10,14 @@ import { vi } from 'vitest';
  * than internals the worker never exposes.
  */
 
+/**
+ * The host_permissions in public/manifest.json. Chrome populates `Tab.url` and
+ * `Tab.title` only for a tab whose *current* URL matches one of these, since
+ * the manifest grants no `tabs` permission.
+ */
+const VENDOR_HOST_RE =
+  /^https:\/\/www\.(avis|budget|enterprise|hertz|hilton|hyatt|marriott|nationalcar|sixt)\.com\//;
+
 type MessageListener = (
   message: unknown,
   sender: chrome.runtime.MessageSender,
@@ -136,10 +144,22 @@ export function installChromeMock(): ChromeHarness {
       // Rejects for an unknown id, like the real thing: the background reads a
       // timed-out tab just before closing it, and "the tab is already gone" is
       // a case that has to behave.
+      //
+      // `url` and `title` are omitted for a tab whose current URL is not one
+      // this extension has a host permission for — which is what Chrome does,
+      // because the manifest grants no `tabs` permission. Returning them
+      // unconditionally modelled a permission the extension does not hold and
+      // hid a real bug: an off-origin redirect was reported as "never
+      // navigated", a confident wrong answer in the very case the feature
+      // exists for.
       get: (tabId: number) => {
         const tab = tabs.get(tabId);
         if (!tab) return Promise.reject(new Error('No tab with id'));
-        return Promise.resolve({ id: tab.id, url: tab.url, title: tab.title });
+        const visible = VENDOR_HOST_RE.test(tab.url);
+        return Promise.resolve({
+          id: tab.id,
+          ...(visible ? { url: tab.url, title: tab.title } : {}),
+        });
       },
       remove: (tabId: number) => {
         if (!tabs.has(tabId)) return Promise.reject(new Error('No tab with id'));

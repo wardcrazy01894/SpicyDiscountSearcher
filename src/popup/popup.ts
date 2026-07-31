@@ -376,6 +376,7 @@ function durationText(quote: Quote): string {
 function branchText(path: ProbeReport['path']): string {
   if (path === 'generic-sweep') return 'generic sweep';
   if (path === 'vendor-selectors') return 'vendor selectors';
+  if (path === 'left-our-origins') return 'left the vendor’s site';
   // The probe never answered, so the background described the tab instead.
   return 'no answer from the page';
 }
@@ -385,9 +386,11 @@ function evidenceLine(quote: Quote): HTMLElement | null {
   const report = quote.report;
   const took = durationText(quote);
   // A duration with no report is still worth showing — that is exactly the
-  // timeout case, where "45.0s" is the finding.
+  // timeout case, where "45.0s" is the finding. Only for a quote that actually
+  // ran out of time, though: "gave up after 3.2s" on a row the user cancelled
+  // is both wrong and rude.
   if (!report) {
-    if (!took) return null;
+    if (!took || quote.failure !== 'probe-timeout') return null;
     const bare = document.createElement('p');
     bare.className = 'evidence';
     bare.textContent = `gave up after ${took}`;
@@ -396,8 +399,13 @@ function evidenceLine(quote: Quote): HTMLElement | null {
   const line = document.createElement('p');
   line.className = 'evidence';
   const plural = report.offerCount === 1 ? '' : 's';
-  const landed = report.finalPath ? `landed ${report.finalPath}` : 'never navigated';
-  const counted = report.path === 'not-reached' ? '' : ` · ${report.offerCount} offer${plural}`;
+  const observed = report.path === 'not-reached' || report.path === 'left-our-origins';
+  const landed = report.finalPath
+    ? `landed ${report.finalPath}`
+    : report.path === 'left-our-origins'
+      ? 'the extension cannot see where it went'
+      : 'no path to show';
+  const counted = observed ? '' : ` · ${report.offerCount} offer${plural}`;
   line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;
   if (report.title) line.title = report.title;
   return line;
@@ -414,7 +422,7 @@ function lateAnswerLine(quote: Quote): HTMLElement | null {
   const report = quote.lateReport;
   if (!report) return null;
   const line = document.createElement('p');
-  line.className = 'evidence is-warning';
+  line.className = 'evidence is-late';
   const plural = report.offerCount === 1 ? '' : 's';
   line.textContent = `the page did answer, just after the deadline — ${report.finalPath} · ${report.offerCount} offer${plural} · ${branchText(report.path)}`;
   if (report.title) line.title = report.title;
