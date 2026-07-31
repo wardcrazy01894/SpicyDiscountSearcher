@@ -9,6 +9,7 @@ import {
   cheapest,
   classMatrix,
   estimatedTotal,
+  primaryGroup,
   rankQuotes,
   savings,
   unrankedQuotes,
@@ -542,7 +543,16 @@ function renderRun(state: RunState | null): void {
     // different class of car than the others did. Restricted to the bucket the
     // ranking came from: a matrix built from a daily rate on one side and a
     // trip total on the other cannot say anything about fairness.
-    const shared = classMatrix(state.quotes, {
+    //
+    // Built from the ranked quotes, not from every quote. bestOffer picks a
+    // quote's headline basis and currency by majority, so a quote whose offers
+    // are mostly in euros sits outside the reported bucket and is listed as
+    // not ranked — while its stray dollar offers still entered this matrix and
+    // could hold the cheapest row. The popup then warned that "another code is
+    // cheaper on the classes these results have in common", naming a code it
+    // had just told the user was not comparable.
+    const ranked = primaryGroup(state.quotes)?.quotes ?? [];
+    const shared = classMatrix(ranked, {
       basis: spread.basis,
       currency: spread.currency,
     }).filter((row) => row.amounts.size > 1);

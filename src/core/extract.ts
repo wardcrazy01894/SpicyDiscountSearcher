@@ -10,7 +10,14 @@ import type { Offer, PriceBasis, VendorId } from './types.js';
  * the day a vendor ships a redesign.
  */
 
-const CURRENCY = String.raw`US\$|\$|€|£|USD|EUR|GBP`;
+/**
+ * Currency markers, longest first so the alternation cannot settle for a
+ * prefix. `CA$150` read as USD because a bare `\$` matched inside it, and a
+ * Canadian dollar filed as USD buckets with real US prices and wins on face
+ * value — the cross-currency comparison the bucketing exists to prevent,
+ * arriving inside a single bucket where nothing downstream can see it.
+ */
+const CURRENCY = String.raw`CA\$|NZ\$|US\$|A\$|C\$|R\$|\$|€|£|USD|EUR|GBP|CAD|AUD|NZD`;
 
 /**
  * A number as a price is written.
@@ -42,6 +49,14 @@ const SYMBOL_TO_CURRENCY: Record<string, string> = {
   EUR: 'EUR',
   '£': 'GBP',
   GBP: 'GBP',
+  CA$: 'CAD',
+  C$: 'CAD',
+  CAD: 'CAD',
+  A$: 'AUD',
+  AUD: 'AUD',
+  NZ$: 'NZD',
+  NZD: 'NZD',
+  R$: 'BRL',
 };
 
 // A rental or hotel stay below this is almost certainly a fee, a tax line, or a
@@ -120,6 +135,24 @@ const PER_UNIT_RE = /\b(per|\/)\s*(day|night|nt|día|nacht)\b|\bdaily\b|\bnightl
 const TOTAL_RE = /\btotal\b|\bestimated total\b|\btrip total\b|\ball[- ]in\b|\bfor \d+ (day|night)/;
 
 /**
+ * A number that is a component of the bill rather than a price for the thing.
+ *
+ * "Total taxes and fees: $57.20" carries the word `total`, so it was tagged
+ * `total` and — being the cheapest number on that basis — became the page's
+ * headline price. The popup then announced a hotel at $57.20 and reported it
+ * as 88% under the priciest comparable code. Every downstream guard passed it,
+ * because the number genuinely was in the reported bucket; bucketing cannot
+ * save you from a number that was never a rate.
+ *
+ * Anchored at the start of the element's own text, which is what separates a
+ * fee line from a real total that happens to mention its components:
+ * "Total taxes and fees $57.20" leads with the fee noun, while "Estimated
+ * total $412.00 including taxes and fees" leads with the total and keeps it.
+ */
+const FEE_LINE_RE =
+  /^\s*(?:estimated\s+|total\s+){0,2}(?:taxes?|fees?|savings?|discounts?|surcharges?|deposits?|vat|gst)\b|^\s*(?:you\s+)?saves?\b/i;
+
+/**
  * Decide whether a number is a trip total or a nightly/daily rate.
  *
  * Text carrying *both* signals ("$29/day … Estimated total $210") describes two
@@ -189,6 +222,16 @@ interface PriceSite {
   element: Element;
   own: string;
   prices: Array<{ amount: number; currency: string }>;
+  /**
+   * A fee, tax or savings line. Still a site, so it claims its number away
+   * from the card around it, but it never becomes an offer.
+   *
+   * Dropping these elements outright instead left the number unclaimed, and
+   * the enclosing card — whose own text is short enough to be a site in its
+   * own right — picked it up as if it were a rate. Excluding a number means
+   * making sure nobody else takes it.
+   */
+  fee: boolean;
 }
 
 /**
@@ -224,9 +267,15 @@ const NUMERIC_EDGE = /[\d.,]/;
  * turned into "$ 12 , 500" reads as $12 — a price that wins every race.
  */
 function offerText(element: Element): string {
-  // Nothing struck below means nothing to leave out, so take the cheap path
-  // and keep the separator rule confined to markup that needs it.
-  if (!element.querySelector(STRUCK_SELECTOR)) return textOf(element);
+  // Only a genuine leaf can skip the walk. The old fast path took textContent
+  // whenever nothing struck sat below, which is almost every element — so the
+  // element-boundary space this function exists to insert was applied only
+  // when an unrelated <s> happened to be present. Minified markup like
+  // `<div class="rate">$132.00<span>per night</span></div>` read as
+  // "$132.00per night", classified `unknown`, and a nightly rate landed in the
+  // same bucket as real trip totals. Adding a struck-through was-price
+  // elsewhere in the card changed the answer for the identical rate.
+  if (element.children.length === 0) return textOf(element);
 
   let text = '';
   for (const node of element.childNodes) {
@@ -259,11 +308,20 @@ function priceSites(root: Element): PriceSite[] {
 
     // Only elements whose own text is short — a price lives in a leaf, while a
     // container's textContent would sweep the whole page into one match.
+    //
+    // 80 rather than 40: "Estimated total $412.00 including taxes and fees" is
+    // 47 characters, so the commonest wording for the single most valuable
+    // number on the page was dropped entirely and the quote came back
+    // `probe-empty`. Which vendors got ranked then depended on how verbose
+    // their card copy happened to be. A real container's text still runs to
+    // hundreds of characters, so the cap keeps doing its job.
     const own = offerText(element);
-    if (!own || own.length > 40) continue;
+    if (!own || own.length > 80) continue;
 
     const prices = findPrices(own);
-    if (prices.length > 0) sites.push({ element, own, prices });
+    // A fee, tax or savings line is not a price for anything bookable — but it
+    // is still recorded, so the card around it cannot claim the number.
+    if (prices.length > 0) sites.push({ element, own, prices, fee: FEE_LINE_RE.test(own) });
   }
   return sites;
 }
@@ -323,9 +381,25 @@ const SIBLING_REACH = 4;
  * markup there is and leaving classMatrix nothing to compare. An occasional
  * borrowed label beats no labels at all.
  */
-function labelNear(element: Element, cache: Map<Element, string | null>): string | null {
+function labelNear(
+  element: Element,
+  cache: Map<Element, string | null>,
+  root: Element,
+): string | null {
   let node: Element | null = element;
   for (let depth = 0; node && depth < 5; depth += 1) {
+    // Stop before the results container itself. headingText() runs
+    // querySelector over whatever node it is given, so once the walk reached
+    // the container it returned the first heading on the entire results list —
+    // handing a promo banner ("Weekend deals from $19/day") the first card's
+    // class. That price then beat every real rate AND looked comparable to
+    // them, so classMatrix saw the winner leading its own class and stayed
+    // silent. A wrong label here defeats the check meant to catch it.
+    //
+    // The container is a label for all the cards or none of them, so it can
+    // never be the *nearest* heading to one price in particular.
+    if (node !== element && (node === root || node.matches(CHROME_SELECTOR))) break;
+
     const own = headingText(node, cache);
     if (own) return own;
 
@@ -475,10 +549,14 @@ function sweep(root: Element): Offer[] {
     // containers wholesale instead lost any price written as a text node
     // beside a nested badge ("Est. total $210.00 <span>+$18.00 fees</span>"),
     // handing the ranker the fee as if it were the trip total.
+    // Recorded above only so it could claim its number away from the card;
+    // a tax line is not an offer.
+    if (site.fee) continue;
+
     const mine = without(site.prices, claimed.get(site) ?? []);
     if (mine.length === 0) continue;
 
-    const label = labelNear(site.element, headings);
+    const label = labelNear(site.element, headings, root);
     const basis = basisFor(site.element, site.own, pricesAtOrBelow, root);
     for (const price of mine) {
       offers.push({ label, amount: price.amount, currency: price.currency, basis });
@@ -513,7 +591,7 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
     const offers: Offer[] = [];
     const headings = new Map<Element, string | null>();
     for (const node of offerNodes) {
-      const label = textOf(firstMatch(node, config.label)) || labelNear(node, headings);
+      const label = textOf(firstMatch(node, config.label)) || labelNear(node, headings, root);
       const priceText = textOf(firstMatch(node, config.price)) || textOf(node);
       const context = textOf(node).slice(0, 400);
       for (const price of findPrices(priceText)) {
