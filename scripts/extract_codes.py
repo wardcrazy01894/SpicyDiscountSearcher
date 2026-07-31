@@ -242,7 +242,9 @@ def parse_company(text: str) -> tuple[str | None, str | None]:
         notes.append(match.group(1).strip())
         return " "
 
-    name = re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip(NAME_EDGE).strip()
+    name = (
+        re.sub(r"\s+", " ", re.sub(r"\(([^)]*)\)", take, text)).strip(NAME_EDGE).strip()
+    )
 
     while True:
         leading = LEADING_CODE_RE.match(name)

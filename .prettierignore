@@ -5,3 +5,8 @@ src/data/*.generated.json
 
 # Python test artefacts.
 .pytest_cache/
+.ruff_cache/
+
+# Transient worktrees for isolated reviewer runs — a populated one would make
+# `prettier --check .` descend into a second copy of the whole repo.
+.claude/worktrees/

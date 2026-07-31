@@ -13,6 +13,7 @@ import {
   parseAmount,
 } from '../src/core/extract.js';
 import type { Offer } from '../src/core/types.js';
+import { searchableVendors } from '../src/core/vendors.js';
 
 describe('parseAmount', () => {
   it('reads US grouping', () => {
@@ -244,7 +245,7 @@ describe('extractOffers', () => {
 
   it('reads a total whose label sits a level further out', () => {
     // The label and the amount are in separate wrapper divs, so neither is the
-    // other's sibling and closest(CARD_SELECTOR) stops at the amount's own div.
+    // other's sibling, so the ancestor climb has to keep going past div.a.
     // Calling this `unknown` split a real total out of the race it belonged in.
     document.body.innerHTML = `
       <main>
@@ -793,6 +794,19 @@ describe('model names are not money', () => {
     expect(offers.map((o) => o.amount).sort((a, b) => a - b)).toEqual([89, 95]);
     expect(bestOffer(offers)?.amount).toBe(89);
     expect(bestOffer(offers)?.currency).toBe('USD');
+  });
+});
+
+describe('the vendor selector table', () => {
+  it('gives every searchable vendor a container', () => {
+    // CLAUDE.md leans on these running — they scope the sweep away from nav
+    // and footer. VENDOR_SELECTORS is a Partial<Record>, so adding a vendor to
+    // vendors.ts silently yields no container and the sweep falls back to
+    // <body>, which is the condition that lets page furniture classify a basis.
+    const missing = searchableVendors()
+      .filter((v) => !VENDOR_SELECTORS[v.id]?.container)
+      .map((v) => v.id);
+    expect(missing).toEqual([]);
   });
 });
 

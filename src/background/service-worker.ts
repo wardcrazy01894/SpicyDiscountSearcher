@@ -1,6 +1,7 @@
 import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
+import { MAX_CONCURRENCY } from '../core/types.js';
 import type {
   Candidate,
   ProbeReport,
@@ -542,7 +543,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
   await publish();
 
   const queue = quotes.filter((q) => !q.finishedAt);
-  const lanes = Math.max(1, Math.min(plan.concurrency, 6));
+  const lanes = Math.max(1, Math.min(plan.concurrency, MAX_CONCURRENCY));
 
   void (async () => {
     try {

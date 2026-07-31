@@ -20,6 +20,7 @@ This unzips the workbook and reads the parts a spreadsheet hides:
   xl/threadedComments/    modern comment bodies (Excel 365, Excel for the web)
   xl/persons/*.xml        the commenter's real name, as a displayName attribute
   docProps/core.xml       `dc:creator` / `cp:lastModifiedBy`, stamped by Excel
+  docProps/app.xml        `Manager` is a person and `Company` an employer
   xl/sharedStrings.xml    every string in every cell, including URLs
 
 The host check is an allowlist of exact hostnames, not a pattern. A
@@ -275,7 +276,9 @@ def scan(workbook: Path) -> list[str]:
     with zipfile.ZipFile(workbook) as archive:
         for name in archive.namelist():
             if not name.endswith((".xml", ".vml", ".rels")):
-                if CONTENT_BEARING_BINARY_RE.search(name) and not BENIGN_BINARY_RE.search(name):
+                if CONTENT_BEARING_BINARY_RE.search(
+                    name
+                ) and not BENIGN_BINARY_RE.search(name):
                     unreadable.append(name)
                 continue
             text = archive.read(name).decode("utf-8", errors="replace")
@@ -350,7 +353,9 @@ def main() -> int:
     # macro-enabled .xlsm is the same zip of XML and would have been scanned by
     # nothing at all.
     workbooks = sorted(
-        book for pattern in ("*.xlsx", "*.xlsm", "*.xlsb") for book in SOURCE_DIR.glob(pattern)
+        book
+        for pattern in ("*.xlsx", "*.xlsm", "*.xlsb")
+        for book in SOURCE_DIR.glob(pattern)
     )
     if not workbooks:
         print(f"no workbook found under {SOURCE_DIR}", file=sys.stderr)
