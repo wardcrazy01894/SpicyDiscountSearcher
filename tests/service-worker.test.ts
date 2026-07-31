@@ -1033,3 +1033,49 @@ describe('a quote whose link could not be built', () => {
     expect(ran?.status).not.toBe('error');
   });
 });
+
+describe('closing the run window', () => {
+  it('keeps the id when the window refuses to close', async () => {
+    // reapOrphanWindow has had this check since it was written; closeWindow was
+    // claimed to be identical and was not, so a failed close here left a
+    // minimised window holding a new-tab page that nothing could ever find.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const live = [...chromeMock.windows][0]!;
+    const windows = chrome.windows as unknown as { remove: (id: number) => Promise<void> };
+    const realRemove = windows.remove;
+    windows.remove = () => Promise.reject(new Error('cannot remove window'));
+
+    await settle(120_000);
+
+    expect(chromeMock.session.get('runWindow')).toBe(live);
+    expect(chromeMock.windows.has(live)).toBe(true);
+    windows.remove = realRemove;
+  });
+
+  it('forgets the id on a normal completion', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(120_000);
+
+    expect(chromeMock.session.has('runWindow')).toBe(false);
+    expect(chromeMock.windows.size).toBe(0);
+  });
+
+  it('does not wipe a foreign id when the run never opened a window', async () => {
+    // An empty candidate list finishes without ever calling ensureWindow, so
+    // `closing` is null — and an unconditional delete then dropped somebody
+    // else's orphan id while that window was still open.
+    await bootWorker();
+    chromeMock.session.set('runWindow', 4242);
+    await chromeMock.fromPopup({
+      type: 'START_RUN',
+      plan: { trip: plan(1).trip, candidates: [], concurrency: 2 },
+    });
+    await settle(1_000);
+
+    expect(chromeMock.session.get('runWindow')).toBe(4242);
+  });
+});

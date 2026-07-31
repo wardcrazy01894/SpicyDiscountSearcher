@@ -809,3 +809,29 @@ describe('the vendor selector table', () => {
     expect(missing).toEqual([]);
   });
 });
+
+describe('currency codes written without a space', () => {
+  it.each([
+    ['412USD', 412, 'USD'],
+    ['USD412', 412, 'USD'],
+    ['USD412.00', 412, 'USD'],
+    ['412.00USD', 412, 'USD'],
+    ['Total: USD412.35', 412.35, 'USD'],
+  ])('reads %s', (text, amount, currency) => {
+    // `\b` sits between a letter and a digit, so word boundaries killed these
+    // along with the Cadillac/Audi phantoms. Letter lookaround kills only the
+    // phantoms.
+    expect(findPrices(text)).toEqual([{ amount, currency }]);
+  });
+
+  it.each([
+    '2024 Cadillac Escalade',
+    '2023 Audi Q5 or similar',
+    '5 audio inputs',
+    '2024 Europcar fleet',
+    '50 euros per day',
+    '12 USDA approved',
+  ])('still finds no price in %s', (text) => {
+    expect(findPrices(text)).toEqual([]);
+  });
+});

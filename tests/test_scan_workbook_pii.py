@@ -192,7 +192,13 @@ def test_a_named_creator_in_that_same_part_is_still_caught(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     "signoff",
-    ["-Hampton Inn", "-Americas Only", "-Not Valid", "-Corporate Rate", "-Best Western"],
+    [
+        "-Hampton Inn",
+        "-Americas Only",
+        "-Not Valid",
+        "-Corporate Rate",
+        "-Best Western",
+    ],
 )
 def test_title_cased_workbook_vocabulary_is_not_a_person(tmp_path: Path, signoff: str) -> None:
     """Capitalisation alone is not enough in a workbook full of employers and
@@ -530,7 +536,10 @@ class TestMain:
         assert scanner.main() == 0
 
     def test_returns_one_and_names_the_book(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         source = self.source(tmp_path, monkeypatch)
         make_workbook(
@@ -565,3 +574,37 @@ def test_an_openpyxl_round_trip_of_the_real_workbook_is_clean() -> None:
         out = Path(tmp) / "round-trip.xlsx"
         openpyxl.load_workbook(scanner.WORKBOOK).save(out)
         assert scanner.scan(out) == []
+
+
+def test_catches_a_manager_in_the_app_properties(tmp_path: Path) -> None:
+    """`docProps/app.xml` was read and never checked. `<Manager>` is a person's
+    name, stamped from the Office installation."""
+    book = make_workbook(
+        tmp_path,
+        {"docProps/app.xml": "<Properties><Manager>Ada Lovelace</Manager></Properties>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Ada Lovelace" in problems[0]
+
+
+def test_a_producer_name_in_app_properties_is_still_boilerplate(tmp_path: Path) -> None:
+    book = make_workbook(
+        tmp_path,
+        {"docProps/app.xml": "<Properties><Company>Microsoft Excel</Company></Properties>"},
+    )
+    assert scanner.scan(book) == []
+
+
+def test_catches_a_company_in_the_app_properties(tmp_path: Path) -> None:
+    """The other half of the app.xml change, and the half nothing tested:
+    dropping `Company` from the pattern left the suite green, because the only
+    `Company` case asserted a producer name is *not* reported — which passes
+    trivially when the element is never matched at all."""
+    book = make_workbook(
+        tmp_path,
+        {"docProps/app.xml": "<Properties><Company>Contoso Ltd</Company></Properties>"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Contoso Ltd" in problems[0]

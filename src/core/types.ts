@@ -114,10 +114,12 @@ export type QuoteStatus = 'pending' | 'loading' | 'ok' | 'no-price' | 'error' | 
  * `per-day` covers per-night too. Car-centric naming in a tool that ships
  * hotels, and every hotel-facing site undoes it — `perUnitLabel` translates it
  * to "/night", `basisPhrase` to "nightly rates", `tripUnits` to nights. Not
- * renamed because the value is persisted in `chrome.storage.session` as part
- * of the whole `RunState`, so a rename has to land atomically with any
- * snapshot already sitting there — the one a suspended worker left behind, and
- * which the popup reads back on its next open.
+ * renamed, and the honest reason is churn rather than risk: three call sites
+ * already translate it, and a rename touches every one plus the tests for the
+ * sake of a word. Two earlier attempts at this comment claimed the value's
+ * persistence in `chrome.storage.session` made a rename unsafe — it does not.
+ * That store is in-memory and dies with the extension context, so any snapshot
+ * in it was written by the build now reading it.
  */
 export type PriceBasis = 'total' | 'per-day' | 'unknown';
 

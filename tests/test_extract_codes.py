@@ -82,7 +82,9 @@ class TestParseCompany:
     def test_keeps_real_names(self, name: str) -> None:
         assert extract_codes.parse_company(name) == (name, None)
 
-    def test_lifts_a_qualifier_even_when_the_qualifier_reads_like_a_remark(self) -> None:
+    def test_lifts_a_qualifier_even_when_the_qualifier_reads_like_a_remark(
+        self,
+    ) -> None:
         # Testing the remark patterns against the raw cell rejected the whole
         # thing; they belong against the name, after the lift.
         assert extract_codes.parse_company("Nestle (100% subsidiary)") == (

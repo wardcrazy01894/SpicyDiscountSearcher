@@ -30,8 +30,15 @@ const CURRENCY_SYMBOL = String.raw`CA\$|NZ\$|US\$|A\$|C\$|R\$|\$|€|£`;
  * page's headline price, beating every real rate on it. Every vendor lists
  * model years, so every quote landed in the same phantom CAD bucket and the
  * race was decided on model years.
+ *
+ * Letter lookaround rather than `\b`, because `\b` sits between a letter and a
+ * digit: `\bUSD\b` matched `Cadillac` no better, but it also stopped matching
+ * `USD412` and `412USD`, which the code read before the boundaries were added.
+ * These forms only occur in a single text node — `offerText` puts a space
+ * between `<span>412</span>` and `<span>USD</span>` — but a page mixing them
+ * with a "$29/day" promo would have handed the headline to the promo.
  */
-const CURRENCY_CODE = String.raw`\b(?:USD|EUR|GBP|CAD|AUD|NZD|BRL)\b`;
+const CURRENCY_CODE = String.raw`(?<![A-Za-z])(?:USD|EUR|GBP|CAD|AUD|NZD|BRL)(?![A-Za-z])`;
 
 const CURRENCY = `${CURRENCY_SYMBOL}|${CURRENCY_CODE}`;
 

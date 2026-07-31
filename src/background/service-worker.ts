@@ -316,6 +316,14 @@ async function closeWindow(run: ActiveRun): Promise<void> {
       // minimised and holds a new-tab page, so nobody will ever see it to
       // close it by hand — which is worth a line.
       warn('could not close the background window', error);
+      // And worth keeping the id: it is the only handle any later worker has
+      // on it. `reapOrphanWindow` has had this check since it was written;
+      // this half was claimed to be identical and was not, so a failed close
+      // here still leaked a window permanently.
+      if (await windowStillOpen(closing)) {
+        run.windowId = null;
+        return;
+      }
     }
     run.windowId = null;
   }
@@ -329,9 +337,14 @@ async function closeWindow(run: ActiveRun): Promise<void> {
 
 /** Drop the stored window id, but only if it is still the one we closed. */
 async function forgetWindowId(closed: number | null): Promise<void> {
+  // Nothing was closed, so there is nothing to forget. Without this the
+  // function contradicted its own docstring and wiped a *foreign* orphan id —
+  // reachable from a run that never opened a window at all, which is what an
+  // empty candidate list or a cancel landing before `ensureWindow` produces.
+  if (closed === null) return;
   try {
     const stored = await chrome.storage.session.get(WINDOW_KEY);
-    if (closed !== null && stored[WINDOW_KEY] !== closed) return;
+    if (stored[WINDOW_KEY] !== closed) return;
     await chrome.storage.session.remove(WINDOW_KEY);
   } catch (error) {
     warn('could not forget the background window id', error);
