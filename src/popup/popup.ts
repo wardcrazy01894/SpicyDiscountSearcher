@@ -557,7 +557,7 @@ function renderRun(state: RunState | null): void {
   ui.pendingStart = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
-  runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapestComparable code';
+  runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
 
   if (!state) {
     results.hidden = true;
@@ -621,7 +621,7 @@ function renderRun(state: RunState | null): void {
     // quote's headline basis and currency by majority, so a quote whose offers
     // are mostly in euros sits outside the reported bucket and is listed as
     // not ranked — while its stray dollar offers still entered this matrix and
-    // could hold the cheapestComparable row. The popup then warned that "another code is
+    // could hold the cheapest row. The popup then warned that "another code is
     // cheaper on the classes these results have in common", naming a code it
     // had just told the user was not comparable.
     const ranked = primaryGroup(state.quotes)?.quotes ?? [];

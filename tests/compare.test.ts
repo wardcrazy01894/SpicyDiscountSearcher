@@ -130,7 +130,7 @@ describe('comparisonGroups', () => {
 });
 
 describe('orderForDisplay', () => {
-  it('puts priced results first, cheapestComparable to dearest, failures last', () => {
+  it('puts priced results first, cheapest to dearest, failures last', () => {
     const ranked = orderForDisplay([
       quote('c', 'error'),
       quote('a', 'ok', [['Compact', 240]]),
@@ -302,7 +302,7 @@ describe('the class matrix and the quotes it is given', () => {
   // quote quoting mostly euros sits outside a USD reported bucket and the
   // popup lists it as "not ranked". Its stray dollar offers, though, are still
   // offers — and feeding the matrix every quote let one of them hold the
-  // cheapestComparable row. The popup then warned that "another code is cheaper on the
+  // cheapest row. The popup then warned that "another code is cheaper on the
   // classes these results have in common", naming a code it had just told the
   // user was not comparable at all.
   const usdWinner = quote('A', 'ok', [['Economy', 100, 'total', 'USD']]);

@@ -114,8 +114,10 @@ export type QuoteStatus = 'pending' | 'loading' | 'ok' | 'no-price' | 'error' | 
  * `per-day` covers per-night too. Car-centric naming in a tool that ships
  * hotels, and every hotel-facing site undoes it — `perUnitLabel` translates it
  * to "/night", `basisPhrase` to "nightly rates", `tripUnits` to nights. Not
- * renamed because the value is persisted in `chrome.storage.session`, so a
- * rename would misread every snapshot written by an older build.
+ * renamed because the value is persisted in `chrome.storage.session` as part
+ * of the whole `RunState`, so a rename has to land atomically with any
+ * snapshot already sitting there — the one a suspended worker left behind, and
+ * which the popup reads back on its next open.
  */
 export type PriceBasis = 'total' | 'per-day' | 'unknown';
 
