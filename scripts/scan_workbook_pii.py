@@ -122,6 +122,24 @@ THREAD_ID_RE = re.compile(r"^tc=\{[0-9A-Fa-f-]+\}$")
 # the gate on the fix. Same category as the namespace hosts: boilerplate, not a
 # person. Matched whole and case-insensitively, so "Calc Jenkins" is still a
 # name.
+# A part stored as binary that can still carry text. In a .xlsb the strings,
+# sheets and comments all live in these; `vbaProject.bin` holds macro source.
+CONTENT_BEARING_BINARY_RE = re.compile(r"\.bin$", re.IGNORECASE)
+
+# Binary parts that hold no words: page setup, images, embedded fonts. An
+# ordinary .xlsx with a configured printer has printerSettings1.bin and nothing
+# else binary, so without this every such workbook would fail.
+BENIGN_BINARY_RE = re.compile(
+    r"printerSettings|/media/|/fonts?/|\.(?:png|jpe?g|gif|bmp|tiff?|emf|wmf)$",
+    re.IGNORECASE,
+)
+
+# openpyxl writes the literal string "None" as the author of a comment nobody
+# signed. Same argument as PRODUCER_NAMES and the tc={GUID} shim: an openpyxl
+# round-trip of this repo's own workbook produced two of these, so the tooling
+# the repo already uses would have failed the gate on a clean file.
+NON_PERSON_AUTHORS = frozenset({"none", "null", "unknown", "user", "author"})
+
 PRODUCER_NAMES = frozenset(
     {
         "openpyxl",
@@ -247,13 +265,14 @@ def check_host(name: str, host: str) -> str | None:
 def scan(workbook: Path) -> list[str]:
     """Return a list of problems; empty means the workbook is clean."""
     problems: list[str] = []
-    readable = 0
+    unreadable: list[str] = []
 
     with zipfile.ZipFile(workbook) as archive:
         for name in archive.namelist():
             if not name.endswith((".xml", ".vml", ".rels")):
+                if CONTENT_BEARING_BINARY_RE.search(name) and not BENIGN_BINARY_RE.search(name):
+                    unreadable.append(name)
                 continue
-            readable += 1
             text = archive.read(name).decode("utf-8", errors="replace")
 
             for email in sorted(set(EMAIL_RE.findall(text))):
@@ -263,7 +282,12 @@ def scan(workbook: Path) -> list[str]:
             # the comment is anonymous, which is the state we want to hold.
             for author in sorted(set(AUTHOR_RE.findall(text))):
                 stripped = author.strip()
-                if stripped and not THREAD_ID_RE.match(stripped):
+                if (
+                    stripped
+                    and not THREAD_ID_RE.match(stripped)
+                    and stripped.lower() not in NON_PERSON_AUTHORS
+                    and stripped.lower() not in PRODUCER_NAMES
+                ):
                     problems.append(f"{name}: comment author {stripped!r}")
 
             for creator in sorted(set(CREATOR_RE.findall(text))):
@@ -296,15 +320,18 @@ def scan(workbook: Path) -> list[str]:
                 if problem:
                     problems.append(problem)
 
-    # "I could not read any of it" is not "it is clean", and a gate that says
-    # the second when it means the first is worse than no gate. A .xlsb stores
-    # its parts as .bin, so every one is skipped above -- a book carrying a
-    # name and a staging host scanned green and exited 0. Silence here is the
-    # exact false confidence this script exists to remove.
-    if readable == 0:
+    # "I could not read this part" is not "this part is clean", and a gate that
+    # says the second when it means the first is worse than no gate.
+    #
+    # Counting *readable* parts was the wrong test and never fired: OPC requires
+    # `[Content_Types].xml` in every package, so a .xlsb always has at least one
+    # XML member. A spec-faithful .xlsb carrying a name and a staging host in
+    # `xl/sharedStrings.bin` scanned green. The right question is whether
+    # anything was skipped that could hold text.
+    for name in unreadable:
         problems.append(
-            "no readable XML parts -- this format cannot be scanned, so it "
-            "cannot be cleared either"
+            f"{name}: not XML, so its contents cannot be scanned -- this part "
+            f"cannot be cleared"
         )
 
     return problems

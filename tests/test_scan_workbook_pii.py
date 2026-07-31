@@ -11,6 +11,7 @@ one only by a `-stg` infix.
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -443,15 +444,54 @@ def test_reads_relationship_parts(tmp_path: Path) -> None:
     assert "stay-stg.hilton.com" in problems[0]
 
 
-def test_a_format_it_cannot_read_is_not_declared_clean(tmp_path: Path) -> None:
-    """A .xlsb stores its parts as .bin, so every one is skipped — and a book
-    carrying a name and a staging host scanned green. "I could not read any of
-    it" is not "it is clean", and a gate that says the second when it means the
-    first is worse than no gate at all."""
-    book = make_workbook(tmp_path, {"xl/workbook.bin": "Demilade Boyejo stay-stg.hilton.com"})
+def test_a_part_it_cannot_read_is_not_declared_clean(tmp_path: Path) -> None:
+    """An OPC package always contains `[Content_Types].xml`, so counting
+    *readable* parts never fired — a spec-faithful .xlsb keeps only its
+    strings, sheets and comments as .bin and scanned green while carrying the
+    incident's own name and staging host. The question is not "did I read
+    anything" but "did I skip anything that could hold words".
+    """
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "_rels/.rels": "<Relationships/>",
+            "xl/sharedStrings.bin": "stay-stg.hilton.com",
+            "xl/comments1.bin": "-Demilade Boyejo",
+        },
+    )
     problems = scanner.scan(book)
-    assert len(problems) == 1
-    assert "cannot be scanned" in problems[0]
+    assert len(problems) == 2
+    assert all("cannot be cleared" in p for p in problems)
+    assert any("sharedStrings.bin" in p for p in problems)
+
+
+def test_binary_parts_with_no_words_are_not_flagged(tmp_path: Path) -> None:
+    """Page setup, images and fonts hold no text. An ordinary .xlsx with a
+    configured printer has printerSettings1.bin, so without this every one of
+    them would fail the gate."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "xl/printerSettings/printerSettings1.bin": "x",
+            "xl/media/image1.png": "x",
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_an_authorless_comment_is_not_a_person(tmp_path: Path) -> None:
+    """openpyxl writes the literal string "None" as the author of a comment
+    nobody signed. An openpyxl round-trip of this repo's own workbook produced
+    two of them — the same argument as the producer-name and tc={GUID} skips:
+    the tooling the repo already uses must not fail the gate on a clean file.
+    """
+    book = make_workbook(
+        tmp_path,
+        {"xl/comments1.xml": "<comments><authors><author>None</author></authors></comments>"},
+    )
+    assert scanner.scan(book) == []
 
 
 def test_a_marker_beats_an_allowlisted_host(
@@ -517,3 +557,14 @@ class TestMain:
         (source / "corrupt.xlsx").write_bytes(b"not a zip at all")
         make_workbook(source, {"xl/sharedStrings.xml": "<sst/>"}).rename(source / "zz-clean.xlsx")
         assert scanner.main() == 1
+
+
+def test_an_openpyxl_round_trip_of_the_real_workbook_is_clean() -> None:
+    """The end-to-end version of the two skips above. Scripting the scrub is
+    the natural way to fix a leak in this repo, and openpyxl is what it would
+    be scripted with — the gate must not fail on the fix."""
+    openpyxl = pytest.importorskip("openpyxl")
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "round-trip.xlsx"
+        openpyxl.load_workbook(scanner.WORKBOOK).save(out)
+        assert scanner.scan(out) == []
