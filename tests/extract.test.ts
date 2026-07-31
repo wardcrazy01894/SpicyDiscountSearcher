@@ -458,7 +458,10 @@ describe('the per-vendor selector path', () => {
     ]);
   });
 
-  it('falls back to the sweep when the selectors match nothing', () => {
+  // Note this one passes with the branch deleted — the sweep would run anyway.
+  // It is here to pin the *reported branch*, which is the part that would go
+  // wrong silently if the fallback stopped labelling itself.
+  it('reports the sweep when the selectors match nothing', () => {
     CONFIG['hertz'] = { container: 'main', offer: '.gone-in-a-redesign' };
     document.body.innerHTML =
       '<main><li><h3>Compact</h3><span>Estimated total</span><span>$210.00</span></li></main>';

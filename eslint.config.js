@@ -26,10 +26,12 @@ export default tseslint.config(
       // innerHTML fix never had — the comment that used to sit here described
       // markup-building that had already been removed, and the rule it
       // justified was 'off', which is the default and enforced nothing.
-      // No `object` key: that restricts the property on ANY object, which is
-      // the point. `object: '*'` is not a wildcard — it matches an object
-      // literally named `*`, so the first version of this rule was itself a
-      // no-op, exactly like the one it replaced.
+      // No `object` key, deliberately: that restricts the property on any
+      // object, which is the point. (`object: '*'` is not a wildcard — it
+      // matches an object literally named `*`.) Covers reads and writes,
+      // including el['innerHTML'] and destructuring, but not a dynamic key.
+      // Scoped to the sinks this codebase has actually reached for; add
+      // document.write or createContextualFragment if that ever changes.
       'no-restricted-properties': [
         'error',
         { property: 'innerHTML', message: 'Use textContent or createElement.' },

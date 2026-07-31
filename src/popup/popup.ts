@@ -25,7 +25,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { VENDORS, getVendor, vendorsFor } from '../core/vendors.js';
+import { VENDORS, findVendor, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -237,7 +237,7 @@ function vendorBreakdown(candidates: Candidate[]): string {
     .sort(
       ([aVendor, aCount], [bVendor, bCount]) => bCount - aCount || aVendor.localeCompare(bVendor),
     )
-    .map(([vendor, count]) => `${getVendor(vendor).label} ${count}`)
+    .map(([vendor, count]) => `${findVendor(vendor)?.label ?? vendor} ${count}`)
     .join(' · ');
 }
 
@@ -369,9 +369,11 @@ function evidenceLine(quote: Quote): HTMLElement | null {
       : report.path === 'vendor-selectors'
         ? 'vendor selectors'
         : 'unknown branch';
+  // Clamped and fixed-width: a clock that steps backwards mid-run would
+  // otherwise render "-0.1s", and mixing "5s" with "5.3s" reads as two units.
   const took =
     quote.startedAt && quote.finishedAt
-      ? ` · ${Math.round((quote.finishedAt - quote.startedAt) / 100) / 10}s`
+      ? ` · ${Math.max(0, (quote.finishedAt - quote.startedAt) / 1000).toFixed(1)}s`
       : '';
   line.textContent = `landed ${report.finalPath} · ${report.offerCount} offer${plural} · ${branch}${took}`;
   if (report.title) line.title = report.title;
@@ -394,8 +396,12 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   // populated for every vendor since the first commit and read by nothing, so
   // the row said "national · XZ42PWC" where the vendor's own site says
   // "National Contract ID XZ42PWC".
-  const vendor = getVendor(quote.candidate.vendor);
-  code.textContent = `${vendor.label} ${vendor.codeLabel} · ${quote.candidate.code}`;
+  // Soft lookup: this renders a snapshot from chrome.storage.session, and
+  // getVendor throws — one unrecognised id would empty the whole list instead
+  // of degrading one row to the raw id.
+  const vendor = findVendor(quote.candidate.vendor);
+  const who_ = vendor ? `${vendor.label} ${vendor.codeLabel}` : quote.candidate.vendor;
+  code.textContent = `${who_} · ${quote.candidate.code}`;
   who.append(name, code);
 
   const right = document.createElement('span');

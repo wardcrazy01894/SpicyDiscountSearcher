@@ -89,6 +89,16 @@ export const VENDORS: Vendor[] = [
 
 const BY_ID = new Map<VendorId, Vendor>(VENDORS.map((v) => [v.id, v]));
 
+/**
+ * Lookup that tolerates an id the registry no longer knows.
+ *
+ * For rendering a persisted snapshot: getVendor throws, and one unknown id in
+ * one row would take out the whole results list rather than that row.
+ */
+export function findVendor(id: string): Vendor | undefined {
+  return BY_ID.get(id as VendorId);
+}
+
 export function getVendor(id: VendorId): Vendor {
   const vendor = BY_ID.get(id);
   if (!vendor) throw new Error(`unknown vendor: ${id}`);
