@@ -66,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.resetModules();
   delete (globalThis as { chrome?: unknown }).chrome;
@@ -81,12 +82,36 @@ describe('staying inert', () => {
   });
 
   it('says nothing when there is no background at all', async () => {
+    // Asserted against what the probe *attempted*, not against the recorder
+    // the previous version had just thrown away — that made the test a
+    // tautology no implementation could fail, and removing the try/catch this
+    // claims to pin left all 14 green.
+    const attempted: string[] = [];
     (globalThis as { chrome?: unknown }).chrome = {
-      runtime: { sendMessage: () => Promise.reject(new Error('no receiving end')) },
+      runtime: {
+        sendMessage: (message: Sent) => {
+          attempted.push(message.type);
+          return Promise.reject(new Error('no receiving end'));
+        },
+      },
     };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+
     document.body.innerHTML = CARD('$29.99');
     await run(10_000);
-    expect(sent).toEqual([]);
+    process.off('unhandledRejection', onUnhandled);
+
+    // It asked once and stopped.
+    expect(attempted).toEqual(['PROBE_READY']);
+    // And it swallowed the rejection rather than letting it escape. This is
+    // the half the previous version could not see: dropping the try/catch
+    // changes nothing about what is *sent*, only whether an unhandled
+    // rejection lands in the page's console on every ordinary page load.
+    expect(unhandled).toEqual([]);
   });
 });
 
@@ -152,8 +177,11 @@ describe('running out of time', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.type).toBe('PROBE_RESULT');
-    // Whatever the last read saw, not nothing.
-    expect(sent[0]?.offers?.length).toBeGreaterThan(0);
+    // The *latest* read, not a stale first one: reporting the first price it
+    // ever saw at the deadline would be as wrong as reporting none. The 40s
+    // deadline lands after 26 polls of 1.5s, so $56.99 is the last read and
+    // $30.99 was the first.
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([56.99]);
   });
 
   it('reports probe-empty when it never saw a price', async () => {
@@ -179,7 +207,6 @@ describe('what it is allowed to claim', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]?.failure).toBe('extract-threw');
     expect(sent[0]?.message).toContain('selector blew up');
-    vi.restoreAllMocks();
   });
 });
 

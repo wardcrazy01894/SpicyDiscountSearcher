@@ -444,6 +444,10 @@ describe('cancelling', () => {
 
     const state = await getState();
     expect(state?.quotes.every((q) => q.status === 'cancelled')).toBe(true);
+    // The code, not just the status. Asserting only the status left
+    // `failure: 'cancelled'` deletable with the whole suite green — the one
+    // failure code nothing pinned.
+    expect(state?.quotes.every((q) => q.failure === 'cancelled')).toBe(true);
     expect(state?.finishedAt).toBeTypeOf('number');
     expect(chromeMock.tabs.size).toBe(0);
     expect(chromeMock.windows.size).toBe(0);
@@ -1022,7 +1026,10 @@ describe('a quote whose link could not be built', () => {
     expect(failed?.failure).toBe('link-build');
     expect(failed?.status).toBe('error');
     expect(failed?.finishedAt).toBeDefined();
-    // The searchable vendor still ran.
-    expect(quotes.find((q) => q.candidate.vendor === 'hertz')?.status).not.toBe('error');
+    // The searchable vendor still ran. Asserted as present-and-not-error:
+    // `undefined !== 'error'` would have passed for a quote that never existed.
+    const ran = quotes.find((q) => q.candidate.vendor === 'hertz');
+    expect(ran).toBeDefined();
+    expect(ran?.status).not.toBe('error');
   });
 });

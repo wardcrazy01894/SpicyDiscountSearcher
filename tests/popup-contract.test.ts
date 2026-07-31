@@ -76,11 +76,13 @@ afterEach(() => {
 describe('the popup against its own HTML', () => {
   it('imports and starts up without throwing', async () => {
     await expect(import('../src/popup/popup.js')).resolves.toBeDefined();
-    // main() ran to completion: the tagline is only written at its end, so
-    // this fails if startup threw anywhere along the way.
+    // Startup got as far as the tagline. Not "nothing threw": `main()`'s own
+    // catch swallows a later failure and writes it into the plan line, so
+    // check that line too rather than claiming more than this can see.
     await vi.waitFor(() => {
       expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
     });
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not start up/);
   });
 
   it.each(SELECTORS)('finds %s in index.html', (selector) => {
@@ -92,7 +94,7 @@ describe('the popup against its own HTML', () => {
     // otherwise this file could keep passing while popup.ts grew a sixteenth
     // lookup nobody checked.
     const source = readFileSync(path.join(ROOT, 'src/popup/popup.ts'), 'utf8');
-    const found = [...source.matchAll(/\bel<[^>]+>\('([^']+)'\)/g)].map((m) => m[1]);
+    const found = [...source.matchAll(/\bel(?:<[^>]+>)?\('([^']+)'\)/g)].map((m) => m[1]);
     expect(new Set(found)).toEqual(new Set(SELECTORS));
   });
 
