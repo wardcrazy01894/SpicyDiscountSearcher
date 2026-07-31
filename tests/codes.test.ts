@@ -16,15 +16,15 @@ const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
 describe('the generated code database', () => {
   it('parsed exactly the rows the workbook holds', () => {
-    // Exact, not a floor. Floors of 150/400 against real values of 217/546 let
+    // Exact, not a floor. Floors of 150/400 against real values of 231/555 let
     // extract_codes.py drop a quarter of the workbook and still ship green,
     // which is the regression the comment claimed to guard. The CI data job
     // already pins this JSON byte-for-byte to the workbook, so a legitimate
     // workbook edit updates both numbers together and nothing else can move
     // them.
     const companies = allCompanies();
-    expect(companies.length).toBe(217);
-    expect(companies.flatMap((c) => c.codes).length).toBe(546);
+    expect(companies.length).toBe(231);
+    expect(companies.flatMap((c) => c.codes).length).toBe(555);
   });
 
   it('only references vendors the extension knows about', () => {
@@ -87,6 +87,11 @@ describe('company names', () => {
   it('keeps the codes those notes were attached to', () => {
     // They are real Hilton codes; only the attribution was invented. Dropping
     // them would trade working codes for a naming fix.
+    //
+    // This claim used to be false for four of the nine that lived here: FIAT,
+    // LET, ME and ADD were words the Hilton-sheet parser cut off the front of
+    // an employer's name and a sentence. They are gone, and the bucket now
+    // holds only codes the workbook really did leave unattributed.
     const unattributed = allCompanies().find((c) => c.name === 'Unattributed');
     expect(unattributed?.codes.length).toBeGreaterThan(0);
     expect(unattributed?.codes.every((c) => c.note)).toBe(true);

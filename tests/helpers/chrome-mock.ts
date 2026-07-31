@@ -10,6 +10,14 @@ import { vi } from 'vitest';
  * than internals the worker never exposes.
  */
 
+/**
+ * The host_permissions in public/manifest.json. Chrome populates `Tab.url` and
+ * `Tab.title` only for a tab whose *current* URL matches one of these, since
+ * the manifest grants no `tabs` permission.
+ */
+const VENDOR_HOST_RE =
+  /^https:\/\/www\.(avis|budget|enterprise|hertz|hilton|hyatt|marriott|nationalcar|sixt)\.com\//;
+
 type MessageListener = (
   message: unknown,
   sender: chrome.runtime.MessageSender,
@@ -20,6 +28,9 @@ export interface FakeTab {
   id: number;
   url: string;
   windowId: number;
+  /** What chrome.tabs.get would report. Set by a test to stand in for a page
+   *  that loaded something other than the search we asked for. */
+  title: string;
 }
 
 export interface ChromeHarness {
@@ -127,8 +138,33 @@ export function installChromeMock(): ChromeHarness {
       create: (options: chrome.tabs.CreateProperties) => {
         tabOptions.push({ options: { ...options }, at: Date.now() });
         const id = nextTabId++;
-        tabs.set(id, { id, url: options.url ?? '', windowId: options.windowId ?? 0 });
+        // `url` is the *committed* address, which is why a test can set it to
+        // '' to model a navigation that never landed — a hung about:blank, or
+        // a chrome-error:// page after a DNS failure. Chrome reports no url in
+        // those cases for the same reason it reports none off-origin, and the
+        // suite could not express the difference while create() filled it in.
+        tabs.set(id, { id, url: options.url ?? '', windowId: options.windowId ?? 0, title: '' });
         return Promise.resolve({ id });
+      },
+      // Rejects for an unknown id, like the real thing: the background reads a
+      // timed-out tab just before closing it, and "the tab is already gone" is
+      // a case that has to behave.
+      //
+      // `url` and `title` are omitted for a tab whose current URL is not one
+      // this extension has a host permission for — which is what Chrome does,
+      // because the manifest grants no `tabs` permission. Returning them
+      // unconditionally modelled a permission the extension does not hold and
+      // hid a real bug: an off-origin redirect was reported as "never
+      // navigated", a confident wrong answer in the very case the feature
+      // exists for.
+      get: (tabId: number) => {
+        const tab = tabs.get(tabId);
+        if (!tab) return Promise.reject(new Error('No tab with id'));
+        const visible = VENDOR_HOST_RE.test(tab.url);
+        return Promise.resolve({
+          id: tab.id,
+          ...(visible ? { url: tab.url, title: tab.title } : {}),
+        });
       },
       remove: (tabId: number) => {
         if (!tabs.has(tabId)) return Promise.reject(new Error('No tab with id'));
@@ -153,6 +189,13 @@ export function installChromeMock(): ChromeHarness {
         windows.add(id);
         windowsCreated.push(id);
         return Promise.resolve({ id });
+      },
+      // The background asks this after a failed close, to tell "already gone"
+      // from "still there and I could not close it" — which need opposite
+      // handling for the stored id.
+      get: (windowId: number) => {
+        if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));
+        return Promise.resolve({ id: windowId });
       },
       remove: (windowId: number) => {
         if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));

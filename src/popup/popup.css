@@ -337,6 +337,14 @@ input:focus-visible {
   margin: 2px 0 0;
 }
 
+/* A late answer contradicts the failure text sitting above it — the row says
+   nothing came back and this says something did. That contradiction is the
+   diagnosis, so it must not render as another line of grey. One class more
+   specific than `.quote .evidence` below, so it wins whatever the order. */
+.quote .evidence.is-late {
+  color: var(--warn);
+}
+
 .quote .evidence {
   color: var(--muted);
   font-size: 10px;

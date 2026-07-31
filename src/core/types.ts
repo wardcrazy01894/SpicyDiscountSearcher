@@ -150,8 +150,20 @@ export interface ProbeReport {
   finalPath: string;
   title: string;
   offerCount: number;
-  /** Which extraction branch produced the offers. */
-  path: 'vendor-selectors' | 'generic-sweep';
+  /**
+   * Which extraction branch produced the offers.
+   *
+   * The last two are the background's own knowledge and a content script may
+   * never claim them — same doctrine as `QuoteFailure`, enforced the same way,
+   * by an allowlist at ingest. A page that could say `not-reached` could forge
+   * "the background observed this".
+   *
+   * `not-reached`: the probe never answered, so the background described the
+   * tab instead. `left-our-origins`: it could not even do that, because the tab
+   * had navigated somewhere this extension holds no permission to read — which
+   * is also precisely when the content script stops running.
+   */
+  path: 'vendor-selectors' | 'generic-sweep' | 'not-reached' | 'left-our-origins';
 }
 
 export interface Quote {
@@ -176,6 +188,16 @@ export interface Quote {
   message?: string;
   /** What the probe observed, when it got far enough to observe anything. */
   report?: ProbeReport;
+  /**
+   * Evidence that arrived after the quote had already been settled.
+   *
+   * A page can finish parsing a millisecond inside the deadline and still send
+   * after it. That reply used to be dropped on the floor — offers, best price
+   * and report — while the quote kept a `probe-timeout` saying the tab never
+   * answered. Recording it turns "no answer before the deadline" into "answered
+   * too late", which are different problems with different fixes.
+   */
+  lateReport?: ProbeReport;
   /** Set when the evidence says this page is not the search we asked for. */
   suspect?: 'landed-elsewhere';
   /** Paired with finishedAt to show how long a vendor took to answer. */

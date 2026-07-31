@@ -67,6 +67,20 @@ The two things that would silently produce a wrong answer, and their guards:
   probe reports its landed path; a quote that landed on the site root is flagged
   in the popup. Structurally blind for Avis and Budget, whose deep links target
   `/en/home` already.
+- **A number that was never a rate.** "Total taxes and fees: $57.20" carries the
+  word `total`, so it was tagged `total` — the most trusted basis — and being
+  the cheapest number there it became the page's headline price. Bucketing
+  cannot save you from this: the number really is in the reported bucket.
+  `isFeeLine` in `extract.ts` strips the fee phrases and asks what is left; if
+  something still says what the number means (`total`, `/day`) the fee words
+  were a modifier and the number is a price. A fee element stays a _site_ so it
+  claims its number away from the card, and the flag propagates to any site
+  inside it — a `<span>` around the amount defeated the first version entirely.
+
+  Known escapes, all of which also escape on `main`: a flat label/amount sibling
+  pair directly under the card with no wrapper element, and `Taxes and fees not
+included: $57.20`, where the negation is invisible to the rule. Both surface a
+  fee as a price.
 
 ## Politeness
 
@@ -98,9 +112,49 @@ offer count, extraction branch — and renders under any failed or flagged quote
 Path only, never the query string: that carries the discount code and the user's
 itinerary.
 
+`probe-timeout` is the exception, because by definition the probe said nothing.
+The background reads the tab itself just before closing it and builds a report
+with `path: 'not-reached'` — same path-only rule. Without it the commonest
+failure was the one with no evidence at all, and "Hertz always times out" could
+not be told apart from a consent interstitial or a country picker.
+
+It cannot always read it. The manifest holds no `tabs` permission — PR #5
+dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
+current URL is not one of the nine vendor hosts. Not a gap to paper over with a
+permission, but not a diagnosis either: all it establishes is that the tab's
+address is unreadable, which is equally true of a redirect off the vendor's
+site and of a load that never committed (`about:blank`, or `chrome-error://`
+after a DNS or TLS failure). Both also mean the content script never ran, so
+both cause timeouts. `path: 'left-our-origins'` records the fact and the popup
+names both possibilities; claiming either one would repeat the mistake this
+replaced, which was asserting the other. The chrome fake models the permission
+rule, having previously returned `url` unconditionally and hidden it.
+
+`not-reached` and `left-our-origins` are the background's own knowledge, so a
+content script may not claim either — `PROBE_PATHS` enforces that at ingest,
+exactly as `PROBE_FAILURES` does for failure codes. A forged branch is
+downgraded rather than dropped: the landed path, title and count are still the
+probe's own observations and worth keeping; only the claim about who made them
+is refused.
+
+`Quote.lateReport` is evidence that arrived _after_ the quote was settled. A
+page can begin its final extract a millisecond inside the deadline and send
+after it; that reply used to be discarded whole while the quote kept a
+`probe-timeout` saying nothing came back. The late payload can attach a report
+and nothing else — it never settles a quote, changes a verdict or contributes a
+price, because a page that missed its deadline must not win a race the user
+already saw finish. `ActiveRun.retiredTabs` is what makes that possible, and is
+deliberately a second map rather than a delayed delete from `tabs`.
+
 A content script may only claim `extract-threw` or `probe-empty`. Anything else
 is the background's own knowledge, and a page claiming `cancelled` would
 misattribute its failure to the user.
+
+`warn()` in the service worker is the only place this extension logs. There is
+no log store and the worker's console dies with it, so the structured fields
+above remain the real telemetry — `warn` is the backstop for failures that
+belong to no quote (a storage write that failed, a tab or window that would not
+close). Never pass it a URL or a code.
 
 ## Known gaps
 
@@ -116,18 +170,52 @@ misattribute its failure to the user.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON. Remove a vendor from `vendors.ts` without regenerating and the popup
   dies in `refreshPlan`; the `data` job doesn't assert the ids are known.
-- Nine Hilton codes sit under a company called `Unattributed`. Six are there
-  because the workbook cell beside them really was a margin note. The other
-  three are a worse story: row 56 reads `N0394181 / 0000394181 Fiat (Americas
-only)` — an ordinary employer row — but `looks_like_code('FIAT')` is true, so
-  the brand name was eaten as a third code and only the qualifier was left to be
-  the company. **Fiat is not in the database at all**, and `FIAT` ships as a
-  Hilton code.
-- Same root cause, four times: `LET`, `ME` and `ADD` are English words taken off
-  the front of `Let me add a few I've umulated for EMEA…`, and `FIAT` is a brand
-  name. `looks_like_code`'s letters-only branch cannot tell any of them from a
-  real code.
-- Two real employers are lost outright. `Benjamin Moore` (row 24, `à / 560002892
-Benjamin Moore and Company`) is dropped because the stray leading `à` isn't
-  code-shaped, so the row collects no codes at all and is skipped. `Fiat` is
-  lost as described above. Neither can be found by name in the picker.
+- Three Hilton codes sit under a company called `Unattributed`, because the
+  workbook cell beside them really was a qualifier rather than an employer.
+  That is now the only reason anything lands there.
+
+  It used to be nine, and the other six were a parser bug rather than a
+  spreadsheet one: `parse_hilton_sheet` consumed leading code-shaped tokens
+  with `looks_like_code`'s letters-only branch **on**, so it ate the first
+  words of the employer's own name. `FIAT` came off row 56, `LET`/`ME`/`ADD`
+  off the front of a sentence. Every code on that sheet carries a digit, so the
+  branch is now off for that caller, and no Hilton-sheet code is letters-only
+  any more. `MH` (company `Explore More`) is the only letters-only **hilton**
+  code left, and it comes from a grid sheet, where letters-only codes are
+  legitimate — there are around a hundred of them across the other vendors
+  (`ACC`, `DTC`, `MMM`), all untouched.
+
+  Same fix recovered thirty employers. Most had been published under a fragment
+  of their name — `Bank of America` as `America`, and `Koch Industries` and
+  `Shaw Industries` both as `Industries`, _merged_ into a single six-code
+  company belonging to neither. `BP`, `Dell` and `UPS` were dropped whole: their
+  names are entirely code-shaped, so the loop consumed the row and left nothing
+  to be the company. Those three come back from the letters-only rule alone,
+  since none of them carries a digit.
+
+  `3M` is the one that needed more, and it is the example in the function's own
+  docstring. It carries a digit, so the loop still ate it; the loop therefore
+  never consumes the last token, because every row on this sheet ends with the
+  employer. A row that is genuinely nothing but codes is reported rather than
+  published with an account number as its company name — tested against the
+  account-number shape rather than `looks_like_code`, since every real employer
+  here (`3M`, `BP`, `UTC`) passes the latter.
+
+  `Benjamin Moore` (row 24, `à / 560002892 Benjamin Moore and Company`) is back
+  too — a single stray character ahead of the codes is skipped as decoration.
+
+- Every `continue` in `extract_codes.py` used to drop a row in silence while
+  the summary counted only what it kept, which is how `Benjamin Moore` stayed
+  lost. Skipped rows now print to stderr and the `data` job shows them.
+
+  Five rows are skipped today and **nothing is lost to any of them**. One is a
+  margin note. The other four have a URL where the employer's name should be:
+  three have no codes beside them at all, and the fourth (`Marriott Codes`
+  row 74) is a duplicate of `Codes` row 74, whose code `17885` already ships
+  under `Harvard`. `Marriott Codes` is largely a copy of `Codes` with a link
+  pasted over one name cell.
+
+  The reporting exists for the row that is _not_ a duplicate. Until it printed
+  them, a URL row that carried the only copy of a code would have vanished
+  exactly the way `Benjamin Moore` did, and the summary would still have looked
+  healthy.
