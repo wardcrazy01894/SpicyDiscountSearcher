@@ -120,19 +120,23 @@ DISPLAY_NAME_RE = re.compile(r"""displayName\s*=\s*(["'])(.*?)\1""")
 # no way out but patching this file.
 THREAD_ID_RE = re.compile(r"^tc=\{[0-9A-Fa-f-]+\}$")
 
-# Producers stamp their own name into dc:creator when nobody set one. openpyxl
-# does it on every save -- and openpyxl is this repo's own workbook tooling, so
-# scripting the scrub, the most natural way to fix a leak, would have failed
-# the gate on the fix. Same category as the namespace hosts: boilerplate, not a
-# person. Matched whole and case-insensitively, so "Calc Jenkins" is still a
-# name.
-# A part stored as binary that can still carry text. In a .xlsb the strings,
-# sheets and comments all live in these; `vbaProject.bin` holds macro source.
-CONTENT_BEARING_BINARY_RE = re.compile(r"\.bin$", re.IGNORECASE)
-
 # Binary parts that hold no words: page setup, images, embedded fonts. An
 # ordinary .xlsx with a configured printer has printerSettings1.bin and nothing
 # else binary, so without this every such workbook would fail.
+#
+# This is the *whole* rule now, and it used to be the smaller half of one. The
+# skip branch previously reported an unread part only when it matched
+# `\.bin$`, which the surrounding comment described as "did I skip anything that
+# could hold words" -- a claim one extension wider than the code. Both
+# `xl/embeddings/Word_Document1.docx` and `xl/model/item.data` (Power Pivot)
+# scanned clean with a name planted in them, the same class as the .xlsb hole
+# this scanner was written to close.
+#
+# Inverting it means a part is reported unless it is provably wordless, so an
+# embedded document, a model cache, or whatever the next Office feature invents
+# has to be dismissed deliberately rather than by not being called `.bin`. An
+# embedded `.xlsx` is a workbook in its own right and belongs on the reported
+# side for exactly the reasons this file exists.
 BENIGN_BINARY_RE = re.compile(
     r"printerSettings|/media/|/fonts?/|\.(?:png|jpe?g|gif|bmp|tiff?|emf|wmf)$",
     re.IGNORECASE,
@@ -144,9 +148,31 @@ BENIGN_BINARY_RE = re.compile(
 # the repo already uses would have failed the gate on a clean file.
 NON_PERSON_AUTHORS = frozenset({"none", "null", "unknown", "user", "author"})
 
+# Producers stamp their own name into dc:creator when nobody set one. openpyxl
+# does it on every save -- and openpyxl is this repo's own workbook tooling, so
+# scripting the scrub, the most natural way to fix a leak, would have failed the
+# gate on the fix. Same category as the namespace hosts: boilerplate, not a
+# person. Matched whole and case-insensitively, so "Calc Jenkins" is still a
+# name.
+#
+# "windows user" is here for the same reason and is the one entry that is a
+# judgement call: stock unregistered Office stamps `<dc:creator>Windows User`,
+# so it is a producer default rather than somebody's name -- but it is also the
+# only entry a real person could plausibly be called. The author message names
+# this set so a contributor who disagrees knows where to look, which is the
+# escape hatch the host message has always had and this one did not.
+_THIS_FILE = Path(__file__).name
+
+# The host message has always ended with "add it to ALLOWED_HOSTS in <file>";
+# the author messages named no escape hatch at all, so a contributor who
+# believed a flagged name was a producer default had nothing to go on. Stock
+# unregistered Office writing "Windows User" is exactly that case.
+AUTHOR_HINT = f" -- if that is a producer default, add it to PRODUCER_NAMES in {_THIS_FILE}"
+
 PRODUCER_NAMES = frozenset(
     {
         "openpyxl",
+        "windows user",
         "microsoft excel",
         "microsoft office user",
         "libreoffice",
@@ -272,7 +298,7 @@ def scan(workbook: Path) -> list[str]:
     with zipfile.ZipFile(workbook) as archive:
         for name in archive.namelist():
             if not name.endswith((".xml", ".vml", ".rels")):
-                if CONTENT_BEARING_BINARY_RE.search(name) and not BENIGN_BINARY_RE.search(name):
+                if not BENIGN_BINARY_RE.search(name):
                     unreadable.append(name)
                 continue
             text = archive.read(name).decode("utf-8", errors="replace")
@@ -290,12 +316,12 @@ def scan(workbook: Path) -> list[str]:
                     and stripped.lower() not in NON_PERSON_AUTHORS
                     and stripped.lower() not in PRODUCER_NAMES
                 ):
-                    problems.append(f"{name}: comment author {stripped!r}")
+                    problems.append(f"{name}: comment author {stripped!r}{AUTHOR_HINT}")
 
             for creator in sorted(set(CREATOR_RE.findall(text))):
                 stripped = creator.strip()
                 if stripped and stripped.lower() not in PRODUCER_NAMES:
-                    problems.append(f"{name}: document author {stripped!r}")
+                    problems.append(f"{name}: document author {stripped!r}{AUTHOR_HINT}")
 
             # Threaded comments keep the commenter in xl/persons/, never in an
             # <author> element.
@@ -345,6 +371,12 @@ def main() -> int:
     # Every spreadsheet format, not just the one extension in use today: a
     # macro-enabled .xlsm is the same zip of XML and would have been scanned by
     # nothing at all.
+    #
+    # A .xlsm can never pass, and that is the intended answer rather than an
+    # oversight: it carries xl/vbaProject.bin, VBA source is text, and this
+    # scanner cannot read it -- so it is reported as a part that cannot be
+    # cleared. Adding a macro-enabled workbook to this repo should require a
+    # human to say why, which is exactly what a red required check asks for.
     workbooks = sorted(
         book for pattern in ("*.xlsx", "*.xlsm", "*.xlsb") for book in SOURCE_DIR.glob(pattern)
     )

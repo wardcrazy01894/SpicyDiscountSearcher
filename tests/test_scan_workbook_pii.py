@@ -608,3 +608,207 @@ def test_catches_a_company_in_the_app_properties(tmp_path: Path) -> None:
     problems = scanner.scan(book)
     assert len(problems) == 1
     assert "Contoso Ltd" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        "xl/embeddings/Word_Document1.docx",
+        "xl/model/item.data",
+        "xl/embeddings/Microsoft_Excel_Worksheet1.xlsx",
+    ],
+)
+def test_any_unread_part_that_could_hold_words_is_reported(tmp_path: Path, part: str) -> None:
+    """The skip branch only reported `.bin`, while its own comment claimed to
+    ask "did I skip anything that could hold words". Both an embedded Word
+    document and a Power Pivot model cache scanned clean with a name planted in
+    them -- the same class as the .xlsb hole this scanner was written to close,
+    one extension over. An embedded .xlsx is a workbook in its own right and
+    belongs here for the reason this file exists at all.
+    """
+    book = make_workbook(
+        tmp_path,
+        {"[Content_Types].xml": "<Types/>", part: "-Demilade Boyejo stay-stg.hilton.com"},
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "cannot be cleared" in problems[0]
+    assert part in problems[0]
+
+
+def test_a_signoff_must_be_capitalised(tmp_path: Path) -> None:
+    """A false-positive guard, which is the class that makes a gate get
+    switched off. Without it "-see notes below" reads as a signature."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "xl/comments1.xml": (
+                "<comments><commentList><comment><text><t>"
+                "check the rate\n-see notes"
+                "</t></text></comment></commentList></comments>"
+            ),
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_a_signoff_needs_two_words() -> None:
+    """Tested against the function, not through scan(), and deliberately so.
+
+    SIGNOFF_RE's own `(?:[ \t]+word)+` already requires a second word, so a
+    one-word bullet never reaches looks_like_a_person and no workbook fixture
+    can tell the rule apart from the regex. Asserting it through scan() looked
+    like coverage and was vacuous -- flipping `< 2` to `< 1` left such a test
+    green. The rule is still the function's contract, and the pattern is free
+    to loosen.
+    """
+    assert scanner.looks_like_a_person("Demilade Boyejo") is True
+    assert scanner.looks_like_a_person("Hampton") is False
+
+
+def test_reads_vml_parts(tmp_path: Path) -> None:
+    """`.vml` is in the readable-extension tuple and the module docstring
+    advertises it, but nothing exercised it: legacy comment *shapes* live in
+    xl/drawings/vmlDrawing1.vml, and Excel writes the author into that part
+    too. Dropping `.vml` from the tuple left the suite green while moving the
+    part to the unread pile."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "xl/drawings/vmlDrawing1.vml": "<xml><author>Demilade Boyejo</author></xml>",
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "Demilade Boyejo" in problems[0]
+
+
+def test_a_url_host_is_reported(tmp_path: Path) -> None:
+    """HOST_RE could be neutered with the suite green, because BARE_HOST_RE
+    happened to cover every tested case. They are separate patterns and the
+    scheme-ful one is what a pasted booking link looks like."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            # TLD outside BARE_HOST_RE's list, so only the scheme-ful pattern
+            # can see it. With `.com` the bare pattern matched too and
+            # neutering HOST_RE changed nothing.
+            "xl/sharedStrings.xml": "<sst><si><t>https://stay-stg.hilton.cloud/x</t></si></sst>",
+        },
+    )
+    problems = scanner.scan(book)
+    assert any("stay-stg.hilton.cloud" in p for p in problems)
+
+
+def test_the_bare_w3_org_namespace_is_allowed(tmp_path: Path) -> None:
+    """`w3.org` sat in ALLOWED_HOSTS with nothing asserting it; producers
+    usually write `www.w3.org`, so it read as dead. It is kept deliberately --
+    an XMLSchema declaration without the `www.` is legal and a red required
+    check on namespace boilerplate is the failure mode ALLOWED_HOSTS' namespace
+    entries exist to prevent -- so it is pinned rather than removed."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "docProps/core.xml": (
+                '<cp:coreProperties xmlns:xsi="http://w3.org/2001/XMLSchema-instance"/>'
+            ),
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_a_part_that_is_not_utf8_does_not_crash_the_scan(tmp_path: Path) -> None:
+    """`errors="replace"` was untested, and main() catches only BadZipFile and
+    OSError -- so a part in some other encoding would have exited on a
+    traceback rather than reporting anything, in a required check."""
+    path = tmp_path / "book.xlsx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("xl/sharedStrings.xml", b"<sst><si><t>caf\xe9 latte</t></si></sst>")
+    assert scanner.scan(path) == []
+
+
+def test_main_scans_an_xlsb_dropped_beside_the_workbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CI invokes main(), so the entire .xlsb path -- the round-5 blocker this
+    scanner exists for -- was reachable only through an untested glob. Dropping
+    `*.xlsb` from it left the suite green while making a .xlsb invisible."""
+    monkeypatch.setattr(scanner, "SOURCE_DIR", tmp_path)
+    path = tmp_path / "extra.xlsb"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("xl/sharedStrings.bin", "stay-stg.hilton.com")
+    assert scanner.main() == 1
+    # `main() == 1` on its own is vacuous here: main() also returns 1 when it
+    # finds no workbook at all, which is exactly what dropping *.xlsb from the
+    # glob produces. The file has to be named in the output.
+    assert "extra.xlsb" in capsys.readouterr().err
+
+
+def test_main_scans_an_xlsm_dropped_beside_the_workbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the same glob. A macro-enabled workbook can never pass
+    -- xl/vbaProject.bin is always reported, because VBA source holds text --
+    and that is the intended answer rather than a surprise: a .xlsm in this
+    repo would need a human to say why."""
+    monkeypatch.setattr(scanner, "SOURCE_DIR", tmp_path)
+    path = tmp_path / "macros.xlsm"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("xl/vbaProject.bin", "Sub Leak()")
+    assert scanner.main() == 1
+    assert "macros.xlsm" in capsys.readouterr().err
+
+
+def test_the_author_message_names_the_way_out(tmp_path: Path) -> None:
+    """The host message has always ended with "add it to ALLOWED_HOSTS in
+    <file>"; the author messages named no escape hatch, so a contributor who
+    believed a flagged name was a producer default had nothing to go on."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "docProps/core.xml": "<cp><dc:creator>Ada Lovelace</dc:creator></cp>",
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "PRODUCER_NAMES" in problems[0]
+
+
+def test_stock_unregistered_office_is_not_a_person(tmp_path: Path) -> None:
+    """Stock Office with no registered owner stamps this. A judgement call, and
+    the one PRODUCER_NAMES entry a real person could plausibly be called --
+    which is why the message above names the set."""
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "docProps/core.xml": "<cp><dc:creator>Windows User</dc:creator></cp>",
+        },
+    )
+    assert scanner.scan(book) == []
+
+
+def test_the_comment_author_message_names_the_way_out_too(tmp_path: Path) -> None:
+    """Two separate call sites append the hint, and only the creator one was
+    covered -- removing it from the comment-author branch left the suite green.
+    """
+    book = make_workbook(
+        tmp_path,
+        {
+            "[Content_Types].xml": "<Types/>",
+            "xl/comments1.xml": (
+                "<comments><authors><author>Ada Lovelace</author></authors></comments>"
+            ),
+        },
+    )
+    problems = scanner.scan(book)
+    assert len(problems) == 1
+    assert "PRODUCER_NAMES" in problems[0]
