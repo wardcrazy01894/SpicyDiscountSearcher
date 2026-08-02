@@ -264,13 +264,26 @@ close). Never pass it a URL or a code.
 - TypeScript is pinned below 7 by something outside this repo.
   `typescript-eslint@8.65.0` is the newest release — its canary too — and
   declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` cannot resolve TS 7
-  at all. There is no stable 6.x to step through: TypeScript 6.0.0 exists only
-  as a beta. The code itself is ready — measured on Dependabot's branch with
+  at all. The code itself is ready — measured on Dependabot's branch with
   `--legacy-peer-deps`, `tsc --noEmit` is clean under 7.0.2 and the suite
   passes — so this is a wait, not a migration. `.github/dependabot.yml` ignores
   `typescript` 7.x so the same unmergeable PR does not arrive monthly; the entry
   says to remove it when typescript-eslint's peer range moves, and that library's
   own major bump is the cue.
+
+  The stable 6.x that did not exist when that was written now does, and we are
+  on it: `typescript@6.0.3` installs under a plain `npm ci`, needing no
+  `--legacy-peer-deps`, which is the whole difference from the 7.x attempt. It
+  is inside the peer range rather than in spite of it, so nothing about the
+  blocker above changed — 7 is still unresolvable for the same reason.
+
+  Note the range's upper bound is `<6.1.0`, not `<7`. TypeScript 6.1 will be as
+  unresolvable as 7 is, and it is not covered by the `7.x` ignore, so it would
+  arrive as exactly the recurring red PR that entry exists to prevent. Left
+  uncovered on purpose: typescript-eslint widening its peer range is the more
+  likely of the two to land first, and pre-emptively ignoring `6.1.x` would
+  suppress a bump that had become perfectly installable.
+
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON, so removing a vendor from `vendors.ts` without regenerating would kill
   the popup in `refreshPlan`. Not actually reachable: `tests/codes.test.ts`
