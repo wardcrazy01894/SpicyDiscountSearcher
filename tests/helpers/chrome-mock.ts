@@ -60,8 +60,26 @@ export interface ChromeHarness {
   userClosesTab: (tabId: number) => void;
   /** Make the next `storage.session.set` reject, once. */
   failNextSessionWrite: () => void;
+  /**
+   * Make every `storage.session.set` take `ms` before it resolves.
+   *
+   * publish() is the suspension point between runQuote's two `run.cancelled`
+   * checks, and with an instantly-resolving stub no lane is ever parked there
+   * when a cancel lands -- so the window-leak race it opens cannot be written
+   * as a test at all. Delaying one write is what puts a lane in that gap.
+   */
+  delaySessionWrites: (ms: number) => void;
   /** Make the next `windows.create` resolve undefined, as Chrome may. */
   failNextWindowCreate: () => void;
+  /**
+   * Make every `windows.create` take `ms` before it resolves.
+   *
+   * Chrome opening a window is not instant, and a cancel can land inside that
+   * call. Without a delay here the second half of ensureWindow's cancel guard
+   * -- the one that closes a window created after teardown -- cannot be
+   * reached by any test.
+   */
+  delayWindowCreate: (ms: number) => void;
   restore: () => void;
 }
 
@@ -79,7 +97,9 @@ export function installChromeMock(): ChromeHarness {
   let nextTabId = 100;
   let nextWindowId = 1;
   let failSessionWrite = false;
+  let delaySessionWrite = 0;
   let failWindowCreate = false;
+  let windowCreateDelay = 0;
 
   const readArea =
     (store: Map<string, unknown>) =>
@@ -119,6 +139,9 @@ export function installChromeMock(): ChromeHarness {
             return Promise.reject(new Error('QUOTA_BYTES quota exceeded'));
           }
           for (const [k, v] of Object.entries(items)) session.set(k, structuredClone(v));
+          if (delaySessionWrite > 0) {
+            return new Promise<void>((resolve) => setTimeout(resolve, delaySessionWrite));
+          }
           return Promise.resolve();
         },
         remove: (key: string) => {
@@ -188,6 +211,9 @@ export function installChromeMock(): ChromeHarness {
         const id = nextWindowId++;
         windows.add(id);
         windowsCreated.push(id);
+        if (windowCreateDelay > 0) {
+          return new Promise((resolve) => setTimeout(() => resolve({ id }), windowCreateDelay));
+        }
         return Promise.resolve({ id });
       },
       // The background asks this after a failed close, to tell "already gone"
@@ -248,8 +274,14 @@ export function installChromeMock(): ChromeHarness {
     failNextSessionWrite: () => {
       failSessionWrite = true;
     },
+    delaySessionWrites: (ms: number) => {
+      delaySessionWrite = ms;
+    },
     failNextWindowCreate: () => {
       failWindowCreate = true;
+    },
+    delayWindowCreate: (ms: number) => {
+      windowCreateDelay = ms;
     },
     restore: () => {
       (globalThis as { chrome?: unknown }).chrome = previous;

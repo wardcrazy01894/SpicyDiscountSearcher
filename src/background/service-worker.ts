@@ -321,8 +321,34 @@ function makeQuote(candidate: Candidate, plan: SearchPlan): Quote {
   }
 }
 
+/**
+ * Thrown when a run is cancelled while a lane is waiting for its window.
+ *
+ * Distinct from the tab-open failures around it because it is not a failure:
+ * the cancel path has already settled every unfinished quote as `cancelled`,
+ * and reporting `tab-open` over the top of that would blame the extension for
+ * something the user did.
+ */
+class RunCancelled extends Error {
+  constructor() {
+    super('run cancelled while opening the background window');
+  }
+}
+
 async function ensureWindow(run: ActiveRun): Promise<number> {
   if (run.windowId !== null) return run.windowId;
+
+  // A cancel that lands while a lane is suspended must not be able to re-arm
+  // this. `runQuote` checks `run.cancelled` before and after this call, but the
+  // `await publish()` between them is a suspension point: a lane parked there
+  // when `cancelRun` arrives resumes to find `windowPromise` nulled by
+  // `closeWindow` and memoises a *second* window -- after the run was cancelled
+  // and its first window closed. Nothing in this worker closes that one. The
+  // run is already torn down, and `reapOrphanWindow` only runs at startup, so
+  // it is the familiar shape: a minimised window holding a new-tab page,
+  // invisible to the user, with no handle on it. Pre-existing on `main`, and
+  // the same family as the double-run guard and the orphan-window fixes.
+  if (run.cancelled) throw new RunCancelled();
 
   // Memoised rather than check-then-create. Every lane awaits publish() before
   // reaching here, so with the default concurrency of 2 both lanes saw
@@ -338,6 +364,14 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
     // older typings did not, so this was a live "cannot read id of undefined"
     // waiting for the one call that failed.
     if (created?.id === undefined) throw new Error('could not open a background window');
+    // Deliberately no second cancel check here, though one was written first.
+    // A cancel landing while Chrome is still opening the window gets past the
+    // guard above, and `closeWindow` has already run -- but assigning the id
+    // below is what makes the window findable, and startRun's own teardown
+    // closes it on the way out. Throwing instead would leave `run.windowId`
+    // null and orphan the window for good, which is what the first version did
+    // until its mutant was checked. The "closes a window Chrome finished
+    // opening after the cancel landed" test covers this path.
     run.windowId = created.id;
     // Recorded so a restarted worker can close what this one orphaned.
     await chrome.storage.session.set({ [WINDOW_KEY]: created.id }).catch(() => {});
@@ -450,6 +484,13 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
       });
     });
   } catch (error) {
+    // A RunCancelled reaching here needs no special case: cancelRun settles
+    // every unfinished quote before any lane resumes, and finishQuote returns
+    // early for a settled quote, so the `tab-open` patch below is dropped. An
+    // `instanceof` check here was written first and then removed as dead --
+    // it could be deleted with the suite green because finishQuote was already
+    // doing the work. The property it was protecting is real and is pinned by
+    // "does not report a cancelled quote as a tab-open failure".
     finishQuote(run, quote.id, {
       status: 'error',
       failure: 'tab-open',
