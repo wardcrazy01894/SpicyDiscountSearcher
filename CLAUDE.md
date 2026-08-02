@@ -261,6 +261,16 @@ close). Never pass it a URL or a code.
   arrive — without that the popup sits telling the user to reopen it while the
   race it started runs behind it.
 
+- TypeScript is pinned below 7 by something outside this repo.
+  `typescript-eslint@8.65.0` is the newest release — its canary too — and
+  declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` cannot resolve TS 7
+  at all. There is no stable 6.x to step through: TypeScript 6.0.0 exists only
+  as a beta. The code itself is ready — measured on Dependabot's branch with
+  `--legacy-peer-deps`, `tsc --noEmit` is clean under 7.0.2 and the suite
+  passes — so this is a wait, not a migration. `.github/dependabot.yml` ignores
+  `typescript` 7.x so the same unmergeable PR does not arrive monthly; the entry
+  says to remove it when typescript-eslint's peer range moves, and that library's
+  own major bump is the cue.
 - `buildCandidates` calls the throwing `getVendor` on ids from the generated
   JSON, so removing a vendor from `vendors.ts` without regenerating would kill
   the popup in `refreshPlan`. Not actually reachable: `tests/codes.test.ts`
