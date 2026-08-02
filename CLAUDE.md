@@ -124,6 +124,26 @@ cap is lifted — they were unpinned until someone checked.
 doesn't prove non-delivery, and a retry starts a second race that opens real
 tabs before cancelling the first.
 
+A cancel can also arrive while a lane is _between_ its two `run.cancelled`
+checks. `runQuote` tests the flag, then `await publish()`, then calls
+`ensureWindow` — and a lane parked on that publish resumes to find
+`windowPromise` nulled by `closeWindow` and memoises a **second** window, after
+the run was cancelled and its first window closed. Nothing in that worker closes
+it: the run is torn down and `reapOrphanWindow` only runs at startup.
+`ensureWindow` therefore refuses outright when `run.cancelled` is set, so the
+memoised promise cannot be re-armed after teardown.
+
+There is deliberately **no** second check after `chrome.windows.create` resolves,
+though one was written first. A cancel landing while Chrome is still opening the
+window does get past the guard — but assigning `run.windowId` is what makes that
+window findable, and `startRun`'s own teardown closes it on the way out.
+Throwing there instead left `windowId` null and orphaned the window for good,
+which is the bug the guard was supposed to fix. Both directions are pinned by
+tests, and the tests only work because the chrome fake can delay a session write
+and a `windows.create`: with everything resolving instantly no lane is ever in
+the gap, and the first three attempts at this test passed with the guard
+deleted.
+
 Two `START_RUN`s can also arrive without any retry, because the popup only
 disabled Run when the reply came back: a double-click sent two. `cancelRun()`
 returns immediately when `active` is null, so both passed it and both built a

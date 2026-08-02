@@ -473,6 +473,82 @@ describe('cancelling', () => {
   });
 });
 
+describe('a cancel landing while a lane is opening the window', () => {
+  it('does not leave a second window nobody can close', async () => {
+    // runQuote checks run.cancelled before and after ensureWindow, but the
+    // `await publish()` between them is a suspension point. A lane parked there
+    // when CANCEL_RUN arrives resumes to find windowPromise nulled by
+    // closeWindow and creates a window *after* the run was cancelled. Nothing
+    // in this worker closes it: the run is torn down, and reapOrphanWindow only
+    // runs at startup. The user sees nothing, because it is minimised and holds
+    // a new-tab page.
+    //
+    // The delay is what makes the race writable. With a session write that
+    // resolves instantly no lane is ever inside that window when the cancel
+    // lands, and the same test passes whether the guard exists or not -- which
+    // it did, on the first three attempts at writing it.
+    await bootWorker();
+    chromeMock.delaySessionWrites(500);
+    // Not awaited: the delayed write is inside START_RUN's own handler, so
+    // awaiting the reply here would wait out the very gap the cancel has to
+    // land in.
+    const started = chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    // beginRun's own publish clears at t=500; the lane then enters runQuote and
+    // parks on its publish until t=1000. t=600 is inside that gap.
+    await settle(600);
+    const stopped = chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle(10_000);
+    await Promise.all([started, stopped]);
+
+    // windowsCreated is cumulative, so a window created after teardown shows
+    // here even if something later closed it. Nothing does.
+    expect(chromeMock.windowsCreated).toHaveLength(0);
+    expect(chromeMock.windows.size).toBe(0);
+    expect(chromeMock.tabs.size).toBe(0);
+  });
+
+  it('closes a window Chrome finished opening after the cancel landed', async () => {
+    // The other half. The entry guard only helps a lane that has not started
+    // creating yet; a cancel arriving while chrome.windows.create is in flight
+    // gets past it, and closeWindow has already run by then. The id is not in
+    // storage either -- that write comes after -- so nothing, in this worker or
+    // the next one, would ever have a handle on it.
+    await bootWorker();
+    chromeMock.delayWindowCreate(800);
+    const started = chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    // Far enough in for the lane to be inside windows.create, not before it.
+    await settle(200);
+    const stopped = chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle(10_000);
+    await Promise.all([started, stopped]);
+
+    // It was created -- that is the difference from the test above -- but it
+    // must not still be open.
+    expect(chromeMock.windowsCreated).toHaveLength(1);
+    expect(chromeMock.windows.size).toBe(0);
+  });
+
+  it('does not report a cancelled quote as a tab-open failure', async () => {
+    // ensureWindow now throws for a cancelled run, and runQuote's catch turns
+    // any throw into `tab-open`. Left unhandled that writes "could not open a
+    // tab" over quotes cancelRun had already settled -- blaming the extension
+    // for what the user asked for, and showing in the popup as a broken vendor
+    // rather than a stopped run.
+    await bootWorker();
+    chromeMock.delaySessionWrites(500);
+    const started = chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(600);
+    const stopped = chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle(10_000);
+    await Promise.all([started, stopped]);
+
+    const state = await getState();
+    expect(state?.quotes).toHaveLength(2);
+    expect(state?.quotes.some((q) => q.failure === 'tab-open')).toBe(false);
+    expect(state?.quotes.every((q) => q.failure === 'cancelled')).toBe(true);
+  });
+});
+
 describe('a tab the user closes', () => {
   it('releases its lane instead of blocking until the timeout', async () => {
     await bootWorker();
