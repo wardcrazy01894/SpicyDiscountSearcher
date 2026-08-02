@@ -195,12 +195,12 @@ pass and the branch must be up to date before merge. The fifth, `test node NN`,
 is the Node version matrix; `test` aggregates it into the single required
 context, so adding a version never means editing branch protection:
 
-| Job                        | What it does                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit`      |
-| `test`                     | aggregates `test node 22`, `24` and `26` (vitest on each)                         |
-| `data`                     | ruff lint + format, pytest, then regenerates the database and fails if it differs |
-| `secret scan`              | gitleaks over the full branch history, plus a PII scan inside the workbook        |
+| Job                        | What it does                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| `build / typecheck / lint` | typecheck, eslint, prettier, both vite builds, `check-dist.mjs`, `npm audit`        |
+| `test`                     | aggregates `test node 22`, `24` and `26` (vitest on each)                           |
+| `data`                     | ruff lint + format, pytest, then regenerates the database and fails if it differs   |
+| `secret scan`              | gitleaks over the commits this PR or push adds, plus a PII scan inside the workbook |
 
 The workbook is a zip of XML, and gitleaks skips it by extension before any
 repo config applies — so the one binary in this repo was the one file no
@@ -208,6 +208,20 @@ scanner read. `scripts/scan_workbook_pii.py` unzips it and checks the parts a
 spreadsheet hides: comment authors and signed-off comment bodies, document
 properties, and every hostname against an allowlist of exact names. A new host
 fails the job until someone adds it, which is the point.
+
+That `secret scan` job deliberately says "the commits this PR or push adds",
+because that is all it sees. `gitleaks-action` derives its own scan range from
+the event type, so a pull request scans `<base>^..<head>` and a push scans the
+pushed range — on a squash merge, one commit. Nothing about `fetch-depth: 0`
+changes that.
+
+History is a separate workflow, `secret history scan`, on a weekly schedule and
+runnable on demand from the Actions tab. `schedule` and `workflow_dispatch` are
+the event types where the action omits its range argument, so gitleaks walks
+every commit. It is split out because the thing this repo actually got wrong was
+a blob that stayed reachable by SHA after the working tree was clean — the exact
+failure a per-push scan cannot see, since by the time it matters the commit is
+already old.
 
 `npm audit` runs after every other check in the build job on purpose: a new
 advisory appearing overnight shouldn't abort before typecheck and lint have said

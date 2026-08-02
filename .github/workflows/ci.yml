@@ -187,7 +187,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # full history so gitleaks can scan all commits on the branch
+          # Not "so gitleaks can scan the history" — it can't, on this event.
+          # gitleaks-action scans `<base>^..<head>` on a pull_request and the
+          # pushed range on a push, so what this depth buys is that `<base>^`
+          # exists locally; a shallow clone breaks the range, not the depth of
+          # the scan. History is covered by secret-history-scan.yml instead.
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -211,7 +216,8 @@ jobs:
         #
         # After gitleaks, and !cancelled(): the two look for different things,
         # and a name found in the workbook must not withhold a credential found
-        # in the history. Same reasoning as the audit step in the build job.
+        # in the incoming commits. Same reasoning as the audit step in the
+        # build job.
         # Not always() — PR runs are superseded by design (cancel-in-progress
         # above), and there is nothing to learn from a run nobody is waiting on.
         if: '!cancelled()'
