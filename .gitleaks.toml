@@ -42,4 +42,13 @@ paths = [
 # `scripts/scan_workbook_pii.py` unzips the workbook and scans its XML, and it
 # runs in the same `secret scan` job right after this. It looks at the working
 # tree rather than history, so it answers "what ships", not "what was ever
-# committed"; gitleaks with fetch-depth: 0 still owns the history question.
+# committed".
+#
+# The history question is NOT answered by the `secret scan` job in ci.yml, and
+# an earlier version of this comment claimed it was. `gitleaks-action` picks
+# the scan range from the event type and never scans history on a `push` or
+# `pull_request`: real runs on this repo report `1 commits scanned` on both.
+# `fetch-depth: 0` there does not change that — it only makes the base commit
+# of a PR range available. Full history is scanned by
+# `.github/workflows/secret-history-scan.yml`, on a schedule, which is the
+# event type where the action omits `--log-opts` entirely.
