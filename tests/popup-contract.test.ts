@@ -43,6 +43,14 @@ const SELECTORS = [
   '#quotes',
 ];
 
+/** Every message the popup sent, so a double submit is countable. */
+let sentMessages: Array<{ type: string }> = [];
+/** The popup's RUN_STATE listener, so the background can push to it. */
+let broadcastListeners: Array<(message: unknown) => void> = [];
+/** Swapped by a test to make START_RUN reject the way a dead worker does. */
+let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
+  Promise.resolve({ type: 'RUN_STATE', state: null });
+
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
@@ -57,13 +65,23 @@ function installChrome(): void {
       },
     },
     runtime: {
-      sendMessage: () => Promise.resolve({ type: 'RUN_STATE', state: null }),
-      onMessage: { addListener: () => {} },
+      sendMessage: (message: { type: string }) => {
+        sentMessages.push(message);
+        return sendMessageImpl(message);
+      },
+      onMessage: {
+        addListener: (fn: (message: unknown) => void) => {
+          broadcastListeners.push(fn);
+        },
+      },
     },
   };
 }
 
 beforeEach(() => {
+  sentMessages = [];
+  broadcastListeners = [];
+  sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
 });
@@ -123,5 +141,228 @@ describe('the popup against its own HTML', () => {
     const id = selector.slice(1);
     document.body.innerHTML = BODY.replace(`id="${id}"`, `id="${id}-renamed"`);
     await expect(import('../src/popup/popup.js')).rejects.toThrow(/missing element/);
+  });
+});
+
+describe('the popup half of the double-run guard', () => {
+  /** Fill the car form so `validate` passes and submit is a real submit. */
+  function fillCarForm(): void {
+    const set = (name: string, value: string): void => {
+      const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+    set('pickupLocation', 'TPA');
+    set('pickupDate', '2026-09-04');
+    set('dropoffDate', '2026-09-11');
+  }
+
+  async function boot(): Promise<void> {
+    await import('../src/popup/popup.js');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
+    });
+  }
+
+  it('sends one START_RUN for a double-click, not two', async () => {
+    // `ui.running` only becomes true once the background answers, so between
+    // the click and the reply `runBtn.disabled` was false — and the next
+    // refreshPlan re-armed it anyway. A double-click sent two START_RUNs, and
+    // the worker built two runs: two minimised windows, twice the cap, twice
+    // the load on every vendor. `ui.pendingStart` is set synchronously on
+    // submit for exactly this window.
+    //
+    // Deleting `|| ui.pendingStart` from refreshPlan and `ui.pendingStart =
+    // false` from renderRun left the whole suite green before this test.
+    let release: (value: unknown) => void = () => {};
+    sendMessageImpl = (message) =>
+      message.type === 'START_RUN'
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve({ type: 'RUN_STATE', state: null });
+
+    await boot();
+    fillCarForm();
+
+    // Clicked, not dispatched as a synthetic `submit`: the guard works by
+    // disabling the button, and a synthetic submit event bypasses exactly the
+    // thing being tested. Two real clicks is the reported reproduction.
+    const runBtn = document.querySelector<HTMLButtonElement>('#run-btn');
+    runBtn?.click();
+    runBtn?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(1);
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+    release({ type: 'RUN_STATE', state: null });
+  });
+
+  it('keeps Run disabled through a refreshPlan while the start is in flight', async () => {
+    // The regression this guards: `ui.running` is still false, so a vendor chip
+    // or a max-codes keystroke re-armed the button mid-flight. That is the
+    // window the second click of a double-click went through.
+    let release: (value: unknown) => void = () => {};
+    sendMessageImpl = (message) =>
+      message.type === 'START_RUN'
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve({ type: 'RUN_STATE', state: null });
+
+    await boot();
+    fillCarForm();
+    document
+      .querySelector<HTMLFormElement>('#trip-form')
+      ?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes');
+    if (maxCodes) {
+      maxCodes.value = '8';
+      maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+    release({ type: 'RUN_STATE', state: null });
+  });
+
+  it('re-arms the button once the background answers', async () => {
+    // The other side of the guard. `ui.pendingStart` is cleared by renderRun,
+    // and without that the flag latches: the first submit disables Run forever,
+    // because every later refreshPlan keeps reading a start that is no longer
+    // in flight. A run that finished would leave the user unable to start
+    // another without reopening the popup.
+    await boot();
+    fillCarForm();
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+    });
+
+    // And it stays armed through a refreshPlan, which is where a latched flag
+    // would show up.
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes');
+    if (maxCodes) {
+      maxCodes.value = '7';
+      maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+  });
+});
+
+describe('a START_RUN the background never received', () => {
+  async function bootWithFailingStart(): Promise<void> {
+    sendMessageImpl = (message) =>
+      message.type === 'START_RUN'
+        ? Promise.reject(new Error('Receiving end does not exist.'))
+        : Promise.resolve({ type: 'RUN_STATE', state: null });
+    await import('../src/popup/popup.js');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
+    });
+    const set = (name: string, value: string): void => {
+      const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+    set('pickupLocation', 'TPA');
+    set('pickupDate', '2026-09-04');
+    set('dropoffDate', '2026-09-11');
+    document
+      .querySelector<HTMLFormElement>('#trip-form')
+      ?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+  }
+
+  it('keeps the explanation after a refreshPlan overwrites the plan line', async () => {
+    // The button correctly stays dead — a rejection does not prove
+    // non-delivery, so re-arming offers a second race on top of one that may
+    // already be opening tabs. But every refreshPlan trigger overwrote the
+    // plan line and cleared `is-warning`, leaving a dead button and no reason
+    // for it. `ui.sendFailed` is sticky so refreshPlan puts it back.
+    await bootWithFailingStart();
+
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes');
+    if (maxCodes) {
+      maxCodes.value = '9';
+      maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+  });
+
+  it('says on the button itself what to do about it', async () => {
+    // The plan line is the first thing a keystroke overwrites, and the button
+    // is the thing being clicked, so the recovery belongs there too.
+    await bootWithFailingStart();
+    expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
+  });
+});
+
+describe('a rejection that did not mean non-delivery', () => {
+  it('recovers when the background broadcasts a run it did receive', async () => {
+    // The whole reason the popup refuses to re-arm on a failed send is that a
+    // rejection does not prove the message was not delivered. When it *was*
+    // delivered, the worker starts the run and broadcasts RUN_STATE — and that
+    // broadcast is the popup's proof, so it has to clear `sendFailed` and stop
+    // telling the user to reopen. Without that the popup sits on "Reopen the
+    // popup to retry" while the race it started runs behind it.
+    sendMessageImpl = (message) =>
+      message.type === 'START_RUN'
+        ? Promise.reject(new Error('Receiving end does not exist.'))
+        : Promise.resolve({ type: 'RUN_STATE', state: null });
+    await import('../src/popup/popup.js');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
+    });
+    const set = (name: string, value: string): void => {
+      const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+    set('pickupLocation', 'TPA');
+    set('pickupDate', '2026-09-04');
+    set('dropoffDate', '2026-09-11');
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+
+    // The worker did get it, and says so.
+    expect(broadcastListeners.length).toBeGreaterThan(0);
+    for (const listen of broadcastListeners) {
+      listen({
+        type: 'RUN_STATE',
+        state: {
+          startedAt: 1,
+          finishedAt: null,
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes: [],
+        },
+      });
+    }
+
+    expect(document.querySelector('#run-btn')?.textContent).not.toMatch(/Reopen the popup/);
+
+    // And a later refreshPlan must not put the stale message back.
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes');
+    if (maxCodes) {
+      maxCodes.value = '6';
+      maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
   });
 });
