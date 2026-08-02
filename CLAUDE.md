@@ -240,11 +240,27 @@ close). Never pass it a URL or a code.
   still lost.
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
-- `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison warnings,
-  the plan line, saved-selection persistence. Its import-time contract is not:
-  `tests/popup-contract.test.ts` loads the real `index.html` into jsdom and
-  imports the module, so a renamed id fails the suite. It used to fail nothing,
-  while bricking the popup.
+- Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison
+  warnings, the plan line's wording, saved-selection persistence. Its
+  import-time contract is not: `tests/popup-contract.test.ts` loads the real
+  `index.html` into jsdom and imports the module, so a renamed id fails the
+  suite. It used to fail nothing, while bricking the popup.
+
+  Neither is the popup half of the double-run guard, which the Politeness
+  section above asserts as a checkable invariant. It is driven through the real
+  button rather than a synthetic `submit` event, because the guard works by
+  disabling that button and a synthetic submit walks straight past the thing
+  under test. Both directions are covered: `ui.pendingStart` must survive a
+  `refreshPlan` mid-flight, and must be cleared when the background answers —
+  latched, it disables Run for the life of the popup.
+
+  Same for the failed-send state. A rejected `START_RUN` does not prove
+  non-delivery, so `ui.sendFailed` keeps Run disabled _and_ keeps the reason on
+  screen through the `refreshPlan` triggers that used to wipe it. It is cleared
+  by a `RUN_STATE` broadcast, because a broadcast is proof the message did
+  arrive — without that the popup sits telling the user to reopen it while the
+  race it started runs behind it.
+
 - TypeScript is pinned below 7 by something outside this repo.
   `typescript-eslint@8.65.0` is the newest release — its canary too — and
   declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` cannot resolve TS 7
