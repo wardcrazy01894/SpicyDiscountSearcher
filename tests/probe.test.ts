@@ -17,6 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /** src/content/probe.ts POLL_INTERVAL_MS. */
 const POLL = 1_500;
 
+/** The assignment's own timeoutMs, so the poll-count arithmetic below can
+ *  derive from it rather than restating a number. */
+const TIMEOUT_MS = 40_000;
+
 interface Sent {
   type: string;
   failure?: string;
@@ -33,7 +37,7 @@ let failNext: number;
 function installChrome(): void {
   sent = [];
   failNext = 0;
-  assignment = { type: 'PROBE_START', vendor: 'hertz', quoteId: 'hertz:H1', timeoutMs: 40_000 };
+  assignment = { type: 'PROBE_START', vendor: 'hertz', quoteId: 'hertz:H1', timeoutMs: TIMEOUT_MS };
   (globalThis as { chrome?: unknown }).chrome = {
     runtime: {
       sendMessage: (message: Sent) => {
@@ -178,10 +182,20 @@ describe('running out of time', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]?.type).toBe('PROBE_RESULT');
     // The *latest* read, not a stale first one: reporting the first price it
-    // ever saw at the deadline would be as wrong as reporting none. The 40s
-    // deadline lands after 26 polls of 1.5s, so $56.99 is the last read and
-    // $30.99 was the first.
-    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([56.99]);
+    // ever saw at the deadline would be as wrong as reporting none.
+    //
+    // Derived, not hardcoded. The 40s deadline admits reads at t = 1500·k while
+    // t < 40000, so k runs 1..27 and the 27th read is the last — 27 polls, not
+    // the 26 an earlier version of this comment claimed. Written as arithmetic
+    // so that changing POLL_INTERVAL_MS fails with a number that explains
+    // itself, instead of `expected [40.99] to equal [56.99]`.
+    // The probe sleeps a full interval *then* reads, so the read that trips the
+    // deadline still happens: reads land at 1500·k for k = 1..27, the last at
+    // t=40500. That is ceil(40000/1500) = 27, with no adjustment — subtracting
+    // one here was the same off-by-one the old comment had.
+    const reads = Math.ceil(TIMEOUT_MS / POLL);
+    expect(reads).toBe(27);
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([30 + (reads - 1) + 0.99]);
   });
 
   it('reports probe-empty when it never saw a price', async () => {
@@ -227,6 +241,22 @@ describe('the report it attaches', () => {
     document.body.innerHTML = CARD('$29.99');
     await run(POLL * 2);
     expect(sent[0]?.report?.path).toBe('generic-sweep');
+  });
+
+  it('carries the page title, and caps it', async () => {
+    // The worker's pass-through of `title` was pinned; the probe's own capture
+    // was not, so replacing it with `''` left the suite green. The title is
+    // what tells a consent interstitial or a country picker apart from a
+    // results page that simply had no price — the whole reason the report
+    // exists — and an empty one silently removes that.
+    document.title = 'T'.repeat(300);
+    document.body.innerHTML = CARD('$29.99');
+    await run(POLL * 2);
+
+    const title = sent[0]?.report?.title ?? '';
+    expect(title.length).toBeGreaterThan(0);
+    expect(title.length).toBeLessThanOrEqual(120);
+    expect(title.startsWith('T')).toBe(true);
   });
 });
 

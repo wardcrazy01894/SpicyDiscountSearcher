@@ -443,6 +443,10 @@ describe('cancelling', () => {
     await settle();
 
     const state = await getState();
+    // Length first. `every()` is vacuously true on an empty array, so both
+    // assertions below passed with the worker slicing the candidate list to
+    // nothing — 33 other tests died and this one stayed green.
+    expect(state?.quotes).toHaveLength(2);
     expect(state?.quotes.every((q) => q.status === 'cancelled')).toBe(true);
     // The code, not just the status. Asserting only the status left
     // `failure: 'cancelled'` deletable with the whole suite green — the one
@@ -464,6 +468,7 @@ describe('cancelling', () => {
     await settle();
 
     const state = await getState();
+    expect(state?.quotes).toHaveLength(2);
     expect(state?.quotes.every((q) => q.status === 'cancelled')).toBe(true);
   });
 });
