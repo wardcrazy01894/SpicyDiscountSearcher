@@ -19,18 +19,27 @@ updates:
       # TypeScript 7 cannot be installed here, and the blocker is upstream.
       # `typescript-eslint@8.65.0` -- the newest release, and its canary --
       # declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` fails to
-      # resolve before a line is compiled. There is no 9.x, and no stable 6.x of
-      # TypeScript to step through either: 6.0.0 exists only as a beta.
+      # resolve before a line is compiled. There is no 9.x.
       #
       # The repo itself is ready. Measured on Dependabot's own branch with
       # --legacy-peer-deps: tsc --noEmit clean under 7.0.2, 261 tests passing,
       # build and check-dist clean. So this is a wait, not a migration.
+      #
+      # The stable 6.x this once said did not exist now does, and is what we
+      # build on: typescript@6.0.3 resolves under a plain `npm ci`. That is the
+      # whole difference from 7 -- it is inside the peer range, not tolerated in
+      # spite of it -- so it changes nothing about the block below.
       #
       # Ignored rather than left to fail monthly, because a recurring red PR on
       # an upgrade nobody can take is noise. REMOVE THIS ENTRY when
       # typescript-eslint ships a version whose typescript peer range admits 7 —
       # its own major bump arrives as a separate PR (majors are ungrouped
       # above), and that PR is the cue.
+      #
+      # The bound is <6.1.0, so TypeScript 6.1 will be unresolvable for exactly
+      # this reason while falling outside the 7.x pattern below. Not pre-emptively
+      # ignored: typescript-eslint widening its range is likelier to land first,
+      # and an ignore added now would swallow a 6.1 bump that had become fine.
       - dependency-name: typescript
         versions: ['7.x']
     open-pull-requests-limit: 3
