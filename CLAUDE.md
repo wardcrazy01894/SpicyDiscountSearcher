@@ -173,11 +173,17 @@ current URL is not one of the nine vendor hosts. Not a gap to paper over with a
 permission, but not a diagnosis either: all it establishes is that the tab's
 address is unreadable, which is equally true of a redirect off the vendor's
 site and of a load that never committed (`about:blank`, or `chrome-error://`
-after a DNS or TLS failure). Both also mean the content script never ran, so
-both cause timeouts. `path: 'left-our-origins'` records the fact and the popup
-names both possibilities; claiming either one would repeat the mistake this
-replaced, which was asserting the other. The chrome fake models the permission
-rule, having previously returned `url` unconditionally and hidden it.
+after a DNS or TLS failure). Both also mean the content script **is no longer
+running**, so both cause timeouts — not that it never ran, which is only true of
+the second. A redirect that happens after the vendor's page has loaded runs the
+script and then tears it down mid-probe, and the symptom is identical.
+`path: 'left-our-origins'` records the fact and the popup names both
+possibilities; claiming either one would repeat the mistake this replaced, which
+was asserting the other. A redirect to a sibling host of the same brand
+(`www.hertz.co.uk`, or a bare `hertz.com`) lands here too, where neither "off
+the vendor's site" nor "never got there" is quite right — the line leads with
+the unreadable-address fact for that reason. The chrome fake models the
+permission rule, having previously returned `url` unconditionally and hidden it.
 
 `not-reached` and `left-our-origins` are the background's own knowledge, so a
 content script may not claim either — `PROBE_PATHS` enforces that at ingest,
