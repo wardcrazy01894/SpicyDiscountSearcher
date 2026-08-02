@@ -58,9 +58,52 @@ const CURRENCY = `${CURRENCY_SYMBOL}|${CURRENCY_CODE}`;
  */
 const NUMBER = String.raw`\d{1,3}(?:[ \u00a0\u202f\u2009]\d{3})+[.,]\d{1,2}|\d[\d.,]*\d|\d`;
 
-/** $1,234.56 · USD 89 · €99,50 · 1 234,56 € */
+/**
+ * $1,234.56 · USD 89 · €99,50 · 1 234,56 €
+ *
+ * The suffix branch's number may not begin immediately after a letter, and that
+ * guard is load-bearing on a car-rental page. Model names end in digits —
+ * `Audi Q5`, `Cadillac XT5`, `Mazda CX-5` — and the suffix branch is
+ * `(NUMBER)\s*(CURRENCY)`, so the `5` of `Q5` matched against the `$` of the
+ * price that followed it and **consumed the dollar sign**. The real amount then
+ * had no currency left to match:
+ *
+ *     '2023 Audi Q5 $95.00 per day'   -> 5 USD, not 95
+ *     'Cadillac XT5 $150.00 total'    -> 5 USD, not 150
+ *
+ * A $5 total is cheaper than every genuine rate on every other page, so this
+ * did not merely mis-parse one card — it decided the race, and did so most
+ * often for the vendors whose pages name the model. The currency-code
+ * lookaround above stops `AUD` matching inside `Audi`; this stops the same
+ * phantom arriving through the symbol branch instead.
+ *
+ * The second lookbehind is for the hyphenated half of the same naming
+ * convention, which the first one misses because the character before the digit
+ * is punctuation:
+ *
+ *     'Mazda CX-5 $72.50 per day'     -> 5 USD, not 72.50
+ *     'Ford F-150 $89.00 per day'     -> 150 USD, not 89
+ *
+ * The digit in the first lookbehind is not decoration, and leaving it out made
+ * things worse rather than better. Blocking only the *start* of `150` lets the
+ * engine retry one character along: `50` is preceded by `1`, which is neither a
+ * letter nor a hyphen, so `'Ford F-150 $89.00'` came back as **50 USD** — a
+ * number that appears nowhere on the page, and cheaper than the one it
+ * replaced. A guard that only refuses the first position of a digit run refuses
+ * nothing.
+ *
+ * Only the suffix branch needs any of this. The prefix branch reads the
+ * currency first, so `USD412` and `$95.00` are unaffected, and a number that
+ * genuinely follows a letter with no separator is not how prices are written.
+ *
+ * What still escapes, deliberately: a bare count immediately before a
+ * symbol-prefixed price, as in `Seats 5 $45.00`. Blocking that needs the
+ * suffix branch to stop accepting `$` after a number, and it cannot — fr-CA
+ * writes `45 $`. Recorded in CLAUDE.md rather than half-fixed.
+ */
 const PRICE_RE = new RegExp(
-  `(?:(${CURRENCY})\\s*(${NUMBER}))|(?:(${NUMBER})\\s*(${CURRENCY}))`,
+  `(?:(${CURRENCY})\\s*(${NUMBER}))|` +
+    `(?:(?<![A-Za-z0-9])(?<![A-Za-z]-)(${NUMBER})\\s*(${CURRENCY}))`,
   'gi',
 );
 

@@ -645,6 +645,29 @@ describe('labels', () => {
       </div></main>`;
     expect(extractOffers(document, 'hertz')[0]?.label).toBe('Economy');
   });
+
+  it('stops at a container that is not body, html or main', () => {
+    // The test above cannot fail for the right reason. Its root is <main>,
+    // which CHROME_SELECTOR already matches, so `node === root` in labelNear is
+    // doing nothing there and deleting it leaves the suite green.
+    //
+    // This is the shape where the bound is the only thing standing: a page with
+    // no <main> at all, whose container selector matches a plain <div>. Sixt's
+    // selector list includes `.offer-list`, so that div becomes the root while
+    // matching none of `body, html, main`. Without the bound the walk reaches it
+    // and headingText() querySelectors the whole results list, handing the promo
+    // banner the first card's class — the exact mislabel the test above is about.
+    document.body.innerHTML = `
+      <div class="offer-list">
+        <div class="promo">Weekend deals from $19/day</div>
+        <div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>
+        <div class="card"><h3>Midsize</h3><div>$34.99 per day</div></div>
+      </div>`;
+    const offers = extractOffers(document, 'sixt');
+    expect(offers.find((o) => o.amount === 19)?.label).toBeNull();
+    expect(offers.find((o) => o.amount === 29.99)?.label).toBe('Economy');
+    expect(offers.find((o) => o.amount === 34.99)?.label).toBe('Midsize');
+  });
 });
 
 describe('fee lines and the prices that live beside them', () => {
@@ -705,16 +728,6 @@ describe('fee lines and the prices that live beside them', () => {
 });
 
 describe('an inclusive word after the price is not a licence', () => {
-  const beside = (fee: string): string | null => {
-    document.body.innerHTML = `<main><div class="card">
-      <h3>Deluxe King</h3>
-      <div class="rate">$189.00 per night</div>
-      <div class="fees">${fee}</div>
-    </div></main>`;
-    const best = bestOffer(extractOffers(document, 'hilton'));
-    return best ? `${best.amount}/${best.basis}` : null;
-  };
-
   it.each([
     // Amenity copy mentions "free" and "included" constantly. Tested against
     // the whole string, the inclusive rule was an escape hatch wide enough to
@@ -734,7 +747,10 @@ describe('an inclusive word after the price is not a licence', () => {
     </div></main>`;
     const offers = extractOffers(document, 'hilton');
     expect(offers.map((o) => o.amount)).toEqual([189]);
-    expect(beside(fee)).toBe('189/per-day');
+    // Same DOM, already extracted — the helper this replaced rebuilt it
+    // identically and re-ran extractOffers to answer the second question.
+    const best = bestOffer(offers);
+    expect(best && `${best.amount}/${best.basis}`).toBe('189/per-day');
   });
 
   it.each([
@@ -794,6 +810,84 @@ describe('model names are not money', () => {
     expect(offers.map((o) => o.amount).sort((a, b) => a - b)).toEqual([89, 95]);
     expect(bestOffer(offers)?.amount).toBe(89);
     expect(bestOffer(offers)?.currency).toBe('USD');
+  });
+
+  it.each([
+    ['2023 Audi Q5 $95.00 per day', 95],
+    ['Cadillac XT5 $150.00 total', 150],
+    ['BMW X3 $110.00 total', 110],
+    ['Mazda CX-5 $72.50 per day', 72.5],
+    ['Ford F-150 $89.00 per day', 89],
+    ['Mercedes E-350 $200.00 total', 200],
+  ])('reads the price in %s, not the digit in the model name', (text, amount) => {
+    // The model-year phantom came through the currency-*code* branch and was
+    // closed by the letter lookaround on CURRENCY_CODE. This is the same defect
+    // arriving through the *symbol* branch: `(NUMBER)\s*(CURRENCY)` matched the
+    // trailing digit of `Q5` against the `$` after it and ate the dollar sign,
+    // leaving the real amount with no currency to pair with. `$5 total` then
+    // beat every genuine rate in the race.
+    expect(findPrices(text)).toEqual([{ amount, currency: 'USD' }]);
+  });
+
+  it('refuses a model-name digit without inventing a number instead', () => {
+    // Guarding only the first position of a digit run refuses nothing: with
+    // `150` blocked the engine simply started at `50`, which is preceded by a
+    // digit rather than a letter. That reported 50 USD — a figure printed
+    // nowhere on the page, and cheaper than the 89 it displaced, so it would
+    // have won. The lookbehind has to exclude digits for that reason.
+    expect(findPrices('Ford F-150 $89.00 per day')).toEqual([{ amount: 89, currency: 'USD' }]);
+    expect(findPrices('Ford F-150 $89.00 per day')).not.toContainEqual({
+      amount: 50,
+      currency: 'USD',
+    });
+  });
+
+  it.each([
+    ['95.00 USD', 95, 'USD'],
+    ['1,234.56 USD', 1234.56, 'USD'],
+    ['45 $', 45, 'USD'],
+    ['1 234,56 €', 1234.56, 'EUR'],
+  ])('still reads %s, which the suffix branch is for', (text, amount, currency) => {
+    // The guard must not cost the suffix branch its real job. `45 $` in
+    // particular is how fr-CA writes money, which is why the branch cannot
+    // simply stop accepting a symbol after a number.
+    expect(findPrices(text)).toEqual([{ amount, currency }]);
+  });
+
+  it('still reads a bare count before a price as the count — a known escape', () => {
+    // Not fixed, and pinned so a later change to PRICE_RE is deliberate rather
+    // than accidental. Blocking this needs the suffix branch to reject `$`
+    // after a number, which would break `45 $` above. Documented in CLAUDE.md.
+    expect(findPrices('Seats 5 $45.00 per day')).toEqual([{ amount: 5, currency: 'USD' }]);
+  });
+
+  it.each([
+    ['Class C$120.00', 120, 'CAD'],
+    ['Group A$99.00', 99, 'AUD'],
+  ])('reads %s as a foreign currency — the other known escape', (text, amount, currency) => {
+    // `C$` and `A$` are genuinely the Canadian and Australian dollar, and
+    // `Class C` / `Group A` are genuinely car classes. In one text node nothing
+    // tells them apart, and guessing either way is wrong somewhere. Pinned as
+    // current behaviour, not endorsed: a quote landing in a phantom CAD bucket
+    // is excluded from ranking rather than mis-ranked, which is the safer of
+    // the two failures.
+    expect(findPrices(text)).toEqual([{ amount, currency }]);
+  });
+
+  it('parses the same class and price correctly in real markup', () => {
+    // Why the escape above is tolerable. Prices and labels arrive in separate
+    // elements on a real page, and offerText inserts a boundary space between
+    // them, so `C$` never forms. This is the claim CLAUDE.md makes for it —
+    // asserted here rather than assumed.
+    document.body.innerHTML = `
+      <main><div class="card">
+        <h3>Class C</h3><div class="p">$120.00 per day</div>
+      </div></main>`;
+    const offers = extractOffers(document, 'hertz');
+    expect(offers).toHaveLength(1);
+    expect(offers[0]?.amount).toBe(120);
+    expect(offers[0]?.currency).toBe('USD');
+    expect(offers[0]?.label).toBe('Class C');
   });
 });
 
