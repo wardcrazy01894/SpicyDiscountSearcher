@@ -82,6 +82,31 @@ The two things that would silently produce a wrong answer, and their guards:
 included: $57.20`, where the negation is invisible to the rule. Both surface a
   fee as a price.
 
+- **A digit in a model name.** `PRICE_RE`'s suffix branch is
+  `(NUMBER)\s*(CURRENCY)`, and car pages are full of names ending in digits. The
+  `5` of `Audi Q5` matched against the `$` of the price that followed it and
+  **consumed the dollar sign**, so the real amount had no currency left to pair
+  with: `2023 Audi Q5 $95.00 per day` read as `5 USD`, and
+  `Cadillac XT5 $150.00 total` as `5 USD` in the most-trusted basis there is. A
+  $5 total beats every genuine rate anywhere in the race.
+
+  This is the same phantom the `CURRENCY_CODE` letter-lookaround closed (`AUD`
+  inside `Audi`), arriving through the symbol branch instead. Two lookbehinds on
+  the suffix branch's number close it, and the first must exclude **digits** as
+  well as letters: blocking only the first position of `150` let the engine
+  start one character along at `50`, so `Ford F-150 $89.00` returned `50 USD` —
+  a number printed nowhere on the page, and cheaper than the one it displaced. A
+  guard that refuses only the first position of a digit run refuses nothing.
+
+  Known escapes here: `Seats 5 $45.00` still reads `5`, because blocking a bare
+  count before a symbol price means rejecting `$` after a number, and fr-CA
+  writes `45 $`. And `Class C$120.00` in a single text node reads 120 **CAD**,
+  since `C$` and `A$` are real currency symbols and `Class C` / `Group A` are
+  real car classes — nothing in the string distinguishes them. Realistic markup
+  escapes the second: `offerText` puts a boundary space between elements, so
+  `<span>Class C</span><span>$120.00</span>` parses correctly. Both are pinned
+  by tests so a later change to `PRICE_RE` is deliberate.
+
 ## Politeness
 
 Concurrency is capped at 6 (default 2), tabs open in a minimised, unfocused
