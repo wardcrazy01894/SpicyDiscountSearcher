@@ -82,6 +82,19 @@ describe('the popup against its own HTML', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
     });
+
+    // Then wait past everything main() still has to do. Neither of the obvious
+    // signals is one: the tagline is written *before* the GET_STATE round trip,
+    // and the plan line is populated by `setCategory` before it too — so both
+    // appear while main() is still pending, and a failure after them lands
+    // later. Checked against either, this assertion was pinned to the chrome
+    // stub resolving in a microtask rather than to the popup, and a mutant that
+    // threw right after main() survived once the stub was delayed 30 ms.
+    //
+    // A fixed wait is the honest instrument here, since the thing being waited
+    // for is "nothing else is coming" and no DOM state says that. 250 ms is an
+    // age for a stub that resolves immediately.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not start up/);
   });
 
