@@ -71,6 +71,19 @@ interface UiState {
    * failed send" was not true before this flag existed.
    */
   pendingStart: boolean;
+
+  /**
+   * A START_RUN whose sendMessage rejected, and the popup cannot recover from.
+   *
+   * `pendingStart` correctly keeps Run disabled — a rejection does not prove
+   * non-delivery, so re-arming would offer a second race on top of one that may
+   * already be opening tabs. But the *explanation* lived only in
+   * `planSummary.textContent`, which every `refreshPlan` overwrites: a vendor
+   * chip, a company checkbox, a max-codes keystroke or a category tab all wiped
+   * it and cleared `is-warning`, leaving a dead button and no reason for it.
+   * Sticky, so refreshPlan can put the message back instead of over it.
+   */
+  sendFailed: boolean;
 }
 
 const ui: UiState = {
@@ -79,7 +92,11 @@ const ui: UiState = {
   companies: new Set<string>(),
   running: false,
   pendingStart: false,
+  sendFailed: false,
 };
+
+/** Kept in one place because refreshPlan and applyReply both write it. */
+const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
 
 function money(amount: number, currency: string): string {
   try {
@@ -257,6 +274,14 @@ function vendorBreakdown(candidates: Candidate[]): string {
 }
 
 function refreshPlan(): void {
+  // Before anything else: this is the state the popup cannot get itself out of,
+  // so nothing below should be allowed to describe a plan the user cannot run.
+  if (ui.sendFailed) {
+    planSummary.textContent = SEND_FAILED_MESSAGE;
+    planSummary.classList.add('is-warning');
+    runBtn.disabled = true;
+    return;
+  }
   const { all, capped } = plannedCandidates();
   const scope = ui.companies.size ? `${ui.companies.size} selected companies` : 'every company';
   if (all.length === 0) {
@@ -553,8 +578,11 @@ function renderRun(state: RunState | null): void {
   const running = Boolean(state && !state.finishedAt);
   ui.running = running;
   // The background has answered, so the click is no longer in flight and
-  // `running` is authoritative from here.
+  // `running` is authoritative from here. That also clears the unreachable
+  // state: an answer is proof it is reachable, and GET_STATE on a reopened
+  // popup is exactly how the user recovers.
   ui.pendingStart = false;
+  ui.sendFailed = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
@@ -781,8 +809,13 @@ function applyReply(reply: StateMessage | null): void {
   // does not prove non-delivery, so re-arming it would offer the user a second
   // race on top of one that may already be opening tabs. Reopening the popup
   // is the recovery, and it re-arms correctly from GET_STATE.
-  planSummary.textContent = 'Could not reach the extension background. Try reopening the popup.';
+  ui.sendFailed = true;
+  planSummary.textContent = SEND_FAILED_MESSAGE;
   planSummary.classList.add('is-warning');
+  // The button says what to do, because the plan line is the first thing a
+  // keystroke used to overwrite and the label is the thing being clicked.
+  runBtn.textContent = 'Reopen the popup to retry';
+  runBtn.disabled = true;
 }
 
 form.addEventListener('submit', (event) => {
