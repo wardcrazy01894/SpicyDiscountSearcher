@@ -861,6 +861,96 @@ describe('a report a page could have forged', () => {
     expect(report?.offerCount).toBe(0);
   });
 
+  it('bounds the offers array, which is the bigger half of the same quota', async () => {
+    // sanitizeReport's docstring justified its caps by chrome.storage.session's
+    // quota, while `offers` from the same message went to the same storage
+    // unbounded — so a page held to 200 characters of title could still send
+    // megabytes. Capping the title closed nothing on its own.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: Array.from({ length: 5_000 }, () => ({
+        label: 'L'.repeat(5_000),
+        amount: 200,
+        currency: 'USD',
+        basis: 'total',
+      })),
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.offers.length).toBeLessThanOrEqual(200);
+    expect(quote?.offers.every((o) => (o.label?.length ?? 0) <= 200)).toBe(true);
+  });
+
+  it('drops an offer whose amount is not a number rather than ranking on NaN', async () => {
+    // bestOffer ranks on `amount`, and NaN compares false against everything —
+    // so a coerced entry loses a race silently instead of failing one.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [
+        { label: 'Junk', amount: 'not a number', currency: 'USD', basis: 'total' },
+        { label: 'Real', amount: 150, currency: 'USD', basis: 'total' },
+      ],
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.offers).toHaveLength(1);
+    expect(quote?.best?.amount).toBe(150);
+  });
+
+  it('refuses a basis it does not recognise', async () => {
+    // `basis` decides which bucket a quote is ranked in, so a page inventing
+    // one would place itself outside every comparison group — listed, never
+    // ranked, and silently absent from the race the user is watching.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [{ label: 'X', amount: 99, currency: 'USD', basis: 'per-fortnight' }],
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    expect((await getState())?.quotes[0]?.offers[0]?.basis).toBe('unknown');
+  });
+
+  it('caps finalPath as well as title', async () => {
+    // The two caps are twins in the same expression and only title was pinned,
+    // so the finalPath half could be deleted with the suite green. A path is
+    // page-supplied like the title, goes to the same quota, and renders in the
+    // same place.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, finalPath: `/${'p'.repeat(5_000)}` },
+    });
+    await settle(1_000);
+
+    const report = (await getState())?.quotes[0]?.report;
+    expect(report?.finalPath.length).toBeLessThanOrEqual(200);
+  });
+
   it('sanitizes a late report too, not only a live one', async () => {
     // The late branch is a separate call site, and was separately trusted.
     await bootWorker();
@@ -902,6 +992,64 @@ describe('a tab whose navigation never landed', () => {
     // them apart, so it does not pretend to.
     expect(report?.path).toBe('left-our-origins');
     expect(report?.finalPath).toBe('');
+  });
+});
+
+describe('the stored window id belongs to whoever stored it', () => {
+  it('does not wipe a foreign window id when its own run closes', async () => {
+    // closeWindow routes through forgetWindowId, which compares before it
+    // deletes. Reverting it to a bare storage.session.remove(WINDOW_KEY) passed
+    // the whole suite, so the round-3 half of the compare-and-delete fix could
+    // regress freely.
+    //
+    // The scenario: this worker's run finishes and closes its own window, while
+    // the key holds a *different* window — an orphan left by a predecessor that
+    // MV3 terminated mid-run. Deleting it unconditionally strands that window
+    // permanently: it is minimised, holds a new-tab page, and its id was the
+    // only handle any later worker had on it.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const mine = chromeMock.session.get('runWindow');
+    expect(mine, 'the worker should have stored its window id').toBeDefined();
+    chromeMock.session.set('runWindow', 4242);
+    expect(mine).not.toBe(4242);
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    await settle(60_000);
+
+    expect(chromeMock.session.get('runWindow')).toBe(4242);
+  });
+});
+
+describe('a quote that answered is not described as silent', () => {
+  it('leaves a successful quote without a background-built report', async () => {
+    // describeSilentTab runs in the finally for *every* quote, so its
+    // `failure !== 'probe-timeout'` half is the only thing keeping it off a
+    // quote that answered. Dropping that half stamps `left-our-origins` — which
+    // the popup renders as not having heard from the page — onto a quote whose
+    // page replied with offers, which is the precise misattribution PROBE_PATHS
+    // exists to prevent from the other direction.
+    //
+    // The probe is allowed to answer without a report: `report` is optional on
+    // PROBE_RESULT, and that is the case where `quote.report` is falsy and only
+    // the failure check stands.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    // No url either, so describeSilentTab would build a `left-our-origins`
+    // report if it ran at all.
+    chromeMock.tabs.get(tabId)!.url = '';
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER] });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.status).toBe('ok');
+    expect(quote?.report).toBeUndefined();
   });
 });
 

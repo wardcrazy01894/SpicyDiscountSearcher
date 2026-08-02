@@ -4,6 +4,8 @@ import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/m
 import { MAX_CONCURRENCY } from '../core/types.js';
 import type {
   Candidate,
+  Offer,
+  PriceBasis,
   ProbeReport,
   Quote,
   QuoteFailure,
@@ -188,7 +190,55 @@ const MAX_REPORT_TEXT = 200;
  *   a run that silently stops persisting.
  * - `offerCount` is clamped to a non-negative integer, having been rendered
  *   verbatim as "-7 offers".
+ *
+ * The quota argument above is only true alongside `sanitizeOffers`. Capping a
+ * title at 200 characters closes nothing on its own while the same message's
+ * `offers` array goes to the same storage unbounded — this docstring claimed
+ * the threat was handled for a while when the larger half of it was not.
  */
+/**
+ * How many offers one page may contribute.
+ *
+ * Generous by an order of magnitude: the longest real results page in the
+ * fixtures carries tens, not hundreds. This is a bound on a hostile page, not a
+ * judgement about a legitimate one.
+ */
+const MAX_OFFERS = 200;
+
+const PRICE_BASES = new Set<PriceBasis>(['total', 'per-day', 'unknown']);
+
+/**
+ * Take the offers from a content script, keeping only what is usable as one.
+ *
+ * Same doctrine as `sanitizeReport`, applied to the field that carries the most
+ * page-supplied bytes by far. Every one of these is persisted to
+ * `chrome.storage.session` and `label` is rendered in the popup, so an
+ * unchecked array is both the quota hole `sanitizeReport`'s docstring claimed
+ * to have closed and the widest surface a vendor page has on this extension.
+ *
+ * An entry with no finite amount is dropped rather than coerced: `bestOffer`
+ * ranks on that number, and a `NaN` compares false against everything, which is
+ * a silent way to lose a race rather than to fail one.
+ */
+function sanitizeOffers(offers: unknown): Offer[] {
+  if (!Array.isArray(offers)) return [];
+  const clean: Offer[] = [];
+  for (const raw of offers) {
+    if (clean.length >= MAX_OFFERS) break;
+    if (!raw || typeof raw !== 'object') continue;
+    const offer = raw as Partial<Offer>;
+    const amount = Number(offer.amount);
+    if (!Number.isFinite(amount)) continue;
+    clean.push({
+      label: typeof offer.label === 'string' ? offer.label.slice(0, MAX_REPORT_TEXT) : null,
+      amount,
+      currency: String(offer.currency ?? 'USD').slice(0, 8),
+      basis: PRICE_BASES.has(offer.basis as PriceBasis) ? (offer.basis as PriceBasis) : 'unknown',
+    });
+  }
+  return clean;
+}
+
 function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefined {
   if (!report) return undefined;
   const finalPath = String(report.finalPath ?? '')
@@ -671,11 +721,15 @@ chrome.runtime.onMessage.addListener(
             await publish();
           }
           if (active && quoteId !== undefined) {
-            const best = bestOffer(message.offers);
+            // Sanitize before ranking, not after: bestOffer must see the same
+            // list that gets stored, or the popup shows a winner drawn from
+            // offers it never received.
+            const offers = sanitizeOffers(message.offers);
+            const best = bestOffer(offers);
             const quote = quoteFor(active, quoteId);
             finishQuote(active, quoteId, {
               status: best ? 'ok' : 'no-price',
-              offers: message.offers,
+              offers,
               best,
               ...(reported ? { report: reported } : {}),
               ...(landedElsewhere(quote, reported) ? { suspect: 'landed-elsewhere' } : {}),
