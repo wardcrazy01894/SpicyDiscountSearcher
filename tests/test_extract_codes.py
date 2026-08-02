@@ -295,14 +295,45 @@ class TestParseGridSheet:
         records = extract_codes.parse_grid_sheet("Corp Codes", rows)
         assert records == []
         assert len(extract_codes.SKIPPED) == 1
-        assert "1 code(s) beside it" in extract_codes.SKIPPED[0]
+        assert "1 code(s), 0 url(s) beside it" in extract_codes.SKIPPED[0]
         assert "row 2" in extract_codes.SKIPPED[0]
+
+    def test_counts_a_booking_link_the_row_is_dropping(self) -> None:
+        # Codes alone made the message true and misleading at once: a row whose
+        # only payload is a booking URL reported "0 code(s)", which a reader
+        # takes to mean nothing was lost.
+        extract_codes.SKIPPED.clear()
+        rows = [
+            ("Company", "Hilton", "Marriott"),
+            ("http://www.hotelcorporatecodes.com/83/x", "https://book.example/deal", None),
+        ]
+        assert extract_codes.parse_grid_sheet("Corp Codes", rows) == []
+        assert "0 code(s), 1 url(s) beside it" in extract_codes.SKIPPED[0]
 
     def test_an_empty_row_is_not_worth_reporting(self) -> None:
         # Padding at the bottom of a sheet names nothing and never did.
         extract_codes.SKIPPED.clear()
         extract_codes.parse_grid_sheet("Corp Codes", [("Company", "Hilton"), (None, None)])
         assert extract_codes.SKIPPED == []
+
+    def test_reports_a_nameless_row_that_still_carries_something(self) -> None:
+        # `if not raw_company: continue` was the last silent row-dropper, and
+        # the workbook exercises it -- 'Marriott Codes' row 78 has a booking URL
+        # in a data cell and an empty name cell. Nothing is lost to it today,
+        # but it is the same shape as the one that lost Benjamin Moore, and the
+        # docs claimed every `continue` reported by then.
+        extract_codes.SKIPPED.clear()
+        rows = [("Company", "Hilton", "Marriott"), (None, "92836100", None)]
+        assert extract_codes.parse_grid_sheet("Corp Codes", rows) == []
+        assert len(extract_codes.SKIPPED) == 1
+        assert "no name" in extract_codes.SKIPPED[0]
+        assert "1 code(s), 0 url(s)" in extract_codes.SKIPPED[0]
+
+    def test_a_nameless_row_carrying_only_a_link_is_still_reported(self) -> None:
+        extract_codes.SKIPPED.clear()
+        rows = [("Company", "Hilton"), (None, "https://book.example/deal")]
+        assert extract_codes.parse_grid_sheet("Corp Codes", rows) == []
+        assert "0 code(s), 1 url(s)" in extract_codes.SKIPPED[0]
 
 
 class TestSlugify:
