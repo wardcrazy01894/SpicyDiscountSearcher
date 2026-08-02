@@ -264,16 +264,26 @@ close). Never pass it a URL or a code.
   the summary counted only what it kept, which is how `Benjamin Moore` stayed
   lost. Skipped rows now print to stderr and the `data` job shows them.
 
-  Five rows are skipped today and **nothing is lost to any of them**. One is a
-  margin note. The other four have a URL where the employer's name should be:
-  three have no codes beside them at all, and the fourth (`Marriott Codes`
-  row 74) is a duplicate of `Codes` row 74, whose code `17885` already ships
-  under `Harvard`. `Marriott Codes` is largely a copy of `Codes` with a link
-  pasted over one name cell — but not redundant: 13 published codes have
-  `Marriott Codes` as their only source and 8 have `Codes` as theirs, so
-  dropping either loses data.
+  Six rows are skipped today and **nothing is lost to any of them**. One is a
+  margin note. Four have a URL where the employer's name should be: three have
+  nothing beside them at all, and the fourth (`Marriott Codes` row 74) is a
+  duplicate of `Codes` row 74, whose code `17885` already ships under `Harvard`.
+  `Marriott Codes` is largely a copy of `Codes` with a link pasted over one name
+  cell — but not redundant: 13 published codes have `Marriott Codes` as their
+  only source and 8 have `Codes` as theirs, so dropping either loses data.
 
-  The reporting exists for the row that is _not_ a duplicate. Until it printed
-  them, a URL row that carried the only copy of a code would have vanished
+  The sixth is `Marriott Codes` row 78, which has no name cell at all and a
+  booking link in a data cell. It was the last `continue` still dropping a row
+  in silence: "nameless" is not the same as "empty", and this branch could not
+  tell them apart. It now reports a nameless row **only** when the row still
+  carries a code or a link, so the blank padding below the data stays quiet.
+
+  The skip message counts links as well as codes for the same reason. A row
+  whose only payload is a booking URL used to report `0 code(s) beside it` —
+  true, and read by anyone as "nothing was lost".
+
+  None of this reporting exists for the six. It exists for the row that is not a
+  duplicate, which the workbook does not contain today and may tomorrow: until
+  these printed, a row carrying the only copy of a code would have vanished
   exactly the way `Benjamin Moore` did, and the summary would still have looked
   healthy.

@@ -354,6 +354,30 @@ def parse_hilton_sheet(rows: list[tuple[object, ...]]) -> list[dict]:
     return records
 
 
+def row_payload(row: tuple[object, ...], layout: list[str | None]) -> tuple[int, int]:
+    """How many codes and booking links sit in a row's data columns.
+
+    Used only to describe a row the parser is about to drop. The point is to
+    tell "this row carried nothing" apart from "this row carried the only copy
+    of something", which is the difference between a harmless skip and a silent
+    loss -- and the two are indistinguishable in a message that reports neither.
+    """
+    codes = urls = 0
+    for col in range(1, len(row)):
+        if col - 1 >= len(layout) or not layout[col - 1]:
+            continue
+        found, _note, url = parse_cell(clean_cell(row[col]))
+        codes += len(found)
+        if url:
+            urls += 1
+    return codes, urls
+
+
+def describe_payload(row: tuple[object, ...], layout: list[str | None]) -> str:
+    codes, urls = row_payload(row, layout)
+    return f"{codes} code(s), {urls} url(s) beside it"
+
+
 def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
     layout = SHEET_LAYOUTS[name]
     records: list[dict] = []
@@ -361,9 +385,16 @@ def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
     # so this is the number you type into the Name Box to find the row.
     for index, row in enumerate(rows[1:], start=2):
         raw_company = clean_cell(row[0] if row else None)
-        # The 'Corp Codes' header cell doubles as a stray Hilton link; skip
-        # anything that isn't a plain company name.
         if not raw_company:
+            # A nameless row is usually blank padding below the data, and
+            # reporting every one of those would bury the reports that matter.
+            # But "nameless" is not the same as "empty": the workbook has rows
+            # whose name cell is blank while a data cell still holds something,
+            # and this branch dropped those as silently as any other `continue`
+            # -- the same shape the SKIPPED list exists to close. So it stays
+            # quiet only when the row really carries nothing.
+            if any(row_payload(row, layout)):
+                SKIPPED.append(f"{name} row {index} (no name): {describe_payload(row, layout)}")
             continue
         if URL_RE.search(raw_company):
             # Reported rather than dropped in silence. Nothing is lost to these
@@ -371,15 +402,14 @@ def parse_grid_sheet(name: str, rows: list[tuple[object, ...]]) -> list[dict]:
             # fourth duplicates a row on another sheet -- but a URL row that
             # carried the only copy of a code would vanish exactly the way
             # Benjamin Moore did, and the summary would still look healthy.
-            # The count of codes is what tells those two apart, so say it.
-            codes_here = sum(
-                len(parse_cell(clean_cell(row[col]))[0])
-                for col in range(1, len(row))
-                if col - 1 < len(layout) and layout[col - 1]
-            )
+            # What it was carrying is what tells those two apart, so say it.
+            #
+            # Booking links count as well as codes. Saying "0 code(s)" beside a
+            # row that is dropping a booking URL is true and misleading at once,
+            # and a reader takes it to mean nothing was lost.
             SKIPPED.append(
                 f"{name} row {index} (url in the name column, "
-                f"{codes_here} code(s) beside it): {raw_company[:60]}"
+                f"{describe_payload(row, layout)}): {raw_company[:60]}"
             )
             continue
         company, company_note = parse_company(raw_company)
