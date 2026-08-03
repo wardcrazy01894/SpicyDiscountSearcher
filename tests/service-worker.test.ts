@@ -323,9 +323,19 @@ describe('surviving MV3 suspension', () => {
     // mid-run — one during teardown proves nothing, since teardown stops the
     // keepalive by another route entirely.
     //
-    // The settle that does the work is quote one reaching its probe deadline,
-    // not the hand-delivered result after it: ablating that block still kills
-    // the mutation. An earlier version asserted only after the hand-delivered
+    // Neither block below is ballast, and which one lands the kill depends on
+    // KEEPALIVE_MS. At the shipped 20s the probe-deadline settle gets there
+    // first, so ablating the hand-delivered block still kills the mutation — but
+    // at 21s and above it does not, and the final block becomes the only half
+    // that catches it. Since this file deliberately gives KEEPALIVE_MS a band
+    // rather than one value, both halves have to stay.
+    //
+    // Said the other way because an earlier version of this comment claimed the
+    // hand-delivered block was secondary, generalised from one measurement at
+    // 20s — which would have read as licence to delete it, and at 20s nothing
+    // would have gone red while the pin evaporated across the rest of the band.
+    //
+    // An earlier version of the *test* asserted only after the hand-delivered
     // result, by which time the run had finished and `stopKeepAlive` had already
     // run — it passed for a reason its own comment did not describe.
     await bootWorker();
