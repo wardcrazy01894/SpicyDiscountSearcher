@@ -693,10 +693,6 @@ let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let keepAliveUntil = 0;
 
 /**
- * Keep the worker resident for the duration of a run. Idempotent: a second run
- * starting while one is winding down must not leave two intervals running.
- */
-/**
  * Push the ceiling out because a quote settled.
  *
  * The null check is not about late replies — a reply for an already-settled
@@ -851,7 +847,15 @@ async function cancelRun(): Promise<void> {
   // the cancel, with the window closed and the popup idle. Measured at 27
   // further pokes against 2 before the inactivity change, so this is a
   // regression that arrived with it rather than a pre-existing gap.
-  stopKeepAlive();
+  //
+  // Guarded on `active === run` for the same reason the teardown block is, and
+  // the unguarded version was a regression of its own: `run` is captured at the
+  // top of this function and three suspension points follow, so a `cancelRun`
+  // that started earlier can resume *after* a newer run is live and stop its
+  // keepalive — zero pokes, total silence, the original bug. Not reachable by
+  // clicking today, because Cancel is hidden while a start is in flight, but
+  // reachable through the message protocol and invisible when it happens.
+  if (active === run) stopKeepAlive();
 }
 
 chrome.runtime.onMessage.addListener(

@@ -73,12 +73,16 @@ const PROBE_TIMEOUT_MS = 45_000;
 /** How long the keepalive assertions watch a live run. */
 const HORIZON_MS = 150_000;
 /**
- * The largest acceptable silence, against Chrome's ~30s idle shutdown. Leaves
- * KEEPALIVE_MS a band rather than pinning one value: 21s-24s pass, 26s and
- * above fail the gap test. 25s fails too, but on the second-run test's poke
- * count rather than on the gap — so treat 24s as the practical top of the band.
+ * The largest acceptable silence, against Chrome's ~30s idle shutdown.
+ *
+ * KEEPALIVE_MS is meant to have a usable band under this rather than one pinned
+ * value, which is why the poke-count assertions below derive their thresholds
+ * from it. A hand-written band was wrong in three successive rounds, because
+ * adding any count assertion silently moves the boundary.
  */
 const MAX_GAP_MS = 25_000;
+/** Pokes to expect over `ms`, if no silence exceeds MAX_GAP_MS. */
+const pokesOver = (ms: number): number => Math.floor(ms / MAX_GAP_MS);
 /** src/background/service-worker.ts KEEPALIVE_CEILING_MS, same derivation. */
 const CEILING_MS = 13 * (PROBE_TIMEOUT_MS + 750);
 
@@ -228,8 +232,7 @@ describe('surviving MV3 suspension', () => {
     // The first run's ceiling would have fired 60s from here.
     await settle(3 * 60_000);
     const gained = chromeMock.keepAlivePings() - atSecondStart;
-    // Three minutes at 20s intervals is ~9 pokes; inheriting would give ~3.
-    expect(gained).toBeGreaterThanOrEqual(8);
+    expect(gained).toBeGreaterThanOrEqual(pokesOver(3 * 60_000));
   });
 
   it('gives a run after a cancelled, wedged one a full ceiling', async () => {
@@ -258,9 +261,52 @@ describe('surviving MV3 suspension', () => {
     await settle();
     const atSecondStart = chromeMock.keepAlivePings();
     await settle(3 * 60_000);
-    // Three minutes at 20s is ~9 pokes; inheriting the first run's remainder
-    // would cut it to about one.
-    expect(chromeMock.keepAlivePings() - atSecondStart).toBeGreaterThanOrEqual(8);
+    // Derived, so that tightening KEEPALIVE_MS cannot fail this for a reason
+    // unrelated to what it tests. Inheriting the first run's remainder would
+    // cut the count to about one.
+    expect(chromeMock.keepAlivePings() - atSecondStart).toBeGreaterThanOrEqual(
+      pokesOver(3 * 60_000),
+    );
+  });
+
+  it('does not let a late cancel stop a newer run’s keepalive', async () => {
+    // `cancelRun` captures `active` at the top and then has three suspension
+    // points, so a cancel that started earlier can resume *after* a newer run
+    // is live. An unguarded `stopKeepAlive()` at the end therefore clears the
+    // new run's interval: zero pokes for its whole life, which is the original
+    // bug arriving through the fix for a different one.
+    //
+    // Not reachable by clicking — the popup hides Cancel while a start is in
+    // flight — but reachable through the message protocol, and silent.
+    await bootWorker();
+    // Run A, finished. `active` is never nulled, so it stays cancellable.
+    // One candidate, so it is over well inside the wait — plan(1) is
+    // *concurrency* one with two candidates and would still be running.
+    const solo = { ...plan(1) };
+    solo.candidates = [plan().candidates[0]!];
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
+    await settle();
+    await settle(60_000);
+    expect((await getState())?.finishedAt).toBeDefined();
+
+    // Widen the window so both cancelRun calls park inside publish().
+    chromeMock.delaySessionWrites(5_000);
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 8 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    void chromeMock.fromPopup({ type: 'START_RUN', plan: many });
+    await settle(100);
+    void chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle(60_000);
+
+    expect((await getState())?.finishedAt).toBeUndefined();
+    const times = chromeMock.keepAlivePingTimes();
+    expect(Date.now() - (times.at(-1) ?? 0)).toBeLessThanOrEqual(MAX_GAP_MS);
   });
 
   it('stops poking after cancelling a run that never tore itself down', async () => {
