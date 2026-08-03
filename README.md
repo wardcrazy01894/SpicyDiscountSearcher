@@ -18,7 +18,7 @@ and ranks them.
 | Popup, trip form, code selection, ranking, savings | ✅ done                                                                  |
 | Orchestration (tab pool, throttling, cancel)       | ✅ done                                                                  |
 | Price extraction from a results page               | ✅ generic sweep, heavily tested — per-vendor `offer` selectors unfilled |
-| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis verified; the rest best-effort or impossible**       |
+| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis working; the rest best-effort or impossible**        |
 
 The last row is the honest caveat. None of these vendors document their search
 URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.

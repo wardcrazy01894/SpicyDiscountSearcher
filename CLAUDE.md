@@ -120,10 +120,11 @@ encode other people's websites. They will break. Both are deliberately isolated:
   airtight; registering the script only for the length of a run needs the
   `scripting` permission and belongs with the change that adds it.
 
-  **Not yet confirmed end to end in a loaded extension.** The mechanism is
-  measured (clearing the store fixes the page) and `document_start` is
-  documented to run before any other script, but the two have not been observed
-  working together in a real run.
+  **Confirmed end to end in a loaded extension**, which is what the two halves
+  were waiting on: the mechanism was measured (clearing the store fixes the
+  page) and `document_start` is documented to run before any other script, but
+  whether our injection actually wins that race against Avis's own early
+  scripts was an assumption until a real run returned Avis prices.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
