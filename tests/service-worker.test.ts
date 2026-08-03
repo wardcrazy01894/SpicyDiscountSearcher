@@ -312,42 +312,61 @@ describe('surviving MV3 suspension', () => {
 
   it('does not let a late settle resurrect a keepalive the ceiling gave up on', async () => {
     // `extendKeepAlive` returns early when no interval exists, and that early
-    // return is the whole guard. Without it, a lane that settles a quote *after*
-    // the ceiling has fired — inside a run that is still going — restarts the
-    // keepalive and pushes the deadline out another full ceiling. A wedged run
-    // with one slow survivor would then hold the worker indefinitely, which is
-    // exactly what the ceiling exists to stop.
+    // return is the whole guard. Without it, a lane settling a quote *after* the
+    // ceiling has fired — inside a run that is still going — restarts the
+    // keepalive and pushes the deadline out another full ceiling, so a wedged
+    // run with one slow survivor holds the worker indefinitely.
     //
-    // Constructed by wedging windows.create for longer than the ceiling: nothing
-    // settles, so the ceiling fires; then the window finally opens, a tab
-    // answers, and a quote settles into a stopped keepalive.
+    // Constructed by wedging windows.create past the ceiling: nothing settles,
+    // so the ceiling fires. Enough candidates that the run is still live well
+    // after the window finally opens, because both settles below have to land
+    // mid-run — one during teardown proves nothing, since teardown stops the
+    // keepalive by another route entirely.
+    //
+    // The settle that does the work is quote one reaching its probe deadline,
+    // not the hand-delivered result after it: ablating that block still kills
+    // the mutation. An earlier version asserted only after the hand-delivered
+    // result, by which time the run had finished and `stopKeepAlive` had already
+    // run — it passed for a reason its own comment did not describe.
     await bootWorker();
-    chromeMock.delayWindowCreate(CEILING_MS + 2 * 60_000);
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    chromeMock.delayWindowCreate(CEILING_MS + 60_000);
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 8 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: many });
     await settle();
-    await settle(CEILING_MS + 60_000);
+    await settle(CEILING_MS + 30_000);
 
     const afterCeiling = chromeMock.keepAlivePings();
-    // The ceiling has fired and stayed fired.
-    await settle(30_000);
+    expect(afterCeiling).toBeGreaterThan(0);
+    await settle(20_000);
     expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
 
-    // Now the window opens and a quote settles.
-    await settle(2 * 60_000);
+    // The window opens, quote one gets a tab, and that tab reaches its deadline.
+    await settle(PROBE_TIMEOUT_MS + 30_000);
+    expect((await getState())?.finishedAt).toBeUndefined();
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // And a quote settling by answering, rather than by timing out.
     const tabId = [...chromeMock.tabs.keys()][0];
     expect(tabId).toBeDefined();
     await chromeMock.fromTab(tabId!, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
     await settle(1_000);
-
-    // Progress must not restart it.
-    await settle(3 * 60_000);
+    expect((await getState())?.finishedAt).toBeUndefined();
     expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
 
     // Scope note: this kills the mutation that matters — replacing
     // extendKeepAlive's body with startKeepAlive(). Removing only the early
-    // return while keeping the assignment still passes, and should: writing
-    // keepAliveUntil with no interval running is dead state, not a
-    // resurrection, since both readers guard on keepAliveTimer.
+    // return while keeping the assignment still passes, and should. Not because
+    // "both readers guard on keepAliveTimer" — there is one reader, and it is
+    // simply unreachable while stopped — but because `startKeepAlive` overwrites
+    // `keepAliveUntil` unconditionally before creating an interval, so no stale
+    // value can ever be inherited.
   });
 
   it('stops poking after cancelling a run that never tore itself down', async () => {

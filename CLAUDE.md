@@ -394,10 +394,17 @@ close). Never pass it a URL or a code.
   the whole mechanism. A count-based version passed while `setTimeout` stood in
   for `setInterval` — a keepalive firing once at 20s and never again, which
   reproduces the original bug exactly. Deleting a guard is the weak mutation
-  here; these are the ones that matter, and all four were checked to fail:
-  no `startKeepAlive`, no `stopKeepAlive`, one-shot instead of repeating, and
+  here; these are the ones that matter, and all five were checked to fail:
+  no `startKeepAlive`, no `stopKeepAlive`, one-shot instead of repeating,
   `KEEPALIVE_MS = 29_500` — which leaves no margin for a delayed tick and which
-  a "under 30s" assertion would have waved through.
+  a "under 30s" assertion would have waved through — and `extendKeepAlive`
+  replaced by `startKeepAlive`, which would let a quote settling after the
+  ceiling fired resurrect the keepalive it had just given up on.
+
+  One mutation deliberately survives: removing `extendKeepAlive`'s early return
+  while keeping its assignment. Writing `keepAliveUntil` with no interval
+  running is dead state rather than stale, because `startKeepAlive` overwrites
+  it unconditionally before creating one.
 
 - Marking Budget, Enterprise and National unsearchable removes **27 codes and
   six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
