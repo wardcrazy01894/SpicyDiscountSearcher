@@ -254,7 +254,14 @@ close). Never pass it a URL or a code.
   and left the rest of its quotes `interrupted` with their tabs open: the exact
   bug this whole section is about, reintroduced by the guard meant to bound it.
   `finishQuote` extends it, so a healthy race never trips it and a stuck one
-  still does. MV3 suspension
+  still does — and `cancelRun` stops the keepalive outright, because settling
+  every quote to cancel them would otherwise buy a wedged run another full
+  ceiling after the user had already cancelled it.
+
+  The ceiling is derived from `PROBE_TIMEOUT_MS + STAGGER_MS` rather than
+  written as ten minutes: as inactivity it only has to exceed the longest
+  legitimate gap between two settles, which is one lane's deadline plus its
+  stagger and does not grow with the number of codes. MV3 suspension
   used to be the backstop for a wedged run — `runQuote` awaits `ensureWindow`
   and `chrome.tabs.create` with no timeout around either, so a lane parked on a
   `windows.create` that never settles ended when Chrome reclaimed the worker.

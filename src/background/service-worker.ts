@@ -73,11 +73,17 @@ const KEEPALIVE_MS = 20_000;
  * this. A healthy sixty-code race settles one every few seconds and never
  * comes close.
  *
+ * Derived rather than a round ten minutes, so the two cannot drift: as
+ * inactivity it only has to exceed the longest legitimate gap between two
+ * settles, which is one lane's probe deadline plus its stagger — independent of
+ * how many codes are in the run. Thirteen times that is ~10 minutes today and
+ * shrinks automatically if the deadline does.
+ *
  * Tripping it returns the worker to Chrome's ordinary suspension rules, which
  * is what shipped before this keepalive existed — the worst case is the old
  * behaviour, not a new failure.
  */
-const KEEPALIVE_CEILING_MS = 10 * 60_000;
+const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
 
 interface ActiveRun {
   state: RunState;
@@ -679,16 +685,26 @@ let keepAliveUntil = 0;
  * starting while one is winding down must not leave two intervals running.
  */
 /**
- * Push the ceiling out because something happened.
+ * Push the ceiling out because a quote settled.
  *
- * Separate from `startKeepAlive` so that progress cannot accidentally *create*
- * a keepalive: a late reply arriving after teardown must not resurrect one.
+ * The null check is not about late replies — a reply for an already-settled
+ * quote returns from `finishQuote` before reaching here. What it defends is a
+ * lane settling a quote *after* the ceiling has already fired inside a run
+ * that is still going: without it, progress would resurrect the keepalive the
+ * ceiling had just given up on, and a wedged run with one slow survivor could
+ * hold the worker indefinitely.
  */
 function extendKeepAlive(): void {
   if (keepAliveTimer === null) return;
   keepAliveUntil = Date.now() + KEEPALIVE_CEILING_MS;
 }
 
+/**
+ * Hold the worker resident for a run, and (re)set its inactivity ceiling.
+ *
+ * Idempotent, so a second run starting while one is winding down cannot leave
+ * two intervals running.
+ */
 function startKeepAlive(): void {
   // Refreshed unconditionally, *before* the idempotence check, and that
   // ordering is the whole point. Holding the deadline in a closure captured
@@ -813,6 +829,17 @@ async function cancelRun(): Promise<void> {
 
   run.state.finishedAt ??= Date.now();
   await publish();
+  // Last, after the closes and the final publish, so teardown itself is still
+  // covered by a resident worker.
+  //
+  // Needed because cancelling settles every quote, and settling extends the
+  // ceiling. Without this, cancelling a run whose lane is wedged on
+  // `windows.create` — the case where teardown never fires, so nothing else
+  // ever stops the interval — bought the worker another full ceiling *after*
+  // the cancel, with the window closed and the popup idle. Measured at 27
+  // further pokes against 2 before the inactivity change, so this is a
+  // regression that arrived with it rather than a pre-existing gap.
+  stopKeepAlive();
 }
 
 chrome.runtime.onMessage.addListener(
