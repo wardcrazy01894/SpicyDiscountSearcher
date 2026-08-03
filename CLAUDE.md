@@ -177,13 +177,25 @@ code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
 The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
-either — see below. They exist for the vendors whose URL the site ignores:
-Enterprise, Budget and National keep the search in session state, so their deep
-link is present but inert and something has to re-deliver the trip where the
-page will honour it. Driving the form is the likely answer rather than a settled
-one; Enterprise's is a multi-step wizard whose real inputs are `display:none`
-behind custom controls, with no discount-code field on the first step, so a
-single fill-and-submit function is the wrong shape.
+either — see below. They exist for the vendors whose URL cannot express a
+search. On this branch that is four, not three: Budget **and Avis** deep-link to
+`/en/home`, which is a home page whatever the query string says, and Enterprise
+and National target a reservation path a hand-run search never produces. Every
+one of them still gets the code and the whole itinerary in `location.search`;
+the sites act on none of it, so something has to re-deliver the trip where the
+page will honour it.
+
+Driving the form is the likely answer rather than a settled one; Enterprise's is
+a multi-step wizard whose real inputs are `display:none` behind custom controls,
+with no discount-code field on the first step, so a single fill-and-submit
+function is the wrong shape.
+
+Both that paragraph and the matching comment in `messages.ts` describe
+`deeplinks.ts` **as it is on this branch**, and the verified-deep-links work
+changes it underneath them — Avis gains a real search URL and three builders
+stop producing a URL at all. Whichever of the two lands second owns
+reconciling this, and the same applies to `landedElsewhere`'s "blind for avis
+and budget by construction" comment.
 
 `form-fill` is deliberately distinct from `extract-threw`: it fails at the
 opposite end, before the page was ever asked for a price, so "no price appeared"
@@ -194,13 +206,20 @@ bug rather than only a future one. A tab that redirects between two matched
 hosts — Avis and Budget are the same parent company — re-sends `PROBE_READY`
 under the same tab id and is handed the original quote's code and vendor.
 
-Calling that harmless for a read-only probe was wrong. Every `container` list in
-`VENDOR_SELECTORS` ends with `main`, so the container matches on the sibling host
-too and the generic sweep runs over that page; `landedElsewhere` only fires for a
-bare `/`, so nothing is flagged. The result is that one vendor's prices settle
-another vendor's quote, labelled with the wrong vendor and code, `status: 'ok'`.
-A driver makes it worse rather than making it real — it would type a Budget code
-into an Avis form — but the misattribution exists today.
+Calling that harmless for a read-only probe was wrong. The sweep runs on the
+sibling host whatever its markup does, because `extractOffers` falls back to
+`doc.body` when no `container` matches — **not** because every `container` list
+happens to end with `main`. The difference matters: deleting `main` from those
+nine lists looks like a fix and changes nothing. `landedElsewhere` then flags
+only a redirect that lands on a bare `/`, and even that gets the wrong
+diagnosis — "the link missed its search" for a link that reached one, on the
+wrong site.
+
+So one vendor's prices settle another vendor's quote, labelled with the wrong
+vendor and code, `status: 'ok'`. A driver makes it worse rather than making it
+real — it would type a Budget code into an Avis form — but the misattribution
+exists today, which is why it is in Known gaps rather than here as a note for
+later.
 
 `Quote.report` carries what the probe actually saw — landed path, page title,
 offer count, extraction branch — and renders under any failed or flagged quote.
