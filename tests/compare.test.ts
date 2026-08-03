@@ -209,6 +209,25 @@ describe('a quote that landed somewhere other than the search', () => {
     expect(result?.worst).toBe(100);
   });
 
+  it('sorts below the winner rather than above it', () => {
+    // It has no bucket now, and an unbucketed quote used to inherit rank 0 —
+    // so the excluded $35 was rendered first, with the real winner highlighted
+    // beneath it. Same misreading, quieter.
+    const other = quote('avis', 'ok', [['Economy', 100, 'per-day']]);
+    const order = orderForDisplay([landed(), real(), other]).map((q) => q.id);
+    expect(order.indexOf('sixt')).toBeGreaterThan(order.indexOf('hertz'));
+    expect(order[0]).toBe('hertz');
+  });
+
+  it('is listed exactly once, never twice', () => {
+    // `unrankedQuotes` concatenates the out-of-bucket quotes with the suspect
+    // ones, and only `pricedOnly`'s filter — in a different function — keeps a
+    // quote out of both halves. Re-including suspect there would list the same
+    // code twice and inflate the popup's count.
+    const ids = unrankedQuotes([landed(), real()]).map((q) => q.id);
+    expect(ids.filter((id) => id === 'sixt')).toHaveLength(1);
+  });
+
   it('does not make a lone real quote look like a race', () => {
     // One genuine price and one home-page price is not two rivals, and
     // announcing a 42% saving off a number nobody can book is the worst

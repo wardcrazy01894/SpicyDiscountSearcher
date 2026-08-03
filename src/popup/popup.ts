@@ -336,12 +336,18 @@ function readTrip(): Trip {
 /** Both verified builders address a branch by IATA code, not by free text. */
 const AIRPORT_CODE_RE = /^[A-Za-z]{3}$/;
 /**
- * What both verified builders accept as a time, and all `<input type=time>`
- * emits today — but only because the fields carry no `step` attribute. With one,
+ * The *shape* both verified builders require, and all `<input type=time>` emits
+ * today — but only because the fields carry no `step` attribute. With one,
  * Chrome emits `HH:MM:SS`, which `clock12` correctly rejects and which would
  * therefore fail Avis and Hertz at `link-build` while leaving the race to a
  * vendor that reaches no search. Checked here so that adding `step` is a
  * validation change rather than a silent loss of both working vendors.
+ *
+ * Deliberately weaker than `clock12`, which also rejects hour > 23 and
+ * minute > 59: `25:99` passes here and throws `link-build` in the builders. A
+ * `<input type=time>` cannot emit it, and duplicating the range checks in a
+ * second place is how the two drift apart — so this checks shape only, and says
+ * so rather than claiming to be equivalent.
  */
 const CLOCK_RE = /^\d{1,2}:\d{2}$/;
 
@@ -678,8 +684,17 @@ function renderRun(state: RunState | null): void {
   quotesList.append(note);
 
   const spread = savings(state.quotes);
-  const setAside = unrankedQuotes(state.quotes);
-  savingsBox.hidden = !spread && setAside.length === 0;
+  // Split by *why* they are unranked. The sentence below can only talk about
+  // basis and currency, and a quote that landed on the vendor's home page is
+  // normally in the same basis and currency as the winner — so lumping the two
+  // together printed "quoted daily rates in USD" as the reason a quote was set
+  // aside from a bucket that *is* daily rates in USD. That is asserting a
+  // diagnosis known to be the wrong one, which the row-level warning three
+  // hundred lines up already contradicts.
+  const unranked = unrankedQuotes(state.quotes);
+  const setAside = unranked.filter((q) => !q.suspect);
+  const landedElsewhere = unranked.filter((q) => q.suspect);
+  savingsBox.hidden = !spread && setAside.length === 0 && landedElsewhere.length === 0;
   savingsBox.replaceChildren();
 
   if (spread && winner) {
@@ -751,6 +766,17 @@ function renderRun(state: RunState | null): void {
     note.textContent = spread
       ? `${setAside.length} other code${plural} quoted ${kinds.join(' or ')}. Listed below, but not ranked — that is a different question from the one above.`
       : `${setAside.length} code${plural} quoted ${kinds.join(' or ')}, which cannot be compared with the rest. Nothing here is ranked against it.`;
+    savingsBox.append(note);
+  }
+
+  if (landedElsewhere.length > 0) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    const plural = landedElsewhere.length === 1 ? '' : 's';
+    const verb = landedElsewhere.length === 1 ? 'its' : 'their';
+    note.textContent =
+      `${landedElsewhere.length} code${plural} landed on the vendor's home page rather than ` +
+      `${verb} search, so the price found there is not for this trip. Listed below, but not ranked.`;
     savingsBox.append(note);
   }
 }

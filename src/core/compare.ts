@@ -148,8 +148,23 @@ export function orderForDisplay(quotes: Quote[]): Quote[] {
   comparisonGroups(quotes).forEach((group, index) => {
     bucketRank.set(`${group.basis}|${group.currency}`, index);
   });
+  // Anything with no bucket sorts *after* every bucket, not into the first one.
+  // The `?? 0` this replaces was dead while every priced quote had a bucket;
+  // excluding suspect quotes from `comparisonGroups` made it reachable and gave
+  // them primary-bucket rank, so the home-page price that must not be ranked
+  // was rendered at the top of the list with the real winner highlighted
+  // underneath it — a quieter version of the reading this all exists to remove.
+  // Anything unranked sorts *after* every bucket. `suspect` is tested directly
+  // rather than inferred from a missing bucket key, because the common case is
+  // a home-page price in the *same* basis and currency as the winner: its key
+  // is present, so a `?? bucketRank.size` fallback never fires and the excluded
+  // quote sorted to the top on amount — rendered first, with the real winner
+  // highlighted underneath, which is a quieter version of the reading this
+  // whole change exists to remove.
   const bucketOf = (quote: Quote): number =>
-    quote.best ? (bucketRank.get(groupKey(quote.best)) ?? 0) : 0;
+    quote.best && !quote.suspect
+      ? (bucketRank.get(groupKey(quote.best)) ?? bucketRank.size)
+      : bucketRank.size;
 
   return [...quotes].sort((a, b) => {
     const byStatus = statusRank[a.status] - statusRank[b.status];

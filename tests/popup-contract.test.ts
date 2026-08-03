@@ -323,6 +323,36 @@ describe('the popup half of the double-run guard', () => {
     ...over,
   });
 
+  it('explains a home-page landing as such, not as a currency mismatch', async () => {
+    // The sentence for unranked quotes can only talk about basis and currency,
+    // and a quote that landed on the vendor's home page is normally in the same
+    // basis and currency as the winner. Sharing one sentence printed "quoted
+    // daily rates in USD" as the reason a code was set aside from a bucket that
+    // *is* daily rates in USD — a diagnosis known to be the wrong one, which
+    // the row-level warning already contradicts.
+    const winner = quote({
+      id: 'hertz:H1',
+      best: { label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' }],
+    });
+    const runnerUp = quote({
+      id: 'avis:A1',
+      best: { label: 'Economy', amount: 100, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 100, currency: 'USD', basis: 'per-day' }],
+    });
+    const homePage = quote({
+      id: 'sixt:S1',
+      suspect: 'landed-elsewhere',
+      best: { label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' }],
+    });
+    await caveatFor([winner, runnerUp, homePage]);
+
+    const box = document.querySelector('#savings')?.textContent ?? '';
+    expect(box).toMatch(/home page/i);
+    expect(box).not.toMatch(/1 other code quoted daily rates/i);
+  });
+
   it('always says something about the links, even when all are verified', async () => {
     // The whole block was deletable with the suite green, including the branch
     // this PR added: it used to be `if (unverified > 0)`, so a run of only
