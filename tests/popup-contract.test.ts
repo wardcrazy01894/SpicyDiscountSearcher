@@ -226,6 +226,22 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#plan-summary')?.textContent).toMatch(/airport code/i);
   });
 
+  it('refuses a time that is not hh:mm', async () => {
+    // Unreachable through the form today — the inputs carry no `step`, so
+    // Chrome emits hh:mm — but adding one makes Chrome emit hh:mm:ss, which
+    // both verified builders reject. Without this the failure is two
+    // `link-build`s and a race decided by a vendor that reaches no search.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const time = document.querySelector<HTMLInputElement>('[name="pickupTime"]');
+    if (time) time.value = '10:00:00';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/hh:mm/i);
+  });
+
   it('refuses a drop-off that differs from the pick-up', async () => {
     // One-way is refused in the builders because Avis's return-location
     // parameter proved unreliable; catching it here means the user is told,

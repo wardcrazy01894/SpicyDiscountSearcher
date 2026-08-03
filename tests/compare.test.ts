@@ -176,6 +176,47 @@ describe('orderForDisplay', () => {
   });
 });
 
+describe('a quote that landed somewhere other than the search', () => {
+  // The failure this closes, measured rather than imagined: sixt's builder
+  // targets /php/reservation, which 302s to https://www.sixt.com/ with the
+  // location field empty and "$35" on the page. The probe reads that, the quote
+  // comes back `ok` with a real number, and because a marketing rate is cheaper
+  // than any genuine one it took the primary bucket and won outright. The popup
+  // put a flag on the row and still ranked it first, which reads as an answer
+  // with a caveat rather than as no answer at all.
+
+  const landed = (): Quote => {
+    const q = quote('sixt', 'ok', [['Economy', 35, 'per-day']]);
+    q.suspect = 'landed-elsewhere';
+    return q;
+  };
+  const real = (): Quote => quote('hertz', 'ok', [['Economy', 60, 'per-day']]);
+
+  it('cannot win the race by being cheaper than anything real', () => {
+    expect(cheapestComparable([landed(), real()])?.id).toBe('hertz');
+  });
+
+  it('is listed rather than dropped, so the code does not look untried', () => {
+    expect(unrankedQuotes([landed(), real()]).map((q) => q.id)).toContain('sixt');
+  });
+
+  it('does not become the saving', () => {
+    // Two real quotes plus the suspect one. The spread must be 100 against 60,
+    // not against the home page's 35.
+    const other = quote('avis', 'ok', [['Economy', 100, 'per-day']]);
+    const result = savings([landed(), real(), other]);
+    expect(result?.best).toBe(60);
+    expect(result?.worst).toBe(100);
+  });
+
+  it('does not make a lone real quote look like a race', () => {
+    // One genuine price and one home-page price is not two rivals, and
+    // announcing a 42% saving off a number nobody can book is the worst
+    // possible reading of it.
+    expect(savings([landed(), real()])).toBeNull();
+  });
+});
+
 describe('savings', () => {
   it('measures the spread between best and worst answered code', () => {
     const spread = savings([

@@ -19,8 +19,29 @@ export interface ComparisonGroup {
 /** Trip totals are the number we actually want; a daily rate is the last resort. */
 const BASIS_RANK: Record<PriceBasis, number> = { total: 0, unknown: 1, 'per-day': 2 };
 
+/**
+ * Quotes carrying a real price that is a price *for the trip we asked about*.
+ *
+ * `suspect` is excluded, and that exclusion is load-bearing rather than tidy.
+ * A quote whose probe landed on the vendor's home page still comes back
+ * `status: 'ok'` with a genuine number on it — the marketing "from $35/day"
+ * every rental home page carries. Nothing else here can tell that apart from a
+ * real rate: it is the same currency, the same basis, and it is *cheaper than
+ * anything real*, so it took the primary bucket, won `cheapestComparable`, and
+ * `savings` announced it as the saving. The popup flagged the row and ranked it
+ * first anyway, which reads as "here is your answer, with a caveat" rather than
+ * "this is not an answer".
+ *
+ * Measured, not hypothesised: sixt's builder targets `/php/reservation`, which
+ * 302s to `https://www.sixt.com/` with the location field empty and `$35` on
+ * the page. That vendor ships today.
+ *
+ * Excluded quotes are not discarded — `unrankedQuotes` returns them, so the
+ * popup lists them under "not ranked" with the reason, which is the treatment a
+ * mismatched currency already gets.
+ */
 function pricedOnly(quotes: Quote[]): PricedQuote[] {
-  return quotes.filter((q): q is PricedQuote => q.status === 'ok' && q.best !== null);
+  return quotes.filter((q): q is PricedQuote => q.status === 'ok' && q.best !== null && !q.suspect);
 }
 
 function groupKey(offer: Offer): string {
@@ -71,11 +92,23 @@ export function primaryGroup(quotes: Quote[]): ComparisonGroup | null {
   return comparisonGroups(quotes)[0] ?? null;
 }
 
-/** Priced quotes that sit outside the reported race, so the UI can say so. */
+/**
+ * Priced quotes that sit outside the reported race, so the UI can say so.
+ *
+ * Two reasons to be here now. A quote can be priced in a basis or currency the
+ * reported bucket does not use — the original case — or it can be `suspect`,
+ * meaning its probe landed somewhere that is not the search we asked for. Both
+ * carry a real number that must not be ranked, and both are listed rather than
+ * dropped: a code that silently disappears reads as one that was never tried.
+ */
 export function unrankedQuotes(quotes: Quote[]): PricedQuote[] {
-  return comparisonGroups(quotes)
+  const outsideBucket = comparisonGroups(quotes)
     .slice(1)
     .flatMap((group) => group.quotes);
+  const landedElsewhere = quotes.filter(
+    (q): q is PricedQuote => q.status === 'ok' && q.best !== null && Boolean(q.suspect),
+  );
+  return [...outsideBucket, ...landedElsewhere];
 }
 
 /**

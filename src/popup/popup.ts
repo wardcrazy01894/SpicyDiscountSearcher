@@ -335,6 +335,15 @@ function readTrip(): Trip {
 
 /** Both verified builders address a branch by IATA code, not by free text. */
 const AIRPORT_CODE_RE = /^[A-Za-z]{3}$/;
+/**
+ * What both verified builders accept as a time, and all `<input type=time>`
+ * emits today — but only because the fields carry no `step` attribute. With one,
+ * Chrome emits `HH:MM:SS`, which `clock12` correctly rejects and which would
+ * therefore fail Avis and Hertz at `link-build` while leaving the race to a
+ * vendor that reaches no search. Checked here so that adding `step` is a
+ * validation change rather than a silent loss of both working vendors.
+ */
+const CLOCK_RE = /^\d{1,2}:\d{2}$/;
 
 function validate(trip: Trip): string | null {
   if (trip.category === 'car') {
@@ -362,6 +371,9 @@ function validate(trip: Trip): string | null {
       return 'One-way rentals are not supported yet — leave drop-off blank.';
     }
     if (!trip.pickupDate || !trip.dropoffDate) return 'Enter both rental dates.';
+    if (!CLOCK_RE.test(trip.pickupTime) || !CLOCK_RE.test(trip.dropoffTime)) {
+      return 'Times must be hh:mm.';
+    }
     if (trip.dropoffDate < trip.pickupDate) return 'Drop-off is before pick-up.';
     return null;
   }
