@@ -28,7 +28,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { VENDORS, findVendor, vendorsFor } from '../core/vendors.js';
+import { findVendor, searchableVendors, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -776,7 +776,20 @@ async function restoreForm(): Promise<void> {
   // nothing matches, Run is disabled, and no checkbox exists to untick.
   if (saved.category === 'car' || saved.category === 'hotel') ui.category = saved.category;
   if (saved.vendors?.length) {
-    const known = new Set<string>(VENDORS.map((vendor) => vendor.id));
+    // Filtered against the *searchable* vendors, not all of VENDORS. A vendor
+    // that stops being searchable — as Budget, Enterprise and National just
+    // did — otherwise survives in storage forever and is re-persisted on the
+    // next save, because nothing else ever removes it: the chips are gone, so
+    // there is no checkbox to untick.
+    //
+    // It is not harmless while it sits there. `buildCandidates` drops it, so
+    // the plan stays honest, but `renderCompanyList` filters on the raw set —
+    // an upgrading user saw 37 company rows instead of 25, labelled with
+    // vendors that have no chip, and ticking an Enterprise-only company gave
+    // "No codes match this selection." with nothing on screen explaining why.
+    // That is the same promise-what-cannot-run defect the unsearchable change
+    // removed, arriving through storage instead.
+    const known = new Set<string>(searchableVendors().map((vendor) => vendor.id));
     ui.vendors = new Set(saved.vendors.filter((id) => known.has(id)));
   }
   if (saved.companies?.length) {

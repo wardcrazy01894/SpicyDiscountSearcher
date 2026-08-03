@@ -51,9 +51,13 @@ let broadcastListeners: Array<(message: unknown) => void> = [];
 let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
   Promise.resolve({ type: 'RUN_STATE', state: null });
 
+/** Seeded into chrome.storage.local before the popup boots. */
+let savedForm: Record<string, unknown> | null = null;
+
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
+  if (savedForm) local.set('popupForm', savedForm);
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
@@ -81,6 +85,7 @@ function installChrome(): void {
 beforeEach(() => {
   sentMessages = [];
   broadcastListeners = [];
+  savedForm = null;
   sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
@@ -162,6 +167,42 @@ describe('the popup half of the double-run guard', () => {
       expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
     });
   }
+
+  it('drops a saved vendor that can no longer be searched', async () => {
+    // What an upgrading user has in chrome.storage from before Budget,
+    // Enterprise and National became unsearchable. restoreForm filtered against
+    // every vendor id rather than the searchable ones, so those three survived
+    // in ui.vendors permanently — re-persisted on the next save, with no chip
+    // anywhere to untick.
+    //
+    // Not cosmetic: renderCompanyList filters on the raw set, so the list grew
+    // to 37 rows from 25 and labelled companies with vendors that cannot be
+    // raced; an Enterprise-only company could be ticked and then reported "No
+    // codes match this selection." with nothing explaining why. Same
+    // promise-what-cannot-run defect as the one marking them unsearchable
+    // removed, arriving through storage instead of through the chips.
+    savedForm = {
+      category: 'car',
+      vendors: ['hertz', 'avis', 'budget', 'enterprise', 'national', 'sixt'],
+      companies: [],
+    };
+    // Re-installed: beforeEach built the fake storage before this test could
+    // seed it, so the popup would have booted against an empty store.
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    // Read the `.vendors` span rather than the whole row: company *names*
+    // contain these words ("Nationwide" contains "national"), so matching row
+    // text fails for a reason that has nothing to do with the bug.
+    const listed = new Set(
+      [...document.querySelectorAll('.company .vendors')].flatMap((el) =>
+        (el.textContent ?? '').split(' · ').filter(Boolean),
+      ),
+    );
+    expect(listed.size).toBeGreaterThan(0);
+    expect([...listed].sort()).toEqual(['avis', 'hertz', 'sixt']);
+  });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {
     // Load-bearing, and unpinned until now. Both verified builders take an IATA

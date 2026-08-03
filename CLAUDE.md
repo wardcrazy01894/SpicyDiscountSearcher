@@ -296,6 +296,15 @@ close). Never pass it a URL or a code.
   snapshot instead of leaving it looking live forever, and a restarted worker
   closes the window its predecessor orphaned — but the in-flight quotes are
   still lost.
+- Marking Budget, Enterprise and National unsearchable removes **27 codes and
+  six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
+  `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and
+  `University of Maryland` have no code at any reachable vendor, so they vanish
+  from the company list rather than appearing greyed out. Twelve more drop out
+  of the car list and survive under hotels. There is precedent — twelve
+  starwood-only companies have been invisible for as long as that flag has
+  existed — and the alternative is listing codes that cannot be raced, but it
+  is a real loss and the only explanation lives in the README.
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison

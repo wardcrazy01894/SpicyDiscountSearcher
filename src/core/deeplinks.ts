@@ -48,11 +48,6 @@ function hotelTrip(trip: Trip): HotelTrip {
  * say) turns "New York" into the airport `NEW`, which is the silent
  * wrong-search this whole file has been apologising for.
  *
- * Imposed on Sixt too, whose builder passes the location as free text and was
- * never checked either way — so a Sixt-only run can no longer be given "Munich
- * Airport". Three codes, best-effort, and the alternative is a per-vendor rule
- * in `validate()` that would have to know which builders are strict.
- *
  * Hertz's own UI emits a branch id rather than an airport — the captured URL
  * said `pid=PHLT11` — but a bare IATA code is accepted and really does select
  * the market: TPA returned 36 vehicles at $31-$133 where PHL returned 31 at
@@ -346,6 +341,14 @@ const BUILDERS: Record<VendorId, Builder> = {
   enterprise: unsearchable('enterprise'),
   national: unsearchable('national'),
 
+  /**
+   * Not verified, and not strict about its location: `pickupStation` takes the
+   * free text the popup collected. It is nonetheless subject to the airport-code
+   * rule, because `validate()` in the popup applies that to the whole car form
+   * rather than per vendor — so a Sixt-only run can no longer be given "Munich
+   * Airport". Three codes, best-effort, and the alternative is a per-vendor
+   * rule in the popup that would have to know which builders are strict.
+   */
   sixt: (code, trip) => {
     const t = carTrip(trip);
     return {

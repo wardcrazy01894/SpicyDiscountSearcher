@@ -10,7 +10,7 @@ import {
   searchCompanies,
 } from '../src/core/codes.js';
 import type { Candidate } from '../src/core/types.js';
-import { VENDORS, vendorsFor } from '../src/core/vendors.js';
+import { VENDORS, getVendor, vendorsFor } from '../src/core/vendors.js';
 
 const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
@@ -150,6 +150,10 @@ describe('buildCandidates', () => {
     // vendor becomes reachable again.
     expect(buildCandidates({ vendors: ['enterprise'] })).toEqual([]);
     expect(buildCandidates({ vendors: ['national'] })).toEqual([]);
+    // The fan-out itself is dormant, not deleted, and deleting it currently
+    // fails nothing — so pin the registry fact it depends on. Whoever makes
+    // either brand reachable again needs this edge to still exist.
+    expect(getVendor('enterprise').alsoTryAs).toEqual(['national']);
   });
 
   it('never proposes a code for an unsearchable vendor', () => {
