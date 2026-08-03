@@ -1,5 +1,7 @@
 import { vi } from 'vitest';
 
+import { vendorHosts } from '../../src/core/vendors.js';
+
 /**
  * A fake of the slice of the `chrome.*` API the service worker touches.
  *
@@ -14,9 +16,18 @@ import { vi } from 'vitest';
  * The host_permissions in public/manifest.json. Chrome populates `Tab.url` and
  * `Tab.title` only for a tab whose *current* URL matches one of these, since
  * the manifest grants no `tabs` permission.
+ *
+ * Derived rather than hand-written: this list used to be a literal, and went
+ * stale the moment three vendors became unsearchable and left the manifest.
+ * This is the fake that models the permission rule behind `left-our-origins`,
+ * and CLAUDE.md already records it returning `url` unconditionally once and
+ * hiding a real gap — a stale copy here is the same failure with more steps.
  */
-const VENDOR_HOST_RE =
-  /^https:\/\/www\.(avis|budget|enterprise|hertz|hilton|hyatt|marriott|nationalcar|sixt)\.com\//;
+const VENDOR_HOST_RE = new RegExp(
+  `^https://(${vendorHosts()
+    .map((host) => host.replace(/\./g, '\\.'))
+    .join('|')})/`,
+);
 
 type MessageListener = (
   message: unknown,

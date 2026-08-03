@@ -18,13 +18,52 @@ and ranks them.
 | Popup, trip form, code selection, ranking, savings | ✅ done                                                                  |
 | Orchestration (tab pool, throttling, cancel)       | ✅ done                                                                  |
 | Price extraction from a results page               | ✅ generic sweep, heavily tested — per-vendor `offer` selectors unfilled |
-| Deep links that pre-apply a code                   | ⚠️ **best-effort — expect to fix these**                                 |
+| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis verified; the rest best-effort or impossible**       |
 
 The last row is the honest caveat. None of these vendors document their search
-URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered
-and unverified against live sites. If a vendor lands on its homepage instead of
-a results page, that's the one file to fix — see
-[Fixing a deep link](#fixing-a-deep-link).
+URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.
+Two are now checked against the live sites and marked `'verified'`:
+
+- **Hertz** — `/us/en/book/vehicles`, code as `CDP`.
+- **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`.
+
+Verified means the URL shape drives a real search, tested on a **US airport
+round trip**. It is not a promise about every itinerary: both hard-code a US
+country/region and a driver age of 25, and both **refuse one-way trips**,
+because Avis honoured its return-location parameter on one replay and ignored
+it on two others.
+
+Three cannot be deep-linked at all, which is worse than unverified: **Budget,
+Enterprise and National** keep the search in session state. Their URLs carry the
+code and the whole itinerary and the sites ignore all of it — Enterprise's
+results page is a bare `#car_select`, Budget's a bare `#/vehicles`. No query
+string can express a search for them; they need the form filled in the page.
+
+Those three are **hidden from the popup entirely** — no vendor chip, no
+candidates, no host permission — the same treatment Starwood has always had.
+Their builders also refuse to produce a URL, but that is a backstop; in an
+ordinary run nothing reaches them.
+
+Returning a URL was the worse option: the landing page shows a marketing
+"from $19/day", the probe reads it as a real price, and nothing downstream can
+tell — ranking never looks at `confidence`, so it would be compared
+head-to-head with the verified vendors and win on being cheapest. Leaving them
+merely _selectable_ was nearly as bad: they took half the default cap of twelve
+codes while the plan line promised twelve that would run.
+
+The cost is real and worth stating: **27 codes and six companies disappear from
+the popup** (`Government of Canada`, `Imaginus`, `Michigan State University`,
+`Purdue / Big TEN`, `UNION Bank/MUFG`, `University of Maryland` have no code at
+any reachable vendor), and six more lose their car listing but survive under
+hotels. The codes remain in the database for whenever a form driver reaches
+those sites.
+
+Because both verified builders address a branch by IATA code, **pick-up must be
+an airport code** (`TPA`), and **one-way rentals are refused** — leave drop-off
+blank or repeat the pick-up.
+
+If a vendor lands on its homepage instead of a results page, `deeplinks.ts` is
+the one file to fix — see [Fixing a deep link](#fixing-a-deep-link).
 
 ## Install (Brave or Chrome)
 
@@ -122,11 +161,27 @@ and keeping the JSON shape — nothing else knows where the codes came from.
 When a vendor's search doesn't pre-fill:
 
 1. Go to the vendor's site and run the search by hand, with the code applied.
-2. Copy the URL from the address bar.
-3. Update that vendor's builder in `src/core/deeplinks.ts` to match.
-4. Flip its `confidence` from `'best-effort'` to `'verified'`. This is visible:
-   the popup tells the user when a result came from an unverified link.
-5. Update the matching case in `tests/deeplinks.test.ts`.
+2. Copy the URL from the address bar **once prices are on screen** — not the
+   search form, and not the results-loading page.
+3. **Replay it.** Open that URL in a fresh window, change exactly one parameter,
+   and confirm the page follows. This step is not optional and is the whole
+   lesson of Enterprise: a URL that merely _loads_ proves nothing, because the
+   search may be coming from the session rather than the address bar. If the
+   results page names the location, watch it change; if it doesn't (Hertz),
+   compare inventory and prices between two airports.
+4. If the results page is unchanged by the parameter, or the URL has no query
+   string at all, **stop** — that vendor cannot be deep-linked and needs the
+   form driven instead. Do not write a builder for it.
+5. Update that vendor's builder in `src/core/deeplinks.ts` to match.
+6. Flip its `confidence` to `'verified'`, and record in the builder's doc
+   comment which itinerary shapes you actually tested. The flag is user-visible
+   and the popup leans on it, so an untested shape shipped under it is a silent
+   wrong price rather than a warning.
+7. Prefer throwing over guessing for anything the vendor will not accept as free
+   text. `withParams` drops empty values, so a parameter you fail to build
+   silently disappears and the vendor answers with a _default_ search — a real
+   page with real prices that has nothing to do with the trip.
+8. Update the matching case in `tests/deeplinks.test.ts`.
 
 Price extraction is the same idea in `src/core/extract.ts`: `VENDOR_SELECTORS`
 holds per-vendor CSS and a generic currency sweep runs when the selectors miss,

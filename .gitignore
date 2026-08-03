@@ -20,3 +20,6 @@ dist/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
+
+# Excel lock files, created whenever the workbook is open.
+~$*

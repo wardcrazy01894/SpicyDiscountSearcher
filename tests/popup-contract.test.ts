@@ -51,9 +51,13 @@ let broadcastListeners: Array<(message: unknown) => void> = [];
 let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
   Promise.resolve({ type: 'RUN_STATE', state: null });
 
+/** Seeded into chrome.storage.local before the popup boots. */
+let savedForm: Record<string, unknown> | null = null;
+
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
+  if (savedForm) local.set('popupForm', savedForm);
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
@@ -81,6 +85,7 @@ function installChrome(): void {
 beforeEach(() => {
   sentMessages = [];
   broadcastListeners = [];
+  savedForm = null;
   sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
@@ -162,6 +167,173 @@ describe('the popup half of the double-run guard', () => {
       expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
     });
   }
+
+  it('drops a saved vendor that can no longer be searched', async () => {
+    // What an upgrading user has in chrome.storage from before Budget,
+    // Enterprise and National became unsearchable. restoreForm filtered against
+    // every vendor id rather than the searchable ones, so those three survived
+    // in ui.vendors permanently — re-persisted on the next save, with no chip
+    // anywhere to untick.
+    //
+    // Not cosmetic: renderCompanyList filters on the raw set, so the list grew
+    // to 37 rows from 25 and labelled companies with vendors that cannot be
+    // raced; an Enterprise-only company could be ticked and then reported "No
+    // codes match this selection." with nothing explaining why. Same
+    // promise-what-cannot-run defect as the one marking them unsearchable
+    // removed, arriving through storage instead of through the chips.
+    savedForm = {
+      category: 'car',
+      vendors: ['hertz', 'avis', 'budget', 'enterprise', 'national', 'sixt'],
+      companies: [],
+    };
+    // Re-installed: beforeEach built the fake storage before this test could
+    // seed it, so the popup would have booted against an empty store.
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    // Read the `.vendors` span rather than the whole row: company *names*
+    // contain these words ("Nationwide" contains "national"), so matching row
+    // text fails for a reason that has nothing to do with the bug.
+    const listed = new Set(
+      [...document.querySelectorAll('.company .vendors')].flatMap((el) =>
+        (el.textContent ?? '').split(' · ').filter(Boolean),
+      ),
+    );
+    expect(listed.size).toBeGreaterThan(0);
+    expect([...listed].sort()).toEqual(['avis', 'hertz', 'sixt']);
+  });
+
+  it('refuses a location that is not an airport code, before opening any tab', async () => {
+    // Load-bearing, and unpinned until now. Both verified builders take an IATA
+    // code and nothing else, so "Chicago Downtown" makes Avis and Hertz throw
+    // link-build — leaving the race to be decided *only* by the vendors that
+    // cannot reach a search, whose home pages answer with a "from $19/day" that
+    // wins. Rejecting here is the difference between no answer and a
+    // confidently wrong one, so it has to happen before START_RUN is sent.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    const set = (name: string, value: string): void => {
+      const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+    set('pickupLocation', 'Chicago Downtown');
+    set('pickupDate', '2026-09-04');
+    set('dropoffDate', '2026-09-11');
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/airport code/i);
+  });
+
+  it('refuses a drop-off that differs from the pick-up', async () => {
+    // One-way is refused in the builders because Avis's return-location
+    // parameter proved unreliable; catching it here means the user is told,
+    // rather than every car quote failing as link-build.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
+    if (dropoff) dropoff.value = 'MCO';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/one-way/i);
+  });
+
+  it('accepts a lowercase code and a drop-off equal to the pick-up', async () => {
+    // The guard must not be so strict that it rejects the same airport spelled
+    // differently — that would refuse a perfectly ordinary round trip.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const pickup = document.querySelector<HTMLInputElement>('[name="pickupLocation"]');
+    const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
+    if (pickup) pickup.value = 'tpa';
+    if (dropoff) dropoff.value = ' TPA ';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(1);
+  });
+
+  /** Push a finished run into the popup and return the caveat line's text. */
+  async function caveatFor(quotes: unknown[]): Promise<string> {
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    expect(broadcastListeners.length).toBeGreaterThan(0);
+    for (const listen of broadcastListeners) {
+      listen({
+        type: 'RUN_STATE',
+        state: {
+          startedAt: 1,
+          finishedAt: 2,
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes,
+        },
+      });
+    }
+    const notes = [...document.querySelectorAll('#quotes .hint')].map((el) => el.textContent ?? '');
+    return notes.join(' | ');
+  }
+
+  const quote = (over: Record<string, unknown>): Record<string, unknown> => ({
+    id: 'hertz:H1',
+    candidate: {
+      companySlug: 'acme',
+      companyName: 'Acme',
+      vendor: 'hertz',
+      code: 'H1',
+      note: null,
+    },
+    url: 'https://www.hertz.com/us/en/book/vehicles',
+    confidence: 'verified',
+    status: 'ok',
+    offers: [{ label: 'Compact', amount: 200, currency: 'USD', basis: 'total' }],
+    best: { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' },
+    startedAt: 1,
+    finishedAt: 2,
+    ...over,
+  });
+
+  it('always says something about the links, even when all are verified', async () => {
+    // The whole block was deletable with the suite green, including the branch
+    // this PR added: it used to be `if (unverified > 0)`, so a run of only
+    // verified vendors printed no caveat at all — and silence reads as a much
+    // stronger promise than "checked on one US airport round trip".
+    const text = await caveatFor([quote({}), quote({ id: 'avis:A1', confidence: 'verified' })]);
+    expect(text).toMatch(/US airport round-trips only/i);
+  });
+
+  it('does not count a link it never built as an unverified link', async () => {
+    // link-build quotes are stamped `best-effort` by the worker's catch path,
+    // so counting them announced "N of these search links are unverified"
+    // about links that were never built, let alone followed.
+    const text = await caveatFor([
+      quote({}),
+      quote({ id: 'sixt:S1', confidence: 'best-effort', status: 'error', failure: 'link-build' }),
+    ]);
+    expect(text).not.toMatch(/1 of these search links/i);
+    expect(text).toMatch(/US airport round-trips only/i);
+  });
+
+  it('says plainly when nothing could be turned into a search', async () => {
+    const text = await caveatFor([
+      quote({ confidence: 'best-effort', status: 'error', failure: 'link-build' }),
+    ]);
+    expect(text).toMatch(/could be turned into a search/i);
+  });
 
   it('sends one START_RUN for a double-click, not two', async () => {
     // `ui.running` only becomes true once the background answers, so between

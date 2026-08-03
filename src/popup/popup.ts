@@ -28,7 +28,7 @@ import type {
   Trip,
   VendorId,
 } from '../core/types.js';
-import { VENDORS, findVendor, vendorsFor } from '../core/vendors.js';
+import { findVendor, searchableVendors, vendorsFor } from '../core/vendors.js';
 
 const FORM_STATE_KEY = 'popupForm';
 
@@ -333,9 +333,34 @@ function readTrip(): Trip {
   };
 }
 
+/** Both verified builders address a branch by IATA code, not by free text. */
+const AIRPORT_CODE_RE = /^[A-Za-z]{3}$/;
+
 function validate(trip: Trip): string | null {
   if (trip.category === 'car') {
     if (!trip.pickupLocation) return 'Enter a pick-up location.';
+    // Checked here as well as in the builders, because failing per-vendor is
+    // not a safe default. "Chicago Downtown" makes Avis and Hertz throw
+    // `link-build`, and the race is then decided *only* by Sixt — whose builder
+    // passes the location through as free text, has never been verified either
+    // way, and would win uncontested. Rejecting before any tab opens is the
+    // difference between no answer and a confidently wrong one.
+    //
+    // (The reason used to name Budget, Enterprise and National. They are
+    // `searchable: false` now and produce no candidate at all, so the survivor
+    // is Sixt.)
+    if (!AIRPORT_CODE_RE.test(trip.pickupLocation.trim())) {
+      return 'Pick-up must be a 3-letter airport code, e.g. TPA.';
+    }
+    if (trip.dropoffLocation.trim() && !AIRPORT_CODE_RE.test(trip.dropoffLocation.trim())) {
+      return 'Drop-off must be a 3-letter airport code, e.g. TPA.';
+    }
+    if (
+      trip.dropoffLocation.trim() &&
+      trip.dropoffLocation.trim().toUpperCase() !== trip.pickupLocation.trim().toUpperCase()
+    ) {
+      return 'One-way rentals are not supported yet — leave drop-off blank.';
+    }
     if (!trip.pickupDate || !trip.dropoffDate) return 'Enter both rental dates.';
     if (trip.dropoffDate < trip.pickupDate) return 'Drop-off is before pick-up.';
     return null;
@@ -604,19 +629,41 @@ function renderRun(state: RunState | null): void {
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
 
-  // One line for the list rather than a badge per row: every builder is
-  // best-effort today, so a per-row flag would mark every row and say nothing.
-  const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
-  if (unverified > 0) {
-    const note = document.createElement('li');
-    note.className = 'hint';
-    const scope =
-      unverified === state.quotes.length
-        ? 'Vendor search links are'
-        : `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'}`;
-    note.textContent = `${scope} reverse-engineered and unverified — a result that looks wrong probably is.`;
-    quotesList.append(note);
+  // One line for the list rather than a badge per row, which stays workable
+  // only while the verified vendors are few enough to name.
+  //
+  // This deliberately renders even when nothing is unverified. It used to be
+  // `if (unverified > 0)`, so the moment Avis and Hertz became `verified` a run
+  // containing only those two — which is most of the car codes, and the obvious
+  // selection once the others are known to be unusable — printed no caveat at
+  // all. `verified` is a claim about the URL shape, proved on one US round-trip
+  // from an airport; it is not a claim that the price is right for any
+  // itinerary, and silence reads as the stronger promise.
+  // `link-build` quotes are excluded: the worker stamps them `best-effort` on
+  // the catch path, so counting them said "N of these search links are
+  // unverified" about links that were never built, let alone followed.
+  const unverified = state.quotes.filter(
+    (q) => q.confidence === 'best-effort' && q.failure !== 'link-build',
+  ).length;
+  const buildable = state.quotes.filter((q) => q.failure !== 'link-build').length;
+  const note = document.createElement('li');
+  note.className = 'hint';
+  if (buildable === 0) {
+    note.textContent = 'None of these codes could be turned into a search — nothing was looked up.';
+  } else if (unverified === buildable) {
+    note.textContent =
+      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+  } else if (unverified > 0) {
+    note.textContent =
+      `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} reverse-engineered ` +
+      'and unverified — a result that looks wrong probably is. The rest are checked against the ' +
+      'live site for US airport round-trips only, and assume a driver aged 25 or over.';
+  } else {
+    note.textContent =
+      'These search links are checked against the live site for US airport round-trips only, and ' +
+      'assume a driver aged 25 or over. Confirm the rate before booking.';
   }
+  quotesList.append(note);
 
   const spread = savings(state.quotes);
   const setAside = unrankedQuotes(state.quotes);
@@ -736,7 +783,20 @@ async function restoreForm(): Promise<void> {
   // nothing matches, Run is disabled, and no checkbox exists to untick.
   if (saved.category === 'car' || saved.category === 'hotel') ui.category = saved.category;
   if (saved.vendors?.length) {
-    const known = new Set<string>(VENDORS.map((vendor) => vendor.id));
+    // Filtered against the *searchable* vendors, not all of VENDORS. A vendor
+    // that stops being searchable — as Budget, Enterprise and National just
+    // did — otherwise survives in storage forever and is re-persisted on the
+    // next save, because nothing else ever removes it: the chips are gone, so
+    // there is no checkbox to untick.
+    //
+    // It is not harmless while it sits there. `buildCandidates` drops it, so
+    // the plan stays honest, but `renderCompanyList` filters on the raw set —
+    // an upgrading user saw 37 company rows instead of 25, labelled with
+    // vendors that have no chip, and ticking an Enterprise-only company gave
+    // "No codes match this selection." with nothing on screen explaining why.
+    // That is the same promise-what-cannot-run defect the unsearchable change
+    // removed, arriving through storage instead.
+    const known = new Set<string>(searchableVendors().map((vendor) => vendor.id));
     ui.vendors = new Set(saved.vendors.filter((id) => known.has(id)));
   }
   if (saved.companies?.length) {

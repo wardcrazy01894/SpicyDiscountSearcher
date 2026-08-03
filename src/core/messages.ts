@@ -32,24 +32,19 @@ export type ProbeAssignment =
       /**
        * The itinerary and code to type into the vendor's own search form.
        *
-       * Needed by the vendors whose URL cannot express a search. Budget and
-       * Avis deep-link to `/en/home`, which is a home page whatever the query
-       * string says; Enterprise and National target a reservation path that a
-       * hand-run search never produces. `buildDeepLink` does put the code and
-       * every trip field in the query string for all of them — the URL is
-       * present but inert, so the values have to be re-delivered somewhere the
-       * page will honour.
+       * Needed by the vendors whose URL cannot express a search: Budget,
+       * Enterprise and National, whose sites ignore the query string entirely.
+       * Their builders now refuse to produce a URL at all and they are
+       * `searchable: false`, so nothing routes a run to them — the fields exist
+       * for the driver that will.
        *
-       * Which of those four is fixable by a better URL and which needs the form
-       * driven is not settled here, and every builder in `deeplinks.ts` is
-       * unverified against a live site (see README).
-       *
-       * Not a new exposure. `location.search` already carries the same values
-       * into all nine vendor pages, where any script on the page can read it;
-       * this payload reaches only the content script's isolated world.
+       * Not a new exposure. `buildDeepLink` already puts the code and every
+       * trip field into `location.search` for every vendor it does build for,
+       * where any script on the page can read it; this payload reaches only the
+       * content script's isolated world.
        *
        * Vendors with a working deep link ignore both fields — their trip is
-       * already in a URL the site does read.
+       * already in a URL the site reads.
        */
       trip: Trip;
       code: string;

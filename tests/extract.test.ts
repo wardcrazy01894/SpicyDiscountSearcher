@@ -55,6 +55,25 @@ describe('findPrices', () => {
     expect(findPrices('$0 due today, $3.50 concession fee')).toEqual([]);
   });
 
+  it('ignores a running cart total of zero', () => {
+    // Observed on Enterprise's live "Select Vehicle Class" page: a header
+    // widget reading `TOTAL $ 0 .00` before anything is selected, with the
+    // amount split across elements so offerText joins it with spaces. It says
+    // "total", which is the most-trusted basis there is, and zero undercuts
+    // every genuine rate in the race.
+    //
+    // What this actually pins, stated honestly: that the *spaced* form parses
+    // to 0 and is then rejected, rather than parsing to something else. It is
+    // not a guard on the value of MIN_PLAUSIBLE — relaxing 5 to 1 leaves it
+    // green, and the `$0 due today` case above already covers amount-zero
+    // rejection. It earns its place because the split-across-elements shape is
+    // the one real pages produce and the one a change to PRICE_RE could break.
+    // `Estimated Total0` carries no currency at all, so it never matches;
+    // pinned alongside because only the first is a near miss.
+    expect(findPrices('TOTAL $ 0 .00')).toEqual([]);
+    expect(findPrices('Estimated Total0')).toEqual([]);
+  });
+
   it('ignores implausibly large numbers', () => {
     expect(findPrices('$1,200,000 insurance coverage')).toEqual([]);
   });
