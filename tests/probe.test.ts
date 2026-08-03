@@ -167,6 +167,48 @@ describe('checking the trip the page priced', () => {
     expect(sent[0]?.type).toBe('PROBE_RESULT');
   });
 
+  it('reports rather than going silent when the check itself throws', async () => {
+    // Without the catch, the rejection escapes probe(), `void main()` swallows
+    // it, nothing is sent, and the background says "no answer before the
+    // deadline" about a page that had already parsed prices — a confident wrong
+    // diagnosis arriving by a different door.
+    assignment = avisAssignment();
+    document.body.innerHTML = summary('Select drop-off location');
+    Object.defineProperty(document.body, 'innerText', {
+      configurable: true,
+      get() {
+        throw new Error('innerText exploded');
+      },
+    });
+    try {
+      await run(POLL * 2);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.type).toBe('PROBE_RESULT');
+    } finally {
+      // An own property on document.body outlives innerHTML resets, so leaving
+      // it defined makes every later test in this file catch and return null —
+      // which silently turned the deadline test below into a false pass.
+      Reflect.deleteProperty(document.body, 'innerText');
+    }
+  });
+
+  it('checks the trip on the deadline path too', async () => {
+    // A page whose prices never settle is reported at the deadline with
+    // whatever it last saw. That path must not hand back a wrong trip either.
+    assignment = { ...avisAssignment(), timeoutMs: POLL * 4 };
+    await import('../src/content/probe.js');
+    for (let i = 0; i < 4; i += 1) {
+      document.body.innerHTML =
+        `<p>Tampa Intl Airport (TPA) - Philadelphia Intl Airport (PHL)</p>` +
+        CARD(`$${(30 + i).toString()}.99`);
+      await vi.advanceTimersByTimeAsync(POLL);
+    }
+    await vi.advanceTimersByTimeAsync(POLL * 2);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.failure).toBe('wrong-trip');
+  });
+
   it('leaves vendors that have not opted in alone', async () => {
     // The check reads a summary the vendor happens to render, which rots. A
     // Hertz page showing another airport must not start failing because Avis

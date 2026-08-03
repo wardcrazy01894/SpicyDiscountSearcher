@@ -49,12 +49,25 @@ const STALE_KEY = 'booking-widget.store';
  *
  * A content script cannot ask the background whether a run is in flight —
  * messaging is async and the page hydrates first — so the gate is what the URL
- * itself can prove. `awd_number` is the discount code, which only our own deep
- * link puts there; the vendor's own search flow does not.
+ * itself can prove.
  *
- * Not airtight: a user who has ever used an AWD link of their own would match.
- * The honest fix is registering this script only for the length of a run, which
- * needs the `scripting` permission and belongs with the change that adds it.
+ * **`awd_number` is weaker evidence than it looks, and this repo contains the
+ * disproof.** An earlier version of this comment claimed only our deep link
+ * puts a code there. It does not: `deeplinks.ts` records that Avis's URL was
+ * captured *from a search run by hand* with a corporate AWD applied, so the
+ * vendor's own flow produces exactly this shape. A user who types their
+ * employer's AWD into the widget and hits Search lands on this path with this
+ * parameter, and we clear their store mid-navigation — which for a one-way
+ * hand search is precisely the bug this file exists to prevent, inflicted on a
+ * search nobody asked us about.
+ *
+ * So the gate narrows the blast radius from "every avis.com page load" to "an
+ * availability search carrying a discount code", and no further. What would
+ * actually close it: registering this script only for the length of a run
+ * (`chrome.scripting.registerContentScripts`, which needs the `scripting`
+ * permission), or a marker only we emit — a URL fragment never reaches the
+ * server, so it would cost nothing, but whether Avis's router tolerates one is
+ * unverified and guessing at it is how this file's previous claim got written.
  */
 const OUR_SEARCH_PATH = '/en/reservation/vehicle-availability';
 
@@ -68,10 +81,16 @@ export function shouldClear(url: URL): boolean {
 
 export function clearStaleState(
   url: URL,
-  storage: Pick<Storage, 'removeItem'> | undefined,
+  readStorage: () => Pick<Storage, 'removeItem'> | undefined,
 ): boolean {
-  if (!storage || !shouldClear(url)) return false;
+  if (!shouldClear(url)) return false;
   try {
+    // Read inside the try, not outside. Chrome throws `SecurityError` on the
+    // property *access* when site data is blocked, which is the "disabled" case
+    // the catch below names — so taking it as an argument gave assurance the
+    // code had not earned.
+    const storage = readStorage();
+    if (!storage) return false;
     storage.removeItem(STALE_KEY);
     return true;
   } catch {
@@ -88,5 +107,5 @@ export function clearStaleState(
 // unguarded top-level call made the whole file untestable — which is why its
 // first draft shipped with both halves of the mechanism unpinned.
 if (typeof location !== 'undefined') {
-  clearStaleState(new URL(location.href), globalThis.localStorage);
+  clearStaleState(new URL(location.href), () => globalThis.localStorage);
 }

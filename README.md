@@ -34,7 +34,8 @@ Two are now checked against the live sites and marked `'verified'`:
   browser at the start of a session. The popup has an **"Open Avis to clear its
   bot check"** button for the second — it opens one ordinary tab on a throwaway
   search dated two months out, you answer the check there, and the clearance
-  carries for the rest of the session. It does not answer anything itself.
+  appears to carry for the rest of the session — observed once, not measured.
+  It does not answer anything itself.
 
   Avis will also rate-limit a browser that hits it hard — reachable in an
   afternoon of testing, not by a few searches a trip. The tell is an

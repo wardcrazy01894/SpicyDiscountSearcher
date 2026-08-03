@@ -18,6 +18,9 @@ function fakeStorage(): { removed: string[]; removeItem: (key: string) => void }
   return { removed, removeItem: (key) => removed.push(key) };
 }
 
+/** Storage read as a thunk, because the access itself can throw. */
+const from = (storage: Pick<Storage, 'removeItem'> | undefined) => () => storage;
+
 describe('shouldClear', () => {
   it('fires on our own search link', () => {
     expect(shouldClear(OURS)).toBe(true);
@@ -50,13 +53,13 @@ describe('clearStaleState', () => {
     // here silently turns the whole fix into a no-op — which is how the first
     // draft could be disabled with the suite green.
     const storage = fakeStorage();
-    expect(clearStaleState(OURS, storage)).toBe(true);
+    expect(clearStaleState(OURS, from(storage))).toBe(true);
     expect(storage.removed).toEqual(['booking-widget.store']);
   });
 
   it('removes nothing on a page that is not ours', () => {
     const storage = fakeStorage();
-    expect(clearStaleState(new URL('https://www.avis.com/en/home'), storage)).toBe(false);
+    expect(clearStaleState(new URL('https://www.avis.com/en/home'), from(storage))).toBe(false);
     expect(storage.removed).toEqual([]);
   });
 
@@ -69,11 +72,22 @@ describe('clearStaleState', () => {
         throw new Error('storage disabled');
       },
     };
-    expect(() => clearStaleState(OURS, throwing)).not.toThrow();
-    expect(clearStaleState(OURS, throwing)).toBe(false);
+    expect(() => clearStaleState(OURS, from(throwing))).not.toThrow();
+    expect(clearStaleState(OURS, from(throwing))).toBe(false);
   });
 
   it('does nothing when there is no storage at all', () => {
-    expect(clearStaleState(OURS, undefined)).toBe(false);
+    expect(clearStaleState(OURS, from(undefined))).toBe(false);
+  });
+
+  it('survives the storage access itself throwing', () => {
+    // Chrome throws SecurityError on the property access, not on removeItem,
+    // when site data is blocked — so reading it outside the try would take the
+    // page down while the catch sat there looking like it handled this.
+    expect(() =>
+      clearStaleState(OURS, () => {
+        throw new Error('SecurityError');
+      }),
+    ).not.toThrow();
   });
 });

@@ -1006,8 +1006,19 @@ avisCaptchaBtn.addEventListener('click', () => {
   // No discount code — `withParams` drops empty values, so this asks for a
   // plain availability page. The point is to reach the page that carries the
   // check, not to price anything.
-  const { url } = buildDeepLink('avis', '', botCheckTrip());
-  void chrome.tabs.create({ url, active: true });
+  // Both halves can fail, and a button that does nothing silently is worse than
+  // one that says why: `buildDeepLink` throws by design for a vendor that stops
+  // being searchable, and `tabs.create` rejects if the window has gone.
+  try {
+    const { url } = buildDeepLink('avis', '', botCheckTrip());
+    void chrome.tabs.create({ url, active: true }).catch(() => {
+      planSummary.textContent = 'Could not open a tab for the Avis bot check.';
+      planSummary.classList.add('is-warning');
+    });
+  } catch {
+    planSummary.textContent = 'Could not build the Avis bot-check link.';
+    planSummary.classList.add('is-warning');
+  }
 });
 
 cancelBtn.addEventListener('click', () => {
