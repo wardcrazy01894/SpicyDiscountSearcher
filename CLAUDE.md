@@ -480,6 +480,27 @@ close). Never pass it a URL or a code.
   starwood-only companies have been invisible for as long as that flag has
   existed — and the alternative is listing codes that cannot be raced, but it
   is a real loss and the only explanation lives in the README.
+- Two Avis questions are open and cannot be answered while the test browser is
+  rate-limited. Deferred deliberately rather than guessed at.
+
+  **Concurrent Avis tabs share one `localStorage`.** At concurrency two or more,
+  each probe tab clears `booking-widget.store` while Avis rewrites it from its
+  own URL. If that store carries the AWD, tab A could render tab B's code — the
+  same trip at a different discount, which `verify-trip` is structurally blind
+  to because it only compares locations. A dump of the store showed location
+  data and no code, but it was truncated, so this is unresolved rather than
+  ruled out. Capping Avis to one lane is the conservative answer if it turns out
+  to be real.
+
+  **The gate could be made ours rather than merely narrow.** `awd_number` is
+  produced by Avis's own search flow too, so the reset can still fire on a
+  user's hand-run search. A URL fragment never reaches the server and only we
+  would emit one, which would close it — but whether Avis's router tolerates a
+  fragment is untested, and guessing at it is how the previous version of that
+  comment came to claim something false. The other answer is
+  `chrome.scripting.registerContentScripts` for the length of a run, which needs
+  the `scripting` permission.
+
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison
