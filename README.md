@@ -18,14 +18,29 @@ and ranks them.
 | Popup, trip form, code selection, ranking, savings | ✅ done                                                                  |
 | Orchestration (tab pool, throttling, cancel)       | ✅ done                                                                  |
 | Price extraction from a results page               | ✅ generic sweep, heavily tested — per-vendor `offer` selectors unfilled |
-| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis verified; the rest best-effort or impossible**       |
+| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis work; the rest best-effort or impossible**           |
 
 The last row is the honest caveat. None of these vendors document their search
 URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.
 Two are now checked against the live sites and marked `'verified'`:
 
-- **Hertz** — `/us/en/book/vehicles`, code as `CDP`.
-- **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`.
+- **Hertz** — `/us/en/book/vehicles`, code as `CDP`. Works from a cold browser.
+- **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`. Needs
+  two things the URL cannot supply: its saved booking widget cleared (a
+  `document_start` content script does that, because Avis's own `localStorage`
+  outranks the query string — it runs only on availability links carrying a
+  discount code, so nearly all of your own Avis browsing is untouched, though a
+  hand search with a corporate code does still trip it), and a one-off bot
+  check passed by hand in your
+  browser at the start of a session. The popup has an **"Open Avis to clear its
+  bot check"** button for the second — it opens one ordinary tab on a throwaway
+  search dated two months out, you answer the check there, and the clearance
+  appears to carry for the rest of the session — observed once, not measured.
+  It does not answer anything itself.
+
+  Avis will also rate-limit a browser that hits it hard — reachable in an
+  afternoon of testing, not by a few searches a trip. The tell is an
+  availability page serving neither prices nor a bot check; it clears with time.
 
 Verified means the URL shape drives a real search, tested on a **US airport
 round trip**. It is not a promise about every itinerary: both hard-code a US

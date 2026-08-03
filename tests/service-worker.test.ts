@@ -793,6 +793,30 @@ describe('a probe reporting something unexpected', () => {
     expect((await getState())?.quotes.find((q) => q.finishedAt)?.failure).toBeUndefined();
   });
 
+  it('accepts `wrong-trip`, which the probe does emit', async () => {
+    // The single line joining verify-trip to the worker is its entry in
+    // PROBE_FAILURES, and removing it left the whole suite green: the quote
+    // would surface with a raw message and no code, against this repo's rule
+    // that tests assert the code because rewording a message must not change
+    // what the system believes happened.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'wrong-trip',
+      message: 'page shows TPA, PHL, which is not the trip requested',
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+    expect(quote?.failure).toBe('wrong-trip');
+    expect(quote?.message).toContain('PHL');
+  });
+
   it('does not trust `form-fill` from a page while nothing can emit it', async () => {
     // A different case from the unknown-code test below: `form-fill` is a
     // *known* QuoteFailure, and the invariant is that it stays off

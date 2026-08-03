@@ -29,6 +29,11 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.avis.com/*"],
+      "js": ["reset-widget-state.js"],
+      "run_at": "document_start"
     }
   ],
   "action": {

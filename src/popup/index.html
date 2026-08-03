@@ -128,6 +128,17 @@
           </button>
           <button type="button" class="btn" id="cancel-btn" hidden>Stop</button>
         </div>
+
+        <!-- Avis shows a bot check on its availability page and the probe tabs
+             cannot answer it. Passing it once by hand sets a clearance that the
+             rest of the session rides on, so this opens one ordinary, focused
+             tab for the user to do exactly that. It solves nothing itself. -->
+        <p class="hint">
+          <button type="button" class="linklike" id="avis-captcha-btn">
+            Open Avis to clear its bot check
+          </button>
+          — do this once per session before racing Avis codes.
+        </p>
       </form>
 
       <section class="results" id="results" hidden>

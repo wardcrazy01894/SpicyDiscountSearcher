@@ -8,7 +8,7 @@
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build": "npm run build:main && npm run build:content",
+    "build": "npm run build:main && npm run build:content && npm run build:reset",
     "build:main": "tsc --noEmit && vite build",
     "build:content": "vite build --config vite.content.config.ts",
     "typecheck": "tsc --noEmit",
@@ -16,7 +16,8 @@
     "test": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "codes": "./scripts/extract_codes.py"
+    "codes": "./scripts/extract_codes.py",
+    "build:reset": "vite build --config vite.reset.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

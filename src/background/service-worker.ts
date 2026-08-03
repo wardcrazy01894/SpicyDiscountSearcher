@@ -335,7 +335,14 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
  * diagnosis with a 100% false-positive rate, which this repo rates as worse
  * than none. They join the day a driver can send them.
  */
-const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
+const PROBE_FAILURES = new Set<QuoteFailure>([
+  'extract-threw',
+  'probe-empty',
+  // Only the content script can compare what the page rendered against the trip
+  // it was assigned, so this satisfies the rule above. Unlike `form-fill` it has
+  // an emitter today, which is the whole reason it is admitted now.
+  'wrong-trip',
+]);
 
 /**
  * Did the deep link land somewhere other than the search we asked for?

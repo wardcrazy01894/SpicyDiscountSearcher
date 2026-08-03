@@ -14,6 +14,7 @@ import {
   savings,
   unrankedQuotes,
 } from '../core/compare.js';
+import { buildDeepLink } from '../core/deeplinks.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
@@ -53,6 +54,7 @@ const cancelBtn = el<HTMLButtonElement>('#cancel-btn');
 const results = el<HTMLElement>('#results');
 const savingsBox = el<HTMLElement>('#savings');
 const quotesList = el<HTMLOListElement>('#quotes');
+const avisCaptchaBtn = el<HTMLButtonElement>('#avis-captcha-btn');
 
 interface UiState {
   category: Category;
@@ -351,6 +353,49 @@ const AIRPORT_CODE_RE = /^[A-Za-z]{3}$/;
  */
 const CLOCK_RE = /^\d{1,2}:\d{2}$/;
 
+/** Local date as yyyy-mm-dd. `toISOString` is UTC and shifts the day either
+ *  side of midnight, which would send a date the user did not pick. */
+function isoDay(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * A throwaway trip whose only job is to make Avis render the page that carries
+ * its bot check.
+ *
+ * Deliberately not the user's trip. This button is a session chore rather than
+ * a search, and tying it to the form would make it fail whenever the form is
+ * empty or half-filled — which is exactly when someone reaches for it. Dates
+ * are computed from today rather than fixed, so it cannot quietly start asking
+ * for a date in the past.
+ *
+ * Two months out and one day long: far enough ahead that availability is not
+ * the thing being tested, short enough to be an obviously unreal booking.
+ */
+const BOT_CHECK_DAYS_AHEAD = 60;
+
+function botCheckTrip(): Trip {
+  const start = new Date();
+  start.setDate(start.getDate() + BOT_CHECK_DAYS_AHEAD);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const typed = readTrip();
+  const pickup =
+    typed.category === 'car' && AIRPORT_CODE_RE.test(typed.pickupLocation.trim())
+      ? typed.pickupLocation.trim().toUpperCase()
+      : 'TPA';
+  return {
+    category: 'car',
+    pickupLocation: pickup,
+    dropoffLocation: '',
+    pickupDate: isoDay(start),
+    pickupTime: '12:00',
+    dropoffDate: isoDay(end),
+    dropoffTime: '12:00',
+  };
+}
+
 function validate(trip: Trip): string | null {
   if (trip.category === 'car') {
     if (!trip.pickupLocation) return 'Enter a pick-up location.';
@@ -423,6 +468,7 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   // Not "never returned results", which reads as a synonym for probe-empty.
   // The distinction is that the search was never run, not that it found nothing.
   'form-submit': 'submitting the search never loaded a results page',
+  'wrong-trip': 'the page priced a different trip',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
   cancelled: 'cancelled',
@@ -950,6 +996,29 @@ form.addEventListener('submit', (event) => {
   ui.pendingStart = true;
   runBtn.disabled = true;
   void send({ type: 'START_RUN', plan }).then(applyReply);
+});
+
+avisCaptchaBtn.addEventListener('click', () => {
+  // Opens one ordinary, focused tab and nothing else. It does not answer the
+  // check, and deliberately cannot: passing it is the user's to do, and the
+  // clearance it sets is what the probe tabs then ride on for the session.
+  //
+  // No discount code — `withParams` drops empty values, so this asks for a
+  // plain availability page. The point is to reach the page that carries the
+  // check, not to price anything.
+  // Both halves can fail, and a button that does nothing silently is worse than
+  // one that says why: `buildDeepLink` throws by design for a vendor that stops
+  // being searchable, and `tabs.create` rejects if the window has gone.
+  try {
+    const { url } = buildDeepLink('avis', '', botCheckTrip());
+    void chrome.tabs.create({ url, active: true }).catch(() => {
+      planSummary.textContent = 'Could not open a tab for the Avis bot check.';
+      planSummary.classList.add('is-warning');
+    });
+  } catch {
+    planSummary.textContent = 'Could not build the Avis bot-check link.';
+    planSummary.classList.add('is-warning');
+  }
 });
 
 cancelBtn.addEventListener('click', () => {

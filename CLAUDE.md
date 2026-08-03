@@ -86,6 +86,61 @@ encode other people's websites. They will break. Both are deliberately isolated:
   proves nothing either way — both Enterprise paths return it, including the
   live one.
 
+- **A vendor's own saved state can outrank the URL.** Avis persists its booking
+  widget in `localStorage` under `booking-widget.store`, and that state wins over
+  the query string: a profile that had once searched Philadelphia rendered
+  "Tampa Intl Airport (TPA) - Philadelphia Intl Airport (PHL)" for a link asking
+  TPA to TPA. Real page, real prices, different rental — and invisible, because
+  `landedElsewhere` only fires on the site root.
+
+  Two halves, deliberately. `src/content/reset-widget-state.ts` clears that key
+  at **`document_start`**, which is the only moment before the page hydrates from
+  it — the probe runs at `document_idle` and is far too late, which is why this
+  is a separate content script rather than a few lines in the existing one. And
+  `verify-trip.ts` compares the codes the page _rendered_ against the trip that
+  was asked for, so if the prevention ever stops working the quote fails
+  `wrong-trip` instead of quietly pricing somebody else's journey. Prevention
+  without detection would mean trusting that a fix stayed fixed.
+
+  Both are opt-in per vendor, like the selectors: the storage key and the trip
+  summary are one vendor's implementation details, and a false "wrong trip"
+  throws away a good quote. The trip check needs an asked-for code rendered
+  before it will blame an unexpected one — `(USD)` and `(EST)` are parenthesised
+  triplets too, and without that anchor a currency selector above the summary
+  would fail every Avis quote in every run. The cost is that a page replacing
+  _both_ ends of the trip is invisible to it.
+
+  The clear is gated on the URL being one of ours — the availability path,
+  carrying an `awd_number`. Ungated it fires on every avis.com load including
+  the user's own browsing, and the damage is not hypothetical: they fill the
+  widget by hand, hit Search, and the results navigation erases their drop-off
+  before hydration, causing this exact bug on a search nobody asked us about. A
+  content script cannot ask whether a run is in flight — messaging is async and
+  the page hydrates first — so the gate is what the URL itself can prove. Not
+  airtight; registering the script only for the length of a run needs the
+  `scripting` permission and belongs with the change that adds it.
+
+  **Confirmed end to end in a loaded extension** — the mechanism was measured
+  (clearing the store fixes the page) and `document_start` is documented to run
+  before any other script, but whether our injection wins that race against
+  Avis's own early scripts was an assumption until a real run returned Avis
+  prices. It does.
+
+  **Avis will rate-limit a profile that hits it hard.** Not the bot check —
+  that at least offers a way through — but a harder block, where the
+  availability page stops serving the check at all. Reached during development,
+  after repeated runs racing several Avis codes plus a lot of manual probing in
+  one afternoon.
+
+  Deliberately not designed around. Real use is a few searches a trip, weeks
+  apart, which is nowhere near that volume; the block is a testing hazard rather
+  than a product limit, and building a per-vendor throttle for a ceiling nobody
+  reaches in practice would be solving the wrong problem. Worth knowing before
+  an afternoon of iterating on Avis, though — when it trips, the tell is an
+  availability page that serves neither prices nor a check, and it clears with
+  time. If ordinary use ever does reach it, the lever is request volume: a
+  per-vendor concurrency of one, or a longer stagger for this vendor.
+
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
   the sweep away from nav and footer. **No vendor defines an `offer` selector**,
@@ -236,7 +291,7 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`, `form-fill`, `form-submit`. The popup renders a short phrase per
+`cancelled`, `form-fill`, `form-submit`, `wrong-trip`. The popup renders a short phrase per
 code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
@@ -425,6 +480,27 @@ close). Never pass it a URL or a code.
   starwood-only companies have been invisible for as long as that flag has
   existed — and the alternative is listing codes that cannot be raced, but it
   is a real loss and the only explanation lives in the README.
+- Two Avis questions are open and cannot be answered while the test browser is
+  rate-limited. Deferred deliberately rather than guessed at.
+
+  **Concurrent Avis tabs share one `localStorage`.** At concurrency two or more,
+  each probe tab clears `booking-widget.store` while Avis rewrites it from its
+  own URL. If that store carries the AWD, tab A could render tab B's code — the
+  same trip at a different discount, which `verify-trip` is structurally blind
+  to because it only compares locations. A dump of the store showed location
+  data and no code, but it was truncated, so this is unresolved rather than
+  ruled out. Capping Avis to one lane is the conservative answer if it turns out
+  to be real.
+
+  **The gate could be made ours rather than merely narrow.** `awd_number` is
+  produced by Avis's own search flow too, so the reset can still fire on a
+  user's hand-run search. A URL fragment never reaches the server and only we
+  would emit one, which would close it — but whether Avis's router tolerates a
+  fragment is untested, and guessing at it is how the previous version of that
+  comment came to claim something false. The other answer is
+  `chrome.scripting.registerContentScripts` for the length of a run, which needs
+  the `scripting` permission.
+
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison

@@ -160,6 +160,16 @@ export type QuoteFailure =
   | 'form-fill'
   /** The form was filled, but submitting it never produced a results page. */
   | 'form-submit'
+  /**
+   * The page priced a different trip from the one asked for.
+   *
+   * Not a missing price — a real one, for the wrong rental. Avis lets its
+   * persisted booking widget outrank the query string, so a stale location
+   * could render "Tampa Intl Airport (TPA) - Philadelphia Intl Airport (PHL)"
+   * for a URL asking TPA to TPA. Only the page can see this, which is why the
+   * probe may claim it.
+   */
+  | 'wrong-trip'
   /** The user closed the tab mid-probe. */
   | 'tab-closed'
   /** MV3 suspended the worker mid-race. */
