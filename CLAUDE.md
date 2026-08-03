@@ -70,7 +70,8 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location left in the browser session won. The probe tabs share the user's
   profile, so that is reachable in normal use. `popup.ts` also validates the
   IATA shape before any tab opens — failing per-vendor would leave the race to
-  be decided only by the three builders that cannot reach a search at all.
+  be decided only by Sixt, whose builder takes the location as free text and
+  has never been verified either way.
 
   The popup's single caveat now renders even when nothing is unverified. It was
   `if (unverified > 0)`, so the moment these two became verified a run of only
