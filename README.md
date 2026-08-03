@@ -39,11 +39,24 @@ code and the whole itinerary and the sites ignore all of it — Enterprise's
 results page is a bare `#car_select`, Budget's a bare `#/vehicles`. No query
 string can express a search for them; they need the form filled in the page.
 
-Those three now **refuse to build a link at all**, and fail as `link-build`
-against each code. Returning a URL was the worse option: the landing page shows
-a marketing "from $19/day", the probe reads it as a real price, and nothing
-downstream can tell — ranking never looks at `confidence`, so it would be
-compared head-to-head with the verified vendors and win on being cheapest.
+Those three are **hidden from the popup entirely** — no vendor chip, no
+candidates, no host permission — the same treatment Starwood has always had.
+Their builders also refuse to produce a URL, but that is a backstop; in an
+ordinary run nothing reaches them.
+
+Returning a URL was the worse option: the landing page shows a marketing
+"from $19/day", the probe reads it as a real price, and nothing downstream can
+tell — ranking never looks at `confidence`, so it would be compared
+head-to-head with the verified vendors and win on being cheapest. Leaving them
+merely _selectable_ was nearly as bad: they took half the default cap of twelve
+codes while the plan line promised twelve that would run.
+
+The cost is real and worth stating: **27 codes and six companies disappear from
+the popup** (`Government of Canada`, `Imaginus`, `Michigan State University`,
+`Purdue / Big TEN`, `UNION Bank/MUFG`, `University of Maryland` have no code at
+any reachable vendor), and six more lose their car listing but survive under
+hotels. The codes remain in the database for whenever a form driver reaches
+those sites.
 
 Because both verified builders address a branch by IATA code, **pick-up must be
 an airport code** (`TPA`), and **one-way rentals are refused** — leave drop-off

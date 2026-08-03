@@ -285,10 +285,15 @@ const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
  * so the quote comes back `ok` and simply wins. The site root is the one
  * unambiguous tell — it is never a results page — so that is all this claims.
  *
- * Blind for avis and budget by construction: their builders already target
- * /en/home, so a link that fails to apply the code lands exactly where it was
- * asked to. Detecting those needs a per-vendor "this is what a results page
- * looks like" signal, which is a different change.
+ * No longer blind for avis, whose builder targets
+ * /en/reservation/vehicle-availability, so a landing on the root is the same
+ * unambiguous tell it is everywhere else. Budget, enterprise and national are
+ * out of scope entirely — they build no URL and produce no candidate.
+ *
+ * Still blind to a link that reaches a real page which is not the search we
+ * asked for: sixt's builder is unverified, and detecting that needs a
+ * per-vendor "this is what a results page looks like" signal, which is a
+ * different change.
  */
 function landedElsewhere(quote: Quote | undefined, report: ProbeReport | undefined): boolean {
   // A content script runs in a page we do not control, so treat its message as

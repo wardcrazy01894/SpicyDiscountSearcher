@@ -232,25 +232,22 @@ code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
 The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
-either — see below. They exist for the vendors whose URL cannot express a
-search. On this branch that is four, not three: Budget **and Avis** deep-link to
-`/en/home`, which is a home page whatever the query string says, and Enterprise
-and National target a reservation path a hand-run search never produces. Every
-one of them still gets the code and the whole itinerary in `location.search`;
-the sites act on none of it, so something has to re-deliver the trip where the
-page will honour it.
+either — see below. They exist for Budget, Enterprise and National, whose sites
+ignore the query string entirely: Enterprise's results page is a bare
+`#car_select`, Budget's a bare `#/vehicles`. All three now refuse to build a URL
+and are `searchable: false`, so nothing routes a run to them at all; the codes
+stay in the database waiting for something that can drive a form.
 
 Driving the form is the likely answer rather than a settled one; Enterprise's is
 a multi-step wizard whose real inputs are `display:none` behind custom controls,
 with no discount-code field on the first step, so a single fill-and-submit
 function is the wrong shape.
 
-Both that paragraph and the matching comment in `messages.ts` describe
-`deeplinks.ts` **as it is on this branch**, and the verified-deep-links work
-changes it underneath them — Avis gains a real search URL and three builders
-stop producing a URL at all. Whichever of the two lands second owns
-reconciling this, and the same applies to `landedElsewhere`'s "blind for avis
-and budget by construction" comment.
+(This paragraph and the matching comment in `messages.ts` were written when the
+plumbing landed first and described four vendors deep-linking to `/en/home`,
+including Avis. The reconciliation that text asked for is this edit: Avis has a
+real search URL now, the other three have none, and `landedElsewhere`'s
+docstring has been corrected too.)
 
 `form-fill` is deliberately distinct from `extract-threw`: it fails at the
 opposite end, before the page was ever asked for a price, so "no price appeared"
@@ -289,7 +286,7 @@ not be told apart from a consent interstitial or a country picker.
 
 It cannot always read it. The manifest holds no `tabs` permission — PR #5
 dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
-current URL is not one of the nine vendor hosts. Not a gap to paper over with a
+current URL is not one of the six vendor hosts still in the manifest. Not a gap to paper over with a
 permission, but not a diagnosis either: all it establishes is that the tab's
 address is unreadable, which is equally true of a redirect off the vendor's
 site and of a load that never committed (`about:blank`, or `chrome-error://`
@@ -352,8 +349,8 @@ close). Never pass it a URL or a code.
   six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
   `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and
   `University of Maryland` have no code at any reachable vendor, so they vanish
-  from the company list rather than appearing greyed out. Twelve more drop out
-  of the car list and survive under hotels. There is precedent — twelve
+  from the company list rather than appearing greyed out. Six more drop out of
+  the car list and survive under hotels. There is precedent — twelve
   starwood-only companies have been invisible for as long as that flag has
   existed — and the alternative is listing codes that cannot be raced, but it
   is a real loss and the only explanation lives in the README.

@@ -341,11 +341,14 @@ function validate(trip: Trip): string | null {
     if (!trip.pickupLocation) return 'Enter a pick-up location.';
     // Checked here as well as in the builders, because failing per-vendor is
     // not a safe default. "Chicago Downtown" makes Avis and Hertz throw
-    // `link-build` and leaves the race to be decided *only* by Budget,
-    // Enterprise and National — the three whose links are known not to reach a
-    // search at all, and whose home pages answer with a "from $19/day" that
-    // wins. Rejecting before any tab opens is the difference between no answer
-    // and a confidently wrong one.
+    // `link-build`, and the race is then decided *only* by Sixt — whose builder
+    // passes the location through as free text, has never been verified either
+    // way, and would win uncontested. Rejecting before any tab opens is the
+    // difference between no answer and a confidently wrong one.
+    //
+    // (The reason used to name Budget, Enterprise and National. They are
+    // `searchable: false` now and produce no candidate at all, so the survivor
+    // is Sixt.)
     if (!AIRPORT_CODE_RE.test(trip.pickupLocation.trim())) {
       return 'Pick-up must be a 3-letter airport code, e.g. TPA.';
     }

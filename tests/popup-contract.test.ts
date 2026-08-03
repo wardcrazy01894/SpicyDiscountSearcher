@@ -256,6 +256,85 @@ describe('the popup half of the double-run guard', () => {
     expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(1);
   });
 
+  /** Push a finished run into the popup and return the caveat line's text. */
+  async function caveatFor(quotes: unknown[]): Promise<string> {
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    expect(broadcastListeners.length).toBeGreaterThan(0);
+    for (const listen of broadcastListeners) {
+      listen({
+        type: 'RUN_STATE',
+        state: {
+          startedAt: 1,
+          finishedAt: 2,
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes,
+        },
+      });
+    }
+    const notes = [...document.querySelectorAll('#quotes .hint')].map((el) => el.textContent ?? '');
+    return notes.join(' | ');
+  }
+
+  const quote = (over: Record<string, unknown>): Record<string, unknown> => ({
+    id: 'hertz:H1',
+    candidate: {
+      companySlug: 'acme',
+      companyName: 'Acme',
+      vendor: 'hertz',
+      code: 'H1',
+      note: null,
+    },
+    url: 'https://www.hertz.com/us/en/book/vehicles',
+    confidence: 'verified',
+    status: 'ok',
+    offers: [{ label: 'Compact', amount: 200, currency: 'USD', basis: 'total' }],
+    best: { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' },
+    startedAt: 1,
+    finishedAt: 2,
+    ...over,
+  });
+
+  it('always says something about the links, even when all are verified', async () => {
+    // The whole block was deletable with the suite green, including the branch
+    // this PR added: it used to be `if (unverified > 0)`, so a run of only
+    // verified vendors printed no caveat at all — and silence reads as a much
+    // stronger promise than "checked on one US airport round trip".
+    const text = await caveatFor([quote({}), quote({ id: 'avis:A1', confidence: 'verified' })]);
+    expect(text).toMatch(/US airport round-trips only/i);
+  });
+
+  it('does not count a link it never built as an unverified link', async () => {
+    // link-build quotes are stamped `best-effort` by the worker's catch path,
+    // so counting them announced "N of these search links are unverified"
+    // about links that were never built, let alone followed.
+    const text = await caveatFor([
+      quote({}),
+      quote({ id: 'sixt:S1', confidence: 'best-effort', status: 'error', failure: 'link-build' }),
+    ]);
+    expect(text).not.toMatch(/1 of these search links/i);
+    expect(text).toMatch(/US airport round-trips only/i);
+  });
+
+  it('says plainly when nothing could be turned into a search', async () => {
+    const text = await caveatFor([
+      quote({ confidence: 'best-effort', status: 'error', failure: 'link-build' }),
+    ]);
+    expect(text).toMatch(/could be turned into a search/i);
+  });
+
   it('sends one START_RUN for a double-click, not two', async () => {
     // `ui.running` only becomes true once the background answers, so between
     // the click and the reply `runBtn.disabled` was false — and the next

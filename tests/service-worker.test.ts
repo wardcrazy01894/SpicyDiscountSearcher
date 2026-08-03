@@ -844,7 +844,7 @@ describe('a timed-out tab the extension cannot see', () => {
   it('says so, rather than claiming the tab never navigated', async () => {
     // The manifest grants no `tabs` permission — PR #5 dropped it — so
     // chrome omits url and title for a tab whose current URL is not one of
-    // our nine vendor hosts. An off-origin redirect is therefore invisible,
+    // our six vendor hosts. An off-origin redirect is therefore invisible,
     // and it is *also* exactly when the content script stops running, i.e. a
     // leading cause of probe-timeout. Reporting "never navigated" there was a
     // confident wrong answer in the case this whole feature exists for.

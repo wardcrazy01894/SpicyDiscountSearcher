@@ -258,12 +258,13 @@ describe('interleaveByVendor', () => {
     // this guards — and goes red merely because a lane runs short.
     const withCodes = new Set(all.map((c) => c.vendor));
     expect(perVendor.size).toBe(withCodes.size);
-    // Half the cap, not `ceil(12 / vendors)`. The bug being guarded is one
-    // vendor taking the lot; an exact share goes red merely because a lane runs
-    // short, which it does — Sixt has three codes, so the other two absorb the
-    // remainder and one of them legitimately reaches five of twelve. Six would
-    // still be decisive against the twelve-Avis-codes original.
-    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(6);
+    // Five, which is the true worst case: Sixt has three codes, so the other
+    // two vendors absorb the remaining nine and one of them legitimately
+    // reaches five of twelve. An exact share (`ceil(12 / vendors)` = 4) goes
+    // red merely because a lane runs short; half the cap would permit {6,3,3},
+    // which is closer to the twelve-Avis-codes bug this guards than to a fair
+    // spread.
+    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(5);
   });
 
   it('spreads the default cap across companies, not just vendors', () => {
