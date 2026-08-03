@@ -121,8 +121,9 @@ Two guards keep the ranking honest:
   pretending it won — and says so too when the codes share no class at all,
   which is the weakest evidence there is.
 - **Links that missed.** A deep link that lands on a vendor's home page still
-  finds a plausible "from $19/day" and would otherwise win. The popup flags a
-  result whose page turned out to be the site root.
+  finds a plausible "from $19/day" and would otherwise win. A result whose page
+  turned out to be the site root is flagged **and excluded from the ranking** —
+  it is listed, but it cannot be the cheapest and cannot set the saving.
 
 ## The code database
 

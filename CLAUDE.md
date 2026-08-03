@@ -119,7 +119,15 @@ The two things that would silently produce a wrong answer, and their guards:
 - **A link that missed its search.** A vendor home page still shows
   "from $19/day", so the quote comes back `ok` and, being cheapest, wins. The
   probe reports its landed path; a quote that landed on the site root is flagged
-  in the popup. No longer blind for Avis, whose builder now targets
+  `suspect` and — this is the half that was missing — **kept out of the ranking
+  entirely**. Flagging alone was not enough: `pricedOnly` filtered on status and
+  price only, so the home-page number still entered the primary bucket, still
+  won `cheapestComparable`, and `savings` still announced it as the saving. The
+  popup badged the row and ranked it first, which reads as an answer with a
+  caveat rather than as no answer. Sixt makes that reachable today — its builder
+  302s to the site root, where a marketing "$35" sits. Suspect quotes are listed
+  by `unrankedQuotes` instead, the same treatment a mismatched currency gets, so
+  the code does not silently vanish. No longer blind for Avis, whose builder now targets
   `/en/reservation/vehicle-availability`, so landing on the root is once again
   the unambiguous tell it is everywhere else — and no longer relevant to Budget,
   which builds no link at all.

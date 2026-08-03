@@ -226,6 +226,22 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#plan-summary')?.textContent).toMatch(/airport code/i);
   });
 
+  it('refuses a time that is not hh:mm', async () => {
+    // Unreachable through the form today — the inputs carry no `step`, so
+    // Chrome emits hh:mm — but adding one makes Chrome emit hh:mm:ss, which
+    // both verified builders reject. Without this the failure is two
+    // `link-build`s and a race decided by a vendor that reaches no search.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const time = document.querySelector<HTMLInputElement>('[name="pickupTime"]');
+    if (time) time.value = '10:00:00';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/hh:mm/i);
+  });
+
   it('refuses a drop-off that differs from the pick-up', async () => {
     // One-way is refused in the builders because Avis's return-location
     // parameter proved unreliable; catching it here means the user is told,
@@ -305,6 +321,61 @@ describe('the popup half of the double-run guard', () => {
     startedAt: 1,
     finishedAt: 2,
     ...over,
+  });
+
+  it('explains a home-page landing as such, not as a currency mismatch', async () => {
+    // The sentence for unranked quotes can only talk about basis and currency,
+    // and a quote that landed on the vendor's home page is normally in the same
+    // basis and currency as the winner. Sharing one sentence printed "quoted
+    // daily rates in USD" as the reason a code was set aside from a bucket that
+    // *is* daily rates in USD — a diagnosis known to be the wrong one, which
+    // the row-level warning already contradicts.
+    const winner = quote({
+      id: 'hertz:H1',
+      best: { label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' }],
+    });
+    const runnerUp = quote({
+      id: 'avis:A1',
+      best: { label: 'Economy', amount: 100, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 100, currency: 'USD', basis: 'per-day' }],
+    });
+    const homePage = quote({
+      id: 'sixt:S1',
+      suspect: 'landed-elsewhere',
+      best: { label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' }],
+    });
+    await caveatFor([winner, runnerUp, homePage]);
+
+    const box = document.querySelector('#savings')?.textContent ?? '';
+    expect(box).toMatch(/home page/i);
+    expect(box).not.toMatch(/1 other code quoted daily rates/i);
+  });
+
+  it('still shows the summary when a suspect quote is the only thing to explain', async () => {
+    // `savingsBox.hidden` had to learn about the second reason too, and nothing
+    // pinned that half: the sibling test above has a spread, so `!spread`
+    // short-circuits before the counts are consulted. One real quote and one
+    // suspect quote share no bucket pair, so there is no spread — and hiding
+    // the box would take the only sentence explaining why nothing was ranked
+    // with it, leaving a $35 row and no summary at all.
+    const winner = quote({
+      id: 'hertz:H1',
+      best: { label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' }],
+    });
+    const homePage = quote({
+      id: 'sixt:S1',
+      suspect: 'landed-elsewhere',
+      best: { label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' }],
+    });
+    await caveatFor([winner, homePage]);
+
+    const box = document.querySelector<HTMLElement>('#savings');
+    expect(box?.hidden).toBe(false);
+    expect(box?.textContent ?? '').toMatch(/home page/i);
   });
 
   it('always says something about the links, even when all are verified', async () => {

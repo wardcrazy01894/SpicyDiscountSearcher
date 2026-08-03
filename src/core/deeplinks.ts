@@ -9,9 +9,13 @@ import type { CarTrip, HotelTrip, Trip, VendorId } from './types.js';
  * `buildDeepLink` call, and why each carries a `confidence` flag the popup
  * surfaces to the user.
  *
- * To fix one: open the vendor site, run a search with the code applied by hand,
- * copy the resulting URL, and update the builder below. `tests/deeplinks.test.ts`
- * pins the shape of each URL so a change is deliberate rather than accidental.
+ * To fix one, follow README's "Fixing a deep link" — and note that copying the
+ * URL is only half of it. The step that matters is **replaying** it: change one
+ * parameter and confirm the page follows. A URL that merely loads proves
+ * nothing, because the search may be coming from the session rather than the
+ * address bar, which is exactly how Enterprise looked plausible while carrying
+ * no search at all. `tests/deeplinks.test.ts` pins the shape of each URL so a
+ * change is deliberate rather than accidental.
  */
 
 export type LinkConfidence = 'verified' | 'best-effort';
@@ -342,12 +346,28 @@ const BUILDERS: Record<VendorId, Builder> = {
   national: unsearchable('national'),
 
   /**
-   * Not verified, and not strict about its location: `pickupStation` takes the
-   * free text the popup collected. It is nonetheless subject to the airport-code
-   * rule, because `validate()` in the popup applies that to the whole car form
-   * rather than per vendor — so a Sixt-only run can no longer be given "Munich
-   * Airport". Three codes, best-effort, and the alternative is a per-vendor
-   * rule in the popup that would have to know which builders are strict.
+   * Reaches no search, measured: `/php/reservation` 302s to
+   * `https://www.sixt.com/` with the location field empty, the dates ignored,
+   * and a marketing "$35" on the page. So this is not merely unverified in the
+   * way the hotel builders are — it is known not to work, and the only reason
+   * it is not `unsearchable` alongside Budget, Enterprise and National is that nothing
+   * proves it *cannot* work. Its search may well be URL-expressible at some
+   * other path; nobody has captured one. Do that before trusting it.
+   *
+   * Until then the damage is contained rather than absent: the landing page is
+   * the site root, so `landedElsewhere` flags the quote `suspect`, and
+   * `compare.ts` keeps suspect quotes out of the ranking entirely. That matters
+   * because $35 is cheaper than any genuine rate and used to win.
+   *
+   * That containment is a measurement, not a property. `landedElsewhere` fires
+   * only on a landed path of `/`, so if this 302 ever targets `/en/` — a locale
+   * split, a market router, an A/B — the quote is no longer `suspect`, the $35
+   * re-enters the primary bucket and wins again, with nothing red and nothing on
+   * screen. It holds *while* the redirect target is the bare root.
+   *
+   * The airport-code rule `validate()` applies to the whole car form therefore
+   * costs nothing here: `pickupStation` takes free text, but no value of it
+   * reaches a search. Revisit that if this builder is ever fixed.
    */
   sixt: (code, trip) => {
     const t = carTrip(trip);
