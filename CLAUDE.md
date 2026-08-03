@@ -104,9 +104,26 @@ encode other people's websites. They will break. Both are deliberately isolated:
 
   Both are opt-in per vendor, like the selectors: the storage key and the trip
   summary are one vendor's implementation details, and a false "wrong trip"
-  throws away a good quote. **Not yet confirmed end to end in a loaded
-  extension** — the mechanism is measured (clearing the store fixes the page),
-  the `document_start` ordering is not.
+  throws away a good quote. The trip check needs an asked-for code rendered
+  before it will blame an unexpected one — `(USD)` and `(EST)` are parenthesised
+  triplets too, and without that anchor a currency selector above the summary
+  would fail every Avis quote in every run. The cost is that a page replacing
+  _both_ ends of the trip is invisible to it.
+
+  The clear is gated on the URL being one of ours — the availability path,
+  carrying an `awd_number`. Ungated it fires on every avis.com load including
+  the user's own browsing, and the damage is not hypothetical: they fill the
+  widget by hand, hit Search, and the results navigation erases their drop-off
+  before hydration, causing this exact bug on a search nobody asked us about. A
+  content script cannot ask whether a run is in flight — messaging is async and
+  the page hydrates first — so the gate is what the URL itself can prove. Not
+  airtight; registering the script only for the length of a run needs the
+  `scripting` permission and belongs with the change that adds it.
+
+  **Not yet confirmed end to end in a loaded extension.** The mechanism is
+  measured (clearing the store fixes the page) and `document_start` is
+  documented to run before any other script, but the two have not been observed
+  working together in a real run.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope

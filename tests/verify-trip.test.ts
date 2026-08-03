@@ -13,15 +13,40 @@ const ROUND_TRIP: CarTrip = {
   dropoffTime: '12:00',
 };
 
-/** The exact strings observed on Avis, so the fixtures are not invented. */
-const CONTAMINATED =
-  'EN Sign in or Join Tampa Intl Airport (TPA) - Philadelphia Intl Airport (PHL) Oct 16 | 12:00 PM';
+/**
+ * The literal first 400 characters of `document.body.innerText` on Avis's
+ * availability page, captured from the live site — newlines and all.
+ *
+ * Pasted rather than summarised because `SUMMARY_CHARS` is the load-bearing
+ * constant here and a hand-trimmed fixture cannot test it: an earlier version
+ * of this file used a tidied one-line string, which proved nothing about where
+ * the summary actually falls. On the real page it starts at offset 39, well
+ * inside the window — and the header carries `(24)`, a parenthesised triplet
+ * that is digits rather than letters, which is the kind of thing only a real
+ * capture surfaces.
+ */
 const CLEARED =
-  'EN Sign in or Join Tampa Intl Airport (TPA) - Select drop-off location Oct 16 | 12:00 PM';
+  'EN\nSign in or Join\n\nTampa Intl Airport (TPA) - Select drop-off location\n\n' +
+  'Oct 16 | 12:00 PM - Oct 18 | 12:00 PM\n\nMake a Reservation\n2\nPick your vehicle\n3\n' +
+  'Review & Checkout\nAVAILABLE VEHICLES\n \n(24)\nVehicle Type\n\u200b\nSeats\nTransmission\n' +
+  '\u200b\nPrice\nRecommended\n\u200b\nYour savings are reflected below.\nMEMBERS SAVE UP TO 35%\n' +
+  'Sign In for the best price or create a FREE account at checkout.\n\nSTART YOUR TRIP SOONER\n\n';
+
+/**
+ * The same page in the state that started all this, which differs from the
+ * capture above by exactly the drop-off phrase — that substitution is what the
+ * stale `booking-widget.store` produced.
+ */
+const CONTAMINATED = CLEARED.replace('Select drop-off location', 'Philadelphia Intl Airport (PHL)');
 
 describe('renderedCodes', () => {
   it('reads parenthesised airport codes out of the summary', () => {
     expect(renderedCodes(CONTAMINATED)).toEqual(['TPA', 'PHL']);
+  });
+
+  it('ignores a parenthesised number, which the real page carries', () => {
+    // "(24)" is the vehicle count and sits in the same header.
+    expect(renderedCodes(CLEARED)).toEqual(['TPA']);
   });
 
   it('ignores bare three-letter words', () => {
@@ -61,10 +86,31 @@ describe('checkTrip', () => {
     ).toBeNull();
   });
 
-  it('keeps what it saw even when it passes', () => {
-    // The codes ride on the report either way, so a quote that looked fine can
-    // still be argued with afterwards.
+  it('reports what it saw alongside the verdict', () => {
     expect(checkTrip(ROUND_TRIP, CLEARED).rendered).toEqual(['TPA']);
+  });
+
+  it('needs an asked-for code present before blaming an unexpected one', () => {
+    // `(USD)`, `(EST)`, `(GPS)` are all parenthesised uppercase triplets a
+    // booking page can carry. Without the anchor requirement a currency
+    // selector above the summary would fail every Avis quote in every run,
+    // while the popup announced "the page priced a different trip" about a
+    // perfectly correct page. Whole-vendor false positive vs. the narrow hole
+    // below, and this is the better trade.
+    expect(checkTrip(ROUND_TRIP, 'Prices shown in (USD) — (EST) times').unexpected).toBeNull();
+    // The anchor is what makes the real failure reportable: TPA was present
+    // alongside the stale PHL.
+    expect(checkTrip(ROUND_TRIP, CONTAMINATED).unexpected).toBe('PHL');
+  });
+
+  it('is blind when the page replaced both ends, and that is known', () => {
+    // No asked-for code survives, so nothing anchors the comparison. Recorded
+    // rather than discovered later; the reset script is what makes it unlikely.
+    const bothWrong = CLEARED.replace(
+      'Tampa Intl Airport (TPA)',
+      'Miami Intl Airport (MIA)',
+    ).replace('Select drop-off location', 'Orlando Intl Airport (MCO)');
+    expect(checkTrip(ROUND_TRIP, bothWrong).unexpected).toBeNull();
   });
 
   it('says nothing about hotels', () => {

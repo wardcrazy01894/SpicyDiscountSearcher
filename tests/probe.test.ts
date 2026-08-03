@@ -110,6 +110,75 @@ afterEach(() => {
   delete (globalThis as { chrome?: unknown }).chrome;
 });
 
+describe('checking the trip the page priced', () => {
+  // The detection half of the Avis fix. It shipped with no test at all: setting
+  // VERIFY_TRIP to an empty set — turning `wrong-trip` off entirely in
+  // production — left the whole suite green, because every other probe test
+  // uses `vendor: 'hertz'`, for which the check is opt-out by design.
+  //
+  // jsdom implements `textContent` but not `innerText`, which is why the probe
+  // reads one and falls back to the other; without that seam this file could
+  // not exercise the path at all.
+
+  const AVIS_TRIP: CarTrip = {
+    category: 'car',
+    pickupLocation: 'TPA',
+    dropoffLocation: '',
+    pickupDate: '2026-10-16',
+    pickupTime: '12:00',
+    dropoffDate: '2026-10-18',
+    dropoffTime: '12:00',
+  };
+
+  const avisAssignment = (): StartAssignment => ({
+    type: 'PROBE_START',
+    vendor: 'avis',
+    quoteId: 'avis:A1',
+    timeoutMs: TIMEOUT_MS,
+    trip: AVIS_TRIP,
+    code: 'A1',
+  });
+
+  const summary = (dropOff: string) =>
+    `<p>Tampa Intl Airport (TPA) - ${dropOff}</p>${CARD('$29.99')}`;
+
+  it('fails the quote when the page priced a different trip', async () => {
+    // The measured failure: a stale booking widget rendered Philadelphia as the
+    // return for a link asking TPA to TPA. Real page, real price, wrong rental.
+    assignment = avisAssignment();
+    document.body.innerHTML = summary('Philadelphia Intl Airport (PHL)');
+    await run(POLL * 2);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe('PROBE_FAILED');
+    expect(sent[0]?.failure).toBe('wrong-trip');
+    // The codes it saw, so the verdict can be argued with.
+    expect(sent[0]?.message).toContain('PHL');
+  });
+
+  it('reports normally when the drop-off is simply unstated', async () => {
+    // What the page shows once the stale store is cleared. Fewer codes than
+    // asked for is the correct round trip, not a mismatch.
+    assignment = avisAssignment();
+    document.body.innerHTML = summary('Select drop-off location');
+    await run(POLL * 2);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+  });
+
+  it('leaves vendors that have not opted in alone', async () => {
+    // The check reads a summary the vendor happens to render, which rots. A
+    // Hertz page showing another airport must not start failing because Avis
+    // needed a guard.
+    assignment = { ...avisAssignment(), vendor: 'hertz', quoteId: 'hertz:H1' };
+    document.body.innerHTML = summary('Philadelphia Intl Airport (PHL)');
+    await run(POLL * 2);
+
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+  });
+});
+
 describe('staying inert', () => {
   it('says nothing when the background is not running a race', async () => {
     assignment = { type: 'PROBE_IDLE' };

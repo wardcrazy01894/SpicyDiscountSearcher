@@ -40,7 +40,8 @@ export function renderedCodes(text: string): string[] {
 }
 
 export interface TripCheck {
-  /** Codes the page showed, for the report — kept even when the check passes. */
+  /** Codes the page showed. Only surfaced today when the check fails, in the
+   *  failure message — nothing records them on the passing path. */
   rendered: string[];
   /** A code the page showed that the trip never mentioned, if any. */
   unexpected: string | null;
@@ -53,16 +54,35 @@ export interface TripCheck {
  * means. A page showing *fewer* codes than expected is not a failure — Avis
  * with a cleared store renders "Tampa Intl Airport (TPA) - Select drop-off
  * location", which is the correct round trip with the drop-off simply unstated.
- * Only a code we never asked for is evidence of the wrong trip.
+ *
+ * An unexpected code is only reported when one of the asked-for codes is
+ * rendered *too*, and that precondition is the difference between a guard and a
+ * liability. `(USD)`, `(EST)`, `(GPS)` are all parenthesised uppercase triplets
+ * a booking page might carry, and without it a currency selector appearing
+ * above the summary would fail every Avis quote in every run while the popup
+ * announced "the page priced a different trip" about a correct page. The
+ * observed failure had `TPA` present alongside the stale `PHL`, so requiring
+ * the anchor costs nothing there.
+ *
+ * What it gives up, stated rather than discovered later: a page that replaced
+ * *both* ends of the trip is invisible to this. That is a narrower hole than a
+ * whole-vendor false positive, and the reset script is what makes it unlikely.
+ *
+ * Silent when it finds nothing at all, too — if the summary moves past
+ * `SUMMARY_CHARS`, or drops its parentheses, `rendered` is empty, no anchor is
+ * present, and the quote passes unchecked. A detector that stops working looks
+ * exactly like one with nothing to report.
  */
 export function checkTrip(trip: Trip, pageText: string): TripCheck {
+  if (trip.category !== 'car') return { rendered: [], unexpected: null };
   const rendered = renderedCodes(pageText);
-  if (trip.category !== 'car') return { rendered, unexpected: null };
 
   const asked = new Set(
     [trip.pickupLocation, trip.dropoffLocation || trip.pickupLocation]
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean),
   );
+  const anchored = rendered.some((code) => asked.has(code));
+  if (!anchored) return { rendered, unexpected: null };
   return { rendered, unexpected: rendered.find((code) => !asked.has(code)) ?? null };
 }

@@ -13,39 +13,80 @@
  * probe cannot tell, `landedElsewhere` only fires on the site root, and the
  * quote ranks like any other.
  *
- * Measured: clearing the store and re-opening the same URL changed the header
- * to "Tampa Intl Airport (TPA) - Select drop-off location" and left the prices
+ * Measured: clearing that key and re-opening the same URL changed the header to
+ * "Tampa Intl Airport (TPA) - Select drop-off location" and left the prices
  * rendering. The site then re-populates the store from the URL rather than from
  * the stale copy.
  *
- * Runs at `document_start` — the whole point. The probe runs at `document_idle`,
- * which is long after the page has hydrated its store, so this cannot live
- * there. It is a separate, deliberately tiny script for that reason.
- *
- * Side effect worth knowing: this also clears the "recent searches" convenience
- * on the vendor's own site for the user's normal browsing. That is a cache, not
- * account data, and the alternative is quoting prices for a trip nobody asked
- * for.
+ * Runs at `document_start` — the whole point. Chrome injects there before the
+ * document element has children, so an inline `<head>` script hydrating the
+ * store runs after us. The probe runs at `document_idle`, long after the page
+ * has already made that decision, which is why this is a separate script rather
+ * than a few lines in that one.
  */
 
-/** Per-host, because these keys are one vendor's implementation detail. */
-const STALE_KEYS: Record<string, readonly string[]> = {
-  'www.avis.com': ['booking-widget.store', 'recent-search-options', 'recent-location-options'],
-};
+/**
+ * Only `booking-widget.store`, and only that.
+ *
+ * An earlier version also cleared `recent-search-options` and
+ * `recent-location-options`. Neither was ever measured as necessary — they were
+ * added defensively — and they are the user's own data on a site they use. The
+ * measurement was of this key alone, so this is what gets cleared.
+ */
+const STALE_KEY = 'booking-widget.store';
 
-function clearStaleState(): void {
-  const keys = STALE_KEYS[location.host];
-  if (!keys) return;
-  for (const key of keys) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // Storage can be unavailable (partitioned, disabled, quota-evicted). A
-      // failure here costs accuracy on this one quote, and the trip check in
-      // the probe is what turns that into a visible failure rather than a
-      // wrong price — so there is nothing to report and nothing to retry.
-    }
+/**
+ * Only on the page we drove the browser to, and only when it carries our own
+ * search.
+ *
+ * Without this gate the script fires on *every* avis.com page load, including
+ * the user's ordinary browsing when no run is active. The damage that does is
+ * not hypothetical: they fill the widget by hand, hit Search, and the results
+ * navigation triggers a clear that erases their drop-off before the page
+ * hydrates — producing exactly the "Select drop-off location" state this file
+ * was written to *cause* on purpose. Corrupting a first-party search nobody
+ * asked us about is worse than the bug being fixed.
+ *
+ * A content script cannot ask the background whether a run is in flight —
+ * messaging is async and the page hydrates first — so the gate is what the URL
+ * itself can prove. `awd_number` is the discount code, which only our own deep
+ * link puts there; the vendor's own search flow does not.
+ *
+ * Not airtight: a user who has ever used an AWD link of their own would match.
+ * The honest fix is registering this script only for the length of a run, which
+ * needs the `scripting` permission and belongs with the change that adds it.
+ */
+const OUR_SEARCH_PATH = '/en/reservation/vehicle-availability';
+
+export function shouldClear(url: URL): boolean {
+  return (
+    url.host === 'www.avis.com' &&
+    url.pathname === OUR_SEARCH_PATH &&
+    url.searchParams.has('awd_number')
+  );
+}
+
+export function clearStaleState(
+  url: URL,
+  storage: Pick<Storage, 'removeItem'> | undefined,
+): boolean {
+  if (!storage || !shouldClear(url)) return false;
+  try {
+    storage.removeItem(STALE_KEY);
+    return true;
+  } catch {
+    // Storage can be unavailable (partitioned, disabled, quota-evicted). A
+    // failure here costs accuracy on this one quote, and `verify-trip` is what
+    // turns that into a visible `wrong-trip` rather than a wrong price — so
+    // there is nothing to report from here and nothing to retry.
+    return false;
   }
 }
 
-clearStaleState();
+// Guarded so the module can be imported without running. A content script has
+// a `location`; a test importing the functions above does not, and an
+// unguarded top-level call made the whole file untestable — which is why its
+// first draft shipped with both halves of the mechanism unpinned.
+if (typeof location !== 'undefined') {
+  clearStaleState(new URL(location.href), globalThis.localStorage);
+}

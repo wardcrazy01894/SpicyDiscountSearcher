@@ -28,7 +28,9 @@ Two are now checked against the live sites and marked `'verified'`:
 - **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`. Needs
   two things the URL cannot supply: its saved booking widget cleared (a
   `document_start` content script does that, because Avis's own `localStorage`
-  outranks the query string), and a one-off bot check passed by hand in your
+  outranks the query string — it runs only on availability links carrying a
+  discount code, so your own Avis searches are left alone), and a one-off bot
+  check passed by hand in your
   browser at the start of a session. The popup has an **"Open Avis to clear its
   bot check"** button for the second — it opens one ordinary tab on a throwaway
   search dated two months out, you answer the check there, and the clearance

@@ -61,9 +61,24 @@ function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
  */
 function wrongTrip(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>): string | null {
   if (!VERIFY_TRIP.has(assignment.vendor)) return null;
-  const { rendered, unexpected } = checkTrip(assignment.trip, document.body.innerText);
-  if (!unexpected) return null;
-  return `page shows ${rendered.join(', ')}, which is not the trip requested`;
+  try {
+    // `innerText` is layout-aware and is what renders the summary as one line;
+    // `textContent` is the fallback because jsdom implements only the latter,
+    // which is what made this check untestable — and therefore untested — when
+    // it was first written.
+    const text = document.body.innerText ?? document.body.textContent ?? '';
+    const { rendered, unexpected } = checkTrip(assignment.trip, text);
+    if (!unexpected) return null;
+    return `page shows ${rendered.join(', ')}, which is not the trip requested`;
+  } catch {
+    // A throw here must not become silence. Without this the rejection escapes
+    // `probe()`, `void main()` swallows it, nothing is ever sent, and the
+    // background reports `probe-timeout` — "no answer before the deadline" —
+    // about a page that had already parsed its prices. That is the confident
+    // wrong diagnosis the retry in `send()` exists to prevent, arriving by a
+    // different door. A check that cannot run is not evidence of a bad trip.
+    return null;
+  }
 }
 
 function fingerprint(offers: Offer[]): string {
