@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { airportCode, avisClock, buildDeepLink, isoParts, usDate } from '../src/core/deeplinks.js';
+import { airportCode, buildDeepLink, clock12, isoParts, usDate } from '../src/core/deeplinks.js';
 import type { CarTrip, HotelTrip } from '../src/core/types.js';
 import { searchableVendors } from '../src/core/vendors.js';
 
@@ -33,21 +33,21 @@ describe('usDate', () => {
   });
 });
 
-describe('avisClock', () => {
+describe('clock12', () => {
   it('maps midnight and noon onto a 12-hour clock', () => {
     // The `% 12 === 0 ? 12 : …` branch was reachable by no test at all, so
     // replacing it with a bare `% 12` kept the suite green while sending a noon
     // pickup as hour 00 PM and midnight as 00 AM.
-    expect(avisClock('00:00')).toEqual({ hour: '12', minute: '00', ampm: 'AM' });
-    expect(avisClock('12:00')).toEqual({ hour: '12', minute: '00', ampm: 'PM' });
-    expect(avisClock('12:59')).toEqual({ hour: '12', minute: '59', ampm: 'PM' });
-    expect(avisClock('23:59')).toEqual({ hour: '11', minute: '59', ampm: 'PM' });
+    expect(clock12('00:00')).toMatchObject({ hour: '12', minute: '00', ampm: 'AM' });
+    expect(clock12('12:00')).toMatchObject({ hour: '12', minute: '00', ampm: 'PM' });
+    expect(clock12('12:59')).toMatchObject({ hour: '12', minute: '59', ampm: 'PM' });
+    expect(clock12('23:59')).toMatchObject({ hour: '11', minute: '59', ampm: 'PM' });
   });
 
   it('zero-pads the hour, which is the form Avis itself uses', () => {
     // Not an assumption: Avis rewrote `pickup_hour=9` to `09` in the address
     // bar and rendered "09:00 AM".
-    expect(avisClock('09:30')).toMatchObject({ hour: '09', ampm: 'AM' });
+    expect(clock12('09:30')).toMatchObject({ hour: '09', ampm: 'AM' });
   });
 
   it('rejects a time that is not exactly hh:mm', () => {
@@ -55,7 +55,7 @@ describe('avisClock', () => {
     // (Number('') is 0) and '07:5' as 07:05 — a time nobody asked for, sent
     // without complaint.
     for (const bad of [':30', '07:5', '0x10:00', '24:00', '10:60', '10:00:00', '', 'ten']) {
-      expect(() => avisClock(bad), bad).toThrow(/hh:mm/);
+      expect(() => clock12(bad), bad).toThrow(/hh:mm/);
     }
   });
 });
@@ -169,8 +169,22 @@ describe('buildDeepLink', () => {
   });
 
   it('falls back to the pick-up location when no drop-off is given', () => {
-    const parsed = new URL(buildDeepLink('budget', 'X915990', CAR).url);
-    expect(parsed.searchParams.get('returnLocation')).toBe('TPA');
+    // CAR leaves dropoffLocation empty. Read off hertz rather than budget,
+    // which no longer builds a URL at all.
+    expect(new URL(buildDeepLink('hertz', 'X915990', CAR).url).searchParams.get('did')).toBe('TPA');
+    expect(
+      new URL(buildDeepLink('avis', 'X915990', CAR).url).searchParams.get('return_location_code'),
+    ).toBe('TPA');
+  });
+
+  it('refuses outright for a vendor that ignores the search URL', () => {
+    // Not `best-effort`, which means "may have rotted". These were observed
+    // ignoring the query string entirely, so any URL built for them lands on a
+    // page whose "from $19/day" is read as a real price and, being cheapest,
+    // wins. link-build is visible; that is not.
+    for (const vendor of ['budget', 'enterprise', 'national'] as const) {
+      expect(() => buildDeepLink(vendor, 'X1', CAR), vendor).toThrow(/session state/);
+    }
   });
 
   it('carries hotel corporate codes and dates', () => {
@@ -186,8 +200,14 @@ describe('buildDeepLink', () => {
     expect(() => buildDeepLink('starwood', '5747647', HOTEL)).toThrow(/starwood/i);
   });
 
-  it('builds a valid https URL for every searchable vendor', () => {
-    for (const vendor of searchableVendors()) {
+  it('builds a valid https URL for every vendor that can be searched at all', () => {
+    // The three that ignore the URL are excluded by name rather than by
+    // catching, so adding a fourth is a deliberate edit here rather than a
+    // silently-skipped vendor.
+    const unsearchable = new Set(['budget', 'enterprise', 'national']);
+    const built = searchableVendors().filter((v) => !unsearchable.has(v.id));
+    expect(built.length).toBe(searchableVendors().length - unsearchable.size);
+    for (const vendor of built) {
       const trip = vendor.category === 'car' ? CAR : HOTEL;
       const { url } = buildDeepLink(vendor.id, 'TESTCODE', trip);
       const parsed = new URL(url);

@@ -360,7 +360,7 @@ describe('diagnosing a run afterwards', () => {
     const mixed = { ...plan(3) };
     mixed.candidates = [
       ...plan().candidates,
-      { companySlug: 'initech', companyName: 'Initech', vendor: 'budget', code: 'B1', note: null },
+      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
     ];
     await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
     await settle();

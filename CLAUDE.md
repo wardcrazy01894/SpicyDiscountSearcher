@@ -41,6 +41,17 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
+  **Budget, Enterprise and National throw instead of building.** They were
+  observed ignoring the query string entirely, and returning a URL for them was
+  the worst available option: the landing page answers with a marketing
+  "from $19/day", the probe reads it as a real price, and nothing downstream
+  can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
+  with the verified vendors and wins on being cheapest. `landedElsewhere`
+  cannot catch it either, because `finalPath` is truncated at the first `#` and
+  `reservation.html#car_select` therefore compares equal to the path asked for.
+  `link-build` is visible; that is not. Same trade as the malformed date and
+  the one-way trip.
+
   `'verified'` is a claim about the **URL shape**, not about every itinerary,
   and the difference is load-bearing. Both were proved on a US airport round
   trip; both hard-code a US country/region and a driver age of 25, and neither

@@ -163,6 +163,58 @@ describe('the popup half of the double-run guard', () => {
     });
   }
 
+  it('refuses a location that is not an airport code, before opening any tab', async () => {
+    // Load-bearing, and unpinned until now. Both verified builders take an IATA
+    // code and nothing else, so "Chicago Downtown" makes Avis and Hertz throw
+    // link-build — leaving the race to be decided *only* by the vendors that
+    // cannot reach a search, whose home pages answer with a "from $19/day" that
+    // wins. Rejecting here is the difference between no answer and a
+    // confidently wrong one, so it has to happen before START_RUN is sent.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    const set = (name: string, value: string): void => {
+      const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+    set('pickupLocation', 'Chicago Downtown');
+    set('pickupDate', '2026-09-04');
+    set('dropoffDate', '2026-09-11');
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/airport code/i);
+  });
+
+  it('refuses a drop-off that differs from the pick-up', async () => {
+    // One-way is refused in the builders because Avis's return-location
+    // parameter proved unreliable; catching it here means the user is told,
+    // rather than every car quote failing as link-build.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
+    if (dropoff) dropoff.value = 'MCO';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/one-way/i);
+  });
+
+  it('accepts a lowercase code and a drop-off equal to the pick-up', async () => {
+    // The guard must not be so strict that it rejects the same airport spelled
+    // differently — that would refuse a perfectly ordinary round trip.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    fillCarForm();
+    const pickup = document.querySelector<HTMLInputElement>('[name="pickupLocation"]');
+    const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
+    if (pickup) pickup.value = 'tpa';
+    if (dropoff) dropoff.value = ' TPA ';
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+
+    expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(1);
+  });
+
   it('sends one START_RUN for a double-click, not two', async () => {
     // `ui.running` only becomes true once the background answers, so between
     // the click and the reply `runBtn.disabled` was false — and the next

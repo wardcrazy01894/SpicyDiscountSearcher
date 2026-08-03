@@ -34,7 +34,11 @@
             />
           </label>
           <label class="field">
-            <span>Drop-off location <em>(optional)</em></span>
+            <span>Drop-off location <em>(one-way not supported)</em></span>
+            <!-- Accepts only blank or the same airport. Avis's return-location
+                 parameter proved unreliable, so a one-way trip is refused
+                 rather than priced wrongly; labelled so the field stops
+                 inviting input it will always reject. -->
             <input type="text" name="dropoffLocation" placeholder="Same as pick-up" />
           </label>
           <div class="row">

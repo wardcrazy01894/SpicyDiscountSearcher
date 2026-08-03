@@ -39,6 +39,16 @@ code and the whole itinerary and the sites ignore all of it — Enterprise's
 results page is a bare `#car_select`, Budget's a bare `#/vehicles`. No query
 string can express a search for them; they need the form filled in the page.
 
+Those three now **refuse to build a link at all**, and fail as `link-build`
+against each code. Returning a URL was the worse option: the landing page shows
+a marketing "from $19/day", the probe reads it as a real price, and nothing
+downstream can tell — ranking never looks at `confidence`, so it would be
+compared head-to-head with the verified vendors and win on being cheapest.
+
+Because both verified builders address a branch by IATA code, **pick-up must be
+an airport code** (`TPA`), and **one-way rentals are refused** — leave drop-off
+blank or repeat the pick-up.
+
 If a vendor lands on its homepage instead of a results page, `deeplinks.ts` is
 the one file to fix — see [Fixing a deep link](#fixing-a-deep-link).
 

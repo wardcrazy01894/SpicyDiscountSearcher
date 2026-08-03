@@ -82,7 +82,10 @@ export function isoParts(iso: string): { year: string; month: string; day: strin
 }
 
 /**
- * Avis splits a time into a 12-hour clock across three query parameters.
+ * Split a time onto a 12-hour clock, and validate it.
+ *
+ * Named for what it does rather than for Avis: Hertz uses it purely as the
+ * validator, since its own timestamp is 24-hour.
  *
  * The whole string is matched, not just the hour. Validating the hour alone and
  * passing the minute through untouched accepted `':30'` as 12:30 AM (`Number('')`
@@ -95,7 +98,13 @@ export function isoParts(iso: string): { year: string; month: string; day: strin
  * `pickup_hour=09` in the address bar and rendered "Oct 16 | 09:00 AM", so
  * padded is the canonical form and unpadded is merely tolerated.
  */
-export function avisClock(hhmm: string): { hour: string; minute: string; ampm: string } {
+export function clock12(hhmm: string): {
+  hour: string;
+  minute: string;
+  ampm: string;
+  /** The same time on a 24-hour clock, zero-padded. Hertz wants this form. */
+  hour24: string;
+} {
   const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
   if (!match?.[1] || !match[2]) throw new Error(`expected hh:mm, got: ${hhmm}`);
   const hour24 = Number(match[1]);
@@ -107,6 +116,9 @@ export function avisClock(hhmm: string): { hour: string; minute: string; ampm: s
     hour: String(hour12).padStart(2, '0'),
     minute: match[2],
     ampm: hour24 < 12 ? 'AM' : 'PM',
+    // Returned rather than re-derived by the caller, so the padding that makes
+    // `9:00` into `09:00` cannot be skipped by whoever builds a timestamp.
+    hour24: String(hour24).padStart(2, '0'),
   };
 }
 
@@ -127,9 +139,22 @@ export function avisClock(hhmm: string): { hour: string; minute: string; ampm: s
  * popup, a wrong price is not.
  */
 function sameCityOnly(vendor: string, pickup: string, dropoff: string): void {
-  if (dropoff && dropoff.trim().toUpperCase() !== pickup.trim().toUpperCase()) {
+  if (dropoff.trim() && dropoff.trim().toUpperCase() !== pickup.trim().toUpperCase()) {
     throw new Error(`${vendor} one-way trips are not supported: its return location is unreliable`);
   }
+}
+
+/**
+ * Hertz's `pdate`/`ddate`: a local wall-clock ISO timestamp, zero-padded.
+ *
+ * Both halves come back through their validators rather than from the trip's
+ * raw strings, so a `9:00` that `clock12` accepts cannot still reach the URL as
+ * `T9:00:00`.
+ */
+function hertzStamp(isoDate: string, hhmm: string): string {
+  const { year, month, day } = isoParts(isoDate);
+  const { hour24, minute } = clock12(hhmm);
+  return `${year}-${month}-${day}T${hour24}:${minute}:00`;
 }
 
 function withParams(base: string, params: Record<string, string>): string {
@@ -142,6 +167,22 @@ function withParams(base: string, params: Record<string, string>): string {
 
 type Builder = (code: string, trip: Trip) => DeepLink;
 
+/**
+ * A vendor whose deep link the site ignores outright.
+ *
+ * Distinct from `'best-effort'`, which means "this URL may have rotted". These
+ * are known never to have worked, so producing a URL at all only manufactures a
+ * plausible wrong price.
+ */
+function unsearchable(vendor: string): Builder {
+  return () => {
+    throw new Error(
+      `${vendor} ignores the search URL entirely — its search lives in session state, ` +
+        'so it needs its form driven rather than a deep link',
+    );
+  };
+}
+
 const BUILDERS: Record<VendorId, Builder> = {
   /**
    * Captured from a hand-run search, then proved to replay: changing only the
@@ -152,6 +193,11 @@ const BUILDERS: Record<VendorId, Builder> = {
    *
    * The old builder was wrong in every part: `/rentacar/reservation/` 302s to
    * the home page, and the code parameter is `CDP`, not `cdpid`.
+   *
+   * The CDP is separately evidenced, and needs to be: driving the *search* and
+   * applying the *discount* are two claims, and for a discount-code racer the
+   * second is the load-bearing one. The replayed page carried "Save 10%" on its
+   * cards alongside `ownershipType=CORPORATE`.
    *
    * What `verified` does and does not cover here — the flag is a claim about
    * the URL shape, not about every itinerary:
@@ -167,13 +213,13 @@ const BUILDERS: Record<VendorId, Builder> = {
   hertz: (code, trip) => {
     const t = carTrip(trip);
     sameCityOnly('hertz', t.pickupLocation, t.dropoffLocation);
-    // Validated even though Hertz takes a combined timestamp: this rejects the
-    // malformed date and the `HH:MM:SS` that would otherwise be concatenated
-    // into a string the site reads as a default search.
-    isoParts(t.pickupDate);
-    isoParts(t.dropoffDate);
-    avisClock(t.pickupTime);
-    avisClock(t.dropoffTime);
+    // Built from validated parts, not from the raw strings. Interpolating
+    // `t.pickupTime` directly passed validation and still emitted
+    // `2026-09-04T9:00:00` for a `9:00` input — not valid ISO 8601, and exactly
+    // the malformed timestamp the validation is here to prevent. The guard has
+    // to feed the value it guarded.
+    const pdate = hertzStamp(t.pickupDate, t.pickupTime);
+    const ddate = hertzStamp(t.dropoffDate, t.dropoffTime);
     return {
       confidence: 'verified',
       url: withParams('https://www.hertz.com/us/en/book/vehicles', {
@@ -181,8 +227,8 @@ const BUILDERS: Record<VendorId, Builder> = {
         pid: airportCode(t.pickupLocation),
         did: airportCode(t.dropoffLocation || t.pickupLocation),
         // Local wall-clock, no zone: exactly what the site's own URL carried.
-        pdate: `${t.pickupDate}T${t.pickupTime}:00`,
-        ddate: `${t.dropoffDate}T${t.dropoffTime}:00`,
+        pdate,
+        ddate,
         // Carried verbatim from the captured URL, as with Avis. ownershipType
         // is the one that reads load-bearing — it says the CDP is a corporate
         // rate rather than a promotion — so none of them are trimmed on a hunch.
@@ -227,8 +273,8 @@ const BUILDERS: Record<VendorId, Builder> = {
   avis: (code, trip) => {
     const t = carTrip(trip);
     sameCityOnly('avis', t.pickupLocation, t.dropoffLocation);
-    const pickup = avisClock(t.pickupTime);
-    const dropoff = avisClock(t.dropoffTime);
+    const pickup = clock12(t.pickupTime);
+    const dropoff = clock12(t.dropoffTime);
     const pickDate = isoParts(t.pickupDate);
     const dropDate = isoParts(t.dropoffDate);
     return {
@@ -264,53 +310,32 @@ const BUILDERS: Record<VendorId, Builder> = {
     };
   },
 
-  budget: (code, trip) => {
-    const t = carTrip(trip);
-    return {
-      confidence: 'best-effort',
-      url: withParams('https://www.budget.com/en/home', {
-        BCD: code,
-        pickupLocation: t.pickupLocation,
-        returnLocation: t.dropoffLocation || t.pickupLocation,
-        from: usDate(t.pickupDate),
-        to: usDate(t.dropoffDate),
-        fromTime: t.pickupTime,
-        toTime: t.dropoffTime,
-      }),
-    };
-  },
-
-  enterprise: (code, trip) => {
-    const t = carTrip(trip);
-    return {
-      confidence: 'best-effort',
-      url: withParams('https://www.enterprise.com/en/car-rental/reservation.html', {
-        cust: code,
-        pickupLocation: t.pickupLocation,
-        returnLocation: t.dropoffLocation || t.pickupLocation,
-        pickupDate: t.pickupDate,
-        returnDate: t.dropoffDate,
-        pickupTime: t.pickupTime,
-        returnTime: t.dropoffTime,
-      }),
-    };
-  },
-
-  national: (code, trip) => {
-    const t = carTrip(trip);
-    return {
-      confidence: 'best-effort',
-      url: withParams('https://www.nationalcar.com/en/car-rental/reservation.html', {
-        contractNumber: code,
-        pickupLocation: t.pickupLocation,
-        returnLocation: t.dropoffLocation || t.pickupLocation,
-        pickupDate: t.pickupDate,
-        returnDate: t.dropoffDate,
-        pickupTime: t.pickupTime,
-        returnTime: t.dropoffTime,
-      }),
-    };
-  },
+  /**
+   * Budget, Enterprise and National refuse rather than build.
+   *
+   * All three keep the search in session state, and this is not a suspicion:
+   * a hand-run Enterprise search ends on `/en/reserve.html#car_select` and a
+   * hand-run Budget one on `/en/reservation#/vehicles` — neither carries a
+   * query string, and Enterprise's URL pasted into a fresh incognito window
+   * shows no cars at all. `buildDeepLink` *can* still produce a URL for them,
+   * carrying the code and every trip field; the site acts on none of it.
+   *
+   * Returning that URL is the worst of the options. The landing page answers
+   * with a marketing "from $19/day", the probe reads it as a real price, and
+   * nothing downstream can tell the difference: `compare.ts` never looks at
+   * `confidence`, so the number is ranked head-to-head against Avis and Hertz
+   * and wins on being cheapest. `landedElsewhere` cannot save it either —
+   * `finalPath` is truncated at the first `#`, so `reservation.html#car_select`
+   * compares equal to the path we asked for and is never flagged.
+   *
+   * So they throw, and surface as `link-build` against the code that could not
+   * be searched. That is the same trade this file makes for a malformed date
+   * and a one-way trip: a visible failure beats an invisible wrong price. They
+   * come back when something drives their forms.
+   */
+  budget: unsearchable('budget'),
+  enterprise: unsearchable('enterprise'),
+  national: unsearchable('national'),
 
   sixt: (code, trip) => {
     const t = carTrip(trip);
