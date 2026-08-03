@@ -233,6 +233,17 @@ describe('probe assignment', () => {
       'avis',
       'hertz',
     ]);
+
+    // The code travels per quote, not per run. A driver types whatever arrives
+    // here into the vendor's form, so handing every tab the first candidate's
+    // code would race one code against itself and report it as several — a
+    // result that looks entirely healthy. The trip is the same for every tab by
+    // construction, and is asserted to have arrived at all.
+    const paired = assignments.map((a) => a as { vendor: string; code: string; trip: unknown });
+    expect(paired.find((a) => a.vendor === 'hertz')?.code).toBe('H1');
+    expect(paired.find((a) => a.vendor === 'avis')?.code).toBe('A1');
+    expect(paired.every((a) => a.trip !== undefined)).toBe(true);
+    expect(paired[0]?.trip).toEqual(TRIP);
   });
 
   it('stands a probe down once its deadline has passed', async () => {
@@ -415,6 +426,36 @@ describe('a probe reporting something unexpected', () => {
     await settle(1_000);
 
     expect((await getState())?.quotes.find((q) => q.finishedAt)?.failure).toBeUndefined();
+  });
+
+  it('does not trust `form-fill` from a page while nothing can emit it', async () => {
+    // A different case from the unknown-code test below: `form-fill` is a
+    // *known* QuoteFailure, and the invariant is that it stays off
+    // PROBE_FAILURES until a driver exists to send it. Until then every
+    // instance can only be forged, and the popup would render "could not fill
+    // the search form" for a build with no form-filling code in it.
+    //
+    // Unpinned until now — the set could be extended and the suite stayed
+    // green, which is the shape this repo pins deliberately elsewhere. The
+    // driver PR deletes this test on purpose rather than by accident.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'form-fill',
+      message: 'claiming a driver that does not exist',
+      report: REPORT,
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+    expect(quote?.failure).toBeUndefined();
+    // The page's own message still survives, which is the point of downgrading
+    // rather than dropping.
+    expect(quote?.message).toContain('claiming a driver');
   });
 
   it('does not trust an unknown failure code from the page', async () => {
