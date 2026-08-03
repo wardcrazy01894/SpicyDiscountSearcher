@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe('surviving MV3 suspension', () => {
-  it('keeps poking an extension API through a silent probe', async () => {
+  it('never leaves a 30s gap while a run is in flight', async () => {
     // The bug this pins: a probe messages the background only when prices go
     // stable or the 45s deadline passes, so a page that never prices leaves the
     // worker idle far past Chrome's 30s suspension point. The worker died
@@ -74,15 +74,38 @@ describe('surviving MV3 suspension', () => {
     // `probe-empty` and report that would have said what the page actually did.
     //
     // A test cannot make Chrome suspend a worker it is not running in, so the
-    // observable is the keepalive call itself: while a run is in flight, the
-    // gap between pokes must stay under 30s.
+    // observable is the keepalive call itself. Counting pokes is not enough:
+    // one poke satisfies "greater than zero", and `setTimeout` in place of
+    // `setInterval` — a keepalive that fires once at 20s and never again —
+    // passed a count-based version of this test while reproducing the original
+    // bug exactly. The defining property is the *gap*, so that is what is
+    // asserted, and it also pins KEEPALIVE_MS's margin: 29_500 would pass a
+    // "under 30s" check with nothing left over for a delayed tick.
+    //
+    // Four candidates through one lane keeps the run alive for ~3 minutes, so
+    // the window is long enough for a one-shot to be obvious.
     await bootWorker();
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    const long = { ...plan(1) };
+    long.candidates = Array.from({ length: 4 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    const startedAt = Date.now();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: long });
     await settle();
+    await settle(150_000);
 
-    const atStart = chromeMock.keepAlivePings();
-    await settle(30_000);
-    expect(chromeMock.keepAlivePings()).toBeGreaterThan(atStart);
+    // The run must still be live, or the gaps below would just be measuring
+    // teardown.
+    expect((await getState())?.finishedAt).toBeUndefined();
+
+    const times = [startedAt, ...chromeMock.keepAlivePingTimes()];
+    const gaps = times.slice(1).map((at, index) => at - times[index]!);
+    expect(gaps.length).toBeGreaterThanOrEqual(6);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(25_000);
   });
 
   it('stops poking once the run is over', async () => {

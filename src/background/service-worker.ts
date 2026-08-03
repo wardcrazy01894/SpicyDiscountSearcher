@@ -56,6 +56,17 @@ const STAGGER_MS = 750;
  * in-flight quote are already gone.
  */
 const KEEPALIVE_MS = 20_000;
+/**
+ * How long the keepalive may hold the worker up before giving in.
+ *
+ * Generous against a real run — 60 codes at the 45s probe deadline, one lane,
+ * is 45 minutes, so this will cut short a genuinely enormous race — but the
+ * alternative it guards is unbounded. Exceeding it returns the worker to
+ * Chrome's ordinary suspension rules, which is what shipped before this
+ * keepalive existed, so the worst case is the old behaviour rather than a new
+ * failure.
+ */
+const KEEPALIVE_CEILING_MS = 10 * 60_000;
 
 interface ActiveRun {
   state: RunState;
@@ -649,7 +660,20 @@ let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
  */
 function startKeepAlive(): void {
   if (keepAliveTimer !== null) return;
+  const until = Date.now() + KEEPALIVE_CEILING_MS;
   keepAliveTimer = setInterval(() => {
+    if (Date.now() >= until) {
+      // MV3 suspension used to be the backstop for a wedged run. `runQuote`
+      // awaits `ensureWindow` and `chrome.tabs.create` with no timeout around
+      // either — the probe deadline only starts once the tab exists — so a lane
+      // parked on a `windows.create` that never settles ended when Chrome
+      // reclaimed the worker at 30s. Holding the worker up removed that, and
+      // would otherwise leave a minimised window open indefinitely while the
+      // popup looks idle. Past the ceiling we hand the decision back to Chrome,
+      // which is exactly the behaviour that shipped before this keepalive.
+      stopKeepAlive();
+      return;
+    }
     // Deliberately ignoring the result, and deliberately swallowing failure:
     // this call exists only to reset Chrome's idle countdown, and a rejected
     // keepalive is not something the user can act on. warn() is reserved for
@@ -681,10 +705,24 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
   };
   active = run;
   startKeepAlive();
-  await publish();
 
-  const queue = quotes.filter((q) => !q.finishedAt);
-  const lanes = Math.max(1, Math.min(plan.concurrency, MAX_CONCURRENCY));
+  let queue: Quote[];
+  let lanes: number;
+  try {
+    await publish();
+    queue = quotes.filter((q) => !q.finishedAt);
+    lanes = Math.max(1, Math.min(plan.concurrency, MAX_CONCURRENCY));
+  } catch (error) {
+    // The teardown below is the only thing that stops the interval, and it does
+    // not exist yet — so anything that throws between starting the keepalive
+    // and installing it would pin the worker resident for the rest of the
+    // browser session, with `active` pointing at a run that never tears down.
+    // `publish` is documented as unable to throw, but this file already carries
+    // a long comment about a publish() rejection escaping and skipping
+    // teardown, which was real once.
+    stopKeepAlive();
+    throw error;
+  }
 
   void (async () => {
     try {

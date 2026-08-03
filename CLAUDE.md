@@ -234,10 +234,12 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites (see README).
-- MV3 can terminate the service worker mid-run, and used to do so on nearly
-  every real run: a probe is silent until prices settle or its 45s deadline
-  passes, which is twice Chrome's 30s idle limit. `KEEPALIVE_MS` now pokes an
-  extension API every 20s for the life of a run, which is what stops it.
+- MV3 can terminate the service worker mid-run, and did so on **any run
+  containing a page that does not price**: the probe is silent until prices
+  settle or its 45s deadline passes, which is longer than Chrome's ~30s idle
+  limit. Not on _every_ run — `PROBE_READY` and each settled quote reset the
+  countdown, so a race where both pages price in seconds never tripped it.
+  `KEEPALIVE_MS` now pokes an extension API every 20s for the life of a run.
 
   The recovery paths remain and still matter, because a keepalive is a
   mitigation rather than a guarantee — Chrome can still reclaim a worker under
@@ -245,12 +247,21 @@ close). Never pass it a URL or a code.
   looking live forever, a restarted worker closes the window its predecessor
   orphaned, and the in-flight quotes are still lost when it happens.
 
-  Both directions are pinned, and both tests were checked against a deleted
-  guard: without `startKeepAlive` the first fails at zero pings, and without
-  `stopKeepAlive` the second sees six where it wants one. The second test
-  deliberately proves pings happened _before_ asserting they stopped — with no
-  keepalive at all it would otherwise pass at zero-before, zero-after, against
-  the exact bug it describes.
+  `KEEPALIVE_CEILING_MS` stops it after ten minutes regardless. MV3 suspension
+  used to be the backstop for a wedged run — `runQuote` awaits `ensureWindow`
+  and `chrome.tabs.create` with no timeout around either, so a lane parked on a
+  `windows.create` that never settles ended when Chrome reclaimed the worker.
+  Pinning the worker removed that, and would otherwise hold a minimised window
+  open indefinitely while the popup looks idle.
+
+  The tests assert the **gap** between pokes, not a count, and the difference is
+  the whole mechanism. A count-based version passed while `setTimeout` stood in
+  for `setInterval` — a keepalive firing once at 20s and never again, which
+  reproduces the original bug exactly. Deleting a guard is the weak mutation
+  here; these are the ones that matter, and all four were checked to fail:
+  no `startKeepAlive`, no `stopKeepAlive`, one-shot instead of repeating, and
+  `KEEPALIVE_MS = 29_500` — which leaves no margin for a delayed tick and which
+  a "under 30s" assertion would have waved through.
 
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
