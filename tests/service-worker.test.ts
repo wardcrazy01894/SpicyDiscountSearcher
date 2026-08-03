@@ -64,6 +64,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * src/background/service-worker.ts PROBE_TIMEOUT_MS, restated so the horizon
+ * below can be derived from it rather than hard-coded to a number that silently
+ * stops covering the run if the deadline shrinks.
+ */
+const PROBE_TIMEOUT_MS = 45_000;
+/** How long the keepalive assertions watch a live run. */
+const HORIZON_MS = 150_000;
+/**
+ * The largest acceptable silence, against Chrome's ~30s idle shutdown. Leaves
+ * KEEPALIVE_MS a usable band — 20s and 25s pass, 26s and above fail — rather
+ * than pinning one exact value.
+ */
+const MAX_GAP_MS = 25_000;
+
 describe('surviving MV3 suspension', () => {
   it('never leaves a 30s gap while a run is in flight', async () => {
     // The bug this pins: a probe messages the background only when prices go
@@ -82,11 +97,15 @@ describe('surviving MV3 suspension', () => {
     // asserted, and it also pins KEEPALIVE_MS's margin: 29_500 would pass a
     // "under 30s" check with nothing left over for a delayed tick.
     //
-    // Four candidates through one lane keeps the run alive for ~3 minutes, so
-    // the window is long enough for a one-shot to be obvious.
+    // The horizon has to outlast several keepalive periods, and the run has to
+    // still be live across all of it — so the candidate count is derived from
+    // the probe deadline rather than guessed. One lane, each candidate holding
+    // it for PROBE_TIMEOUT_MS, plus one spare so the run cannot finish early if
+    // that constant is lowered.
     await bootWorker();
+    const candidates = Math.ceil(HORIZON_MS / PROBE_TIMEOUT_MS) + 1;
     const long = { ...plan(1) };
-    long.candidates = Array.from({ length: 4 }, (_, index) => ({
+    long.candidates = Array.from({ length: candidates }, (_, index) => ({
       companySlug: `c${index}`,
       companyName: `Company ${index}`,
       vendor: 'hertz' as const,
@@ -96,7 +115,7 @@ describe('surviving MV3 suspension', () => {
     const startedAt = Date.now();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: long });
     await settle();
-    await settle(150_000);
+    await settle(HORIZON_MS);
 
     // The run must still be live, or the gaps below would just be measuring
     // teardown.
@@ -104,8 +123,56 @@ describe('surviving MV3 suspension', () => {
 
     const times = [startedAt, ...chromeMock.keepAlivePingTimes()];
     const gaps = times.slice(1).map((at, index) => at - times[index]!);
-    expect(gaps.length).toBeGreaterThanOrEqual(6);
-    expect(Math.max(...gaps)).toBeLessThanOrEqual(25_000);
+    expect(gaps.length).toBeGreaterThanOrEqual(Math.floor(HORIZON_MS / MAX_GAP_MS));
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(MAX_GAP_MS);
+  });
+
+  it('gives up after the ceiling rather than pinning the worker forever', async () => {
+    // Deleting the ceiling check outright passed the entire suite before this
+    // existed, which is how the inheritance bug below got in.
+    //
+    // What it is for: runQuote awaits ensureWindow and tabs.create with no
+    // timeout around either, so a lane parked on a windows.create that never
+    // settles has no deadline at all. MV3 suspension used to end that; holding
+    // the worker up removed the backstop and would keep a minimised window open
+    // indefinitely while the popup looks idle.
+    await bootWorker();
+    chromeMock.delayWindowCreate(60 * 60_000);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    await settle(9 * 60_000);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(20);
+
+    const beforeCeiling = chromeMock.keepAlivePings();
+    await settle(5 * 60_000);
+    // Stopped somewhere in there, and stayed stopped.
+    const afterCeiling = chromeMock.keepAlivePings();
+    expect(afterCeiling - beforeCeiling).toBeLessThan(60);
+    await settle(5 * 60_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+  });
+
+  it('gives a second run its own ceiling instead of the first run’s remainder', async () => {
+    // The bug: `until` was captured when the interval was created, and
+    // startKeepAlive early-returns when one exists. A wedged first run whose
+    // teardown never fires left its deadline in place, so a later run inherited
+    // whatever was left of it and went quiet mid-race — the original bug, for
+    // the second run of the session.
+    await bootWorker();
+    chromeMock.delayWindowCreate(60 * 60_000);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    // Nine minutes into a ten-minute ceiling.
+    await settle(9 * 60_000);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const atSecondStart = chromeMock.keepAlivePings();
+    // The first run's ceiling would have fired 60s from here.
+    await settle(3 * 60_000);
+    const gained = chromeMock.keepAlivePings() - atSecondStart;
+    // Three minutes at 20s intervals is ~9 pokes; inheriting would give ~3.
+    expect(gained).toBeGreaterThanOrEqual(8);
   });
 
   it('stops poking once the run is over', async () => {

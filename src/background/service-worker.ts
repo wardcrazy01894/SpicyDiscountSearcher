@@ -654,15 +654,27 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
+/** When the current keepalive gives up. Refreshed by every run that starts. */
+let keepAliveUntil = 0;
+
 /**
  * Keep the worker resident for the duration of a run. Idempotent: a second run
  * starting while one is winding down must not leave two intervals running.
  */
 function startKeepAlive(): void {
+  // Refreshed unconditionally, *before* the idempotence check, and that
+  // ordering is the whole point. Holding the deadline in a closure captured
+  // when the interval was created meant a second run inherited the first run's
+  // remaining time: run A wedges on `windows.create` so its teardown never
+  // fires, the user cancels, and run B nine minutes later finds a live timer,
+  // returns early, and loses its keepalive sixty seconds in — the original bug,
+  // silently, for the second run of the session. The same thing happens inside
+  // `STAGGER_MS` of a cancel-then-restart, where A's teardown skips
+  // `stopKeepAlive` on the `active === run` guard and B inherits.
+  keepAliveUntil = Date.now() + KEEPALIVE_CEILING_MS;
   if (keepAliveTimer !== null) return;
-  const until = Date.now() + KEEPALIVE_CEILING_MS;
   keepAliveTimer = setInterval(() => {
-    if (Date.now() >= until) {
+    if (Date.now() >= keepAliveUntil) {
       // MV3 suspension used to be the backstop for a wedged run. `runQuote`
       // awaits `ensureWindow` and `chrome.tabs.create` with no timeout around
       // either — the probe deadline only starts once the tab exists — so a lane
@@ -671,6 +683,10 @@ function startKeepAlive(): void {
       // would otherwise leave a minimised window open indefinitely while the
       // popup looks idle. Past the ceiling we hand the decision back to Chrome,
       // which is exactly the behaviour that shipped before this keepalive.
+      //
+      // Worth a line, because the only other evidence is the absence of pings
+      // in a console nobody is watching. No URL and no code, per warn()'s rule.
+      warn('keepalive ceiling reached; letting the worker suspend', 'run exceeded the ceiling');
       stopKeepAlive();
       return;
     }
