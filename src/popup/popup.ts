@@ -376,6 +376,10 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   'probe-timeout': 'no answer before the deadline',
   'probe-empty': 'page loaded, no price appeared',
   'extract-threw': 'could not read this page',
+  'form-fill': 'could not fill the search form',
+  // Not "never returned results", which reads as a synonym for probe-empty.
+  // The distinction is that the search was never run, not that it found nothing.
+  'form-submit': 'submitting the search never loaded a results page',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
   cancelled: 'cancelled',

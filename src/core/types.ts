@@ -151,6 +151,15 @@ export type QuoteFailure =
   | 'probe-empty'
   /** `extract` threw on this page's markup. */
   | 'extract-threw'
+  /**
+   * A driver could not find or fill a field on the vendor's own search form.
+   *
+   * Separate from `extract-threw` because it fails at the opposite end: the
+   * page was never asked for a price, so "no price appeared" would be a lie.
+   */
+  | 'form-fill'
+  /** The form was filled, but submitting it never produced a results page. */
+  | 'form-submit'
   /** The user closed the tab mid-probe. */
   | 'tab-closed'
   /** MV3 suspended the worker mid-race. */
