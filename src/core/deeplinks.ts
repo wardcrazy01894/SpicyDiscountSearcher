@@ -61,21 +61,75 @@ export function airportCode(location: string): string {
   return trimmed;
 }
 
-/** Avis splits a time into a 12-hour clock across three query parameters. */
-export function avisClock(hhmm: string): { hour: string; minute: string; ampm: string } {
-  const [h, m] = hhmm.split(':');
-  if (h === undefined || m === undefined) throw new Error(`expected hh:mm, got: ${hhmm}`);
-  const hour24 = Number(h);
-  if (!Number.isInteger(hour24) || hour24 < 0 || hour24 > 23) {
-    throw new Error(`expected hh:mm, got: ${hhmm}`);
+/**
+ * Split an ISO date into the parts a vendor wants as separate parameters.
+ *
+ * Throws on anything that is not `yyyy-mm-dd`, and that is the entire point.
+ * The first version of this destructured `split('-')` and defaulted the pieces
+ * to `''` — and since `withParams` drops empty values, a malformed date
+ * silently *omitted* `pickup_month` and `pickup_day` rather than failing. Avis
+ * answers such a URL with a default-date search: real results page, real
+ * prices, quote `ok`, nothing flagged, badged `verified`. That is precisely the
+ * silent wrong search this file exists to stop producing, and `usDate` right
+ * above chose the throwing shape for the same reason.
+ */
+export function isoParts(iso: string): { year: string; month: string; day: string } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!match?.[1] || !match[2] || !match[3]) {
+    throw new Error(`expected yyyy-mm-dd, got: ${iso}`);
   }
+  return { year: match[1], month: match[2], day: match[3] };
+}
+
+/**
+ * Avis splits a time into a 12-hour clock across three query parameters.
+ *
+ * The whole string is matched, not just the hour. Validating the hour alone and
+ * passing the minute through untouched accepted `':30'` as 12:30 AM (`Number('')`
+ * is 0) and quietly read `'07:5'` as 07:05 — this repo's own rule that "a guard
+ * that refuses only the first position of a digit run refuses nothing" applies
+ * verbatim. It also rejects the `HH:MM:SS` an `<input type=time step>` can emit,
+ * which would otherwise have been concatenated into a nonsense timestamp.
+ *
+ * Zero-padding the hour is not a guess: Avis rewrote `pickup_hour=9` to
+ * `pickup_hour=09` in the address bar and rendered "Oct 16 | 09:00 AM", so
+ * padded is the canonical form and unpadded is merely tolerated.
+ */
+export function avisClock(hhmm: string): { hour: string; minute: string; ampm: string } {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!match?.[1] || !match[2]) throw new Error(`expected hh:mm, got: ${hhmm}`);
+  const hour24 = Number(match[1]);
+  if (hour24 > 23) throw new Error(`expected hh:mm, got: ${hhmm}`);
+  if (Number(match[2]) > 59) throw new Error(`expected hh:mm, got: ${hhmm}`);
   // 00:xx is 12 AM and 12:xx is 12 PM; the modulo alone yields a nonexistent 0.
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   return {
     hour: String(hour12).padStart(2, '0'),
-    minute: m.padStart(2, '0'),
+    minute: match[2],
     ampm: hour24 < 12 ? 'AM' : 'PM',
   };
+}
+
+/**
+ * Refuse a one-way trip for a vendor whose return-location parameter we do not
+ * trust.
+ *
+ * `return_location_code` was honoured on the first captured replay and then
+ * **ignored** on two later ones: a URL asking for LAX to LAX rendered "Los
+ * Angeles Intl Airport (LAX) - Philadelphia Intl Airport (PHL)", keeping a
+ * return location left over from an earlier session in the same browser
+ * profile. The extension's probe tabs share that profile, so this is reachable
+ * in normal use.
+ *
+ * A one-way rental prices nothing like the round trip the user asked for, and
+ * the quote would come back `ok` with no tell. Until the parameter is
+ * understood, refusing is the honest answer: `link-build` is visible in the
+ * popup, a wrong price is not.
+ */
+function sameCityOnly(vendor: string, pickup: string, dropoff: string): void {
+  if (dropoff && dropoff.trim().toUpperCase() !== pickup.trim().toUpperCase()) {
+    throw new Error(`${vendor} one-way trips are not supported: its return location is unreliable`);
+  }
 }
 
 function withParams(base: string, params: Record<string, string>): string {
@@ -99,12 +153,27 @@ const BUILDERS: Record<VendorId, Builder> = {
    * The old builder was wrong in every part: `/rentacar/reservation/` 302s to
    * the home page, and the code parameter is `CDP`, not `cdpid`.
    *
-   * `age` is hard-coded for the same reason as Avis's — the popup collects no
-   * driver age — with the same caveat that 25 dodges the under-25 surcharge and
-   * so can understate the price for a younger renter.
+   * What `verified` does and does not cover here — the flag is a claim about
+   * the URL shape, not about every itinerary:
+   * - Tested: a US airport, round trip, corporate CDP.
+   * - Untested: any non-US market, against a hard-coded `pCountryCode: 'US'`.
+   * - Refused rather than guessed: one-way. Hertz's `did` was never exercised
+   *   with a different airport, and Avis's equivalent proved unreliable, so
+   *   both refuse rather than risk pricing a journey nobody asked for.
+   * - `age` is hard-coded because the popup collects no driver age. 25 dodges
+   *   the under-25 surcharge, so it can understate the price for a younger
+   *   renter.
    */
   hertz: (code, trip) => {
     const t = carTrip(trip);
+    sameCityOnly('hertz', t.pickupLocation, t.dropoffLocation);
+    // Validated even though Hertz takes a combined timestamp: this rejects the
+    // malformed date and the `HH:MM:SS` that would otherwise be concatenated
+    // into a string the site reads as a default search.
+    isoParts(t.pickupDate);
+    isoParts(t.dropoffDate);
+    avisClock(t.pickupTime);
+    avisClock(t.dropoffTime);
     return {
       confidence: 'verified',
       url: withParams('https://www.hertz.com/us/en/book/vehicles', {
@@ -135,35 +204,48 @@ const BUILDERS: Record<VendorId, Builder> = {
    * second step is the one that matters — Enterprise's URL looked plausible too
    * and turned out to carry nothing.
    *
-   * Two things here are still assumptions, and are called out rather than
-   * hidden:
+   * What `verified` does and does not cover — the flag is a claim about the URL
+   * shape, not about every itinerary:
+   * - Tested: a US airport, round trip, corporate AWD. An explicit
+   *   `awd_number` also beats one left in the browser session, which matters
+   *   because the probe tabs share the user's profile; without that the whole
+   *   race could have been priced with one sticky code.
+   * - Untested: any non-US market, against hard-coded `pickup_location_region:
+   *   'NAM'`, `residency_value: 'US'`, `country`, `locale`.
+   * - Refused rather than guessed: one-way, because `return_location_code` was
+   *   honoured on one replay and ignored on two others (see `sameCityOnly`).
    * - `age` is hard-coded, because the popup collects no driver age. 25 avoids
    *   the under-25 surcharge, so it is the optimistic end of the range and can
    *   understate the real price for a younger renter.
-   * - Single-digit days and months go out zero-padded, straight from the ISO
-   *   date. The captured search was 16/10, so padding was never exercised.
+   *
+   * Hour padding is *not* on that list any more: Avis rewrote `pickup_hour=9`
+   * to `09` and rendered "09:00 AM", so the padded form is its own canonical
+   * one. Single-digit day/month padding is still untested — the captured search
+   * was 16/10 — but comes straight from the ISO date, which `isoParts` now
+   * refuses to accept in any other shape.
    */
   avis: (code, trip) => {
     const t = carTrip(trip);
+    sameCityOnly('avis', t.pickupLocation, t.dropoffLocation);
     const pickup = avisClock(t.pickupTime);
     const dropoff = avisClock(t.dropoffTime);
-    const [pickYear, pickMonth, pickDay] = t.pickupDate.split('-');
-    const [dropYear, dropMonth, dropDay] = t.dropoffDate.split('-');
+    const pickDate = isoParts(t.pickupDate);
+    const dropDate = isoParts(t.dropoffDate);
     return {
       confidence: 'verified',
       url: withParams('https://www.avis.com/en/reservation/vehicle-availability', {
         awd_number: code,
         pickup_location_code: airportCode(t.pickupLocation),
         return_location_code: airportCode(t.dropoffLocation || t.pickupLocation),
-        pickup_year: pickYear ?? '',
-        pickup_month: pickMonth ?? '',
-        pickup_day: pickDay ?? '',
+        pickup_year: pickDate.year,
+        pickup_month: pickDate.month,
+        pickup_day: pickDate.day,
         pickup_hour: pickup.hour,
         pickup_minute: pickup.minute,
         pickup_am_pm: pickup.ampm,
-        return_year: dropYear ?? '',
-        return_month: dropMonth ?? '',
-        return_day: dropDay ?? '',
+        return_year: dropDate.year,
+        return_month: dropDate.month,
+        return_day: dropDate.day,
         return_hour: dropoff.hour,
         return_minute: dropoff.minute,
         return_am_pm: dropoff.ampm,

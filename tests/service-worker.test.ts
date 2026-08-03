@@ -342,26 +342,38 @@ describe('diagnosing a run afterwards', () => {
     expect((await getState())?.quotes[0]?.report?.path).toBe('vendor-selectors');
   });
 
-  it('carries the deep-link confidence onto the quote', async () => {
+  it('carries each quote its own builder’s confidence, not a single value', async () => {
+    // The plan mixes a verified vendor with an unverified one *inside the run*,
+    // which is the whole point. Two earlier versions of this test did not:
+    //
+    // - `every(q => q.confidence === 'best-effort')` was true only while no
+    //   builder was verified, and went red on a change that did not touch the
+    //   worker at all.
+    // - Comparing each quote against `buildDeepLink(...)` looked stronger but
+    //   was weaker: with only hertz and avis in the plan, both sides return
+    //   `verified`, so hard-coding `confidence: 'verified'` in makeQuote passed.
+    //   Asserting `buildDeepLink('budget', …)` separately proved nothing about
+    //   the worker, because budget was never in the run.
+    //
+    // With budget in the plan, a hard-coded flag fails whichever value it picks.
     await bootWorker();
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    const mixed = { ...plan(3) };
+    mixed.candidates = [
+      ...plan().candidates,
+      { companySlug: 'initech', companyName: 'Initech', vendor: 'budget', code: 'B1', note: null },
+    ];
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
     await settle();
 
-    // Compared against what buildDeepLink actually returns rather than a
-    // literal. This used to pin `best-effort` for every quote, and went red the
-    // day one builder was verified against the live site — a failure that said
-    // nothing about the property under test, which is that the flag reaches the
-    // UI instead of being computed and thrown away.
     const state = await getState();
-    expect(state?.quotes.length).toBe(2);
+    expect(state?.quotes).toHaveLength(3);
     for (const quote of state?.quotes ?? []) {
       const expected = buildDeepLink(quote.candidate.vendor, quote.candidate.code, TRIP);
       expect(quote.confidence).toBe(expected.confidence);
     }
-    // The loop above passes trivially if every builder returns the same flag,
-    // which both of the plan's vendors now do. Budget is still unverified, so
-    // this keeps the two values distinguishable and the loop meaningful.
-    expect(buildDeepLink('budget', 'B1', TRIP).confidence).toBe('best-effort');
+    expect(new Set(state?.quotes.map((q) => q.confidence))).toEqual(
+      new Set(['verified', 'best-effort']),
+    );
   });
 });
 

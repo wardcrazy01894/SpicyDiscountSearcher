@@ -41,9 +41,22 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  The popup still prints one caveat for the whole list, which is now wrong in
-  both directions — generous to the two verified vendors, and it under-warns
-  nobody. Badging per row is the fix and is no longer optional.
+  `'verified'` is a claim about the **URL shape**, not about every itinerary,
+  and the difference is load-bearing. Both were proved on a US airport round
+  trip; both hard-code a US country/region and a driver age of 25, and neither
+  was tested outside the US. Both therefore **refuse one-way trips** rather than
+  guess: Avis honoured `return_location_code` on one replay and ignored it on
+  two others, rendering LAX to PHL for a URL asking LAX to LAX, because a return
+  location left in the browser session won. The probe tabs share the user's
+  profile, so that is reachable in normal use. `popup.ts` also validates the
+  IATA shape before any tab opens — failing per-vendor would leave the race to
+  be decided only by the three builders that cannot reach a search at all.
+
+  The popup's single caveat now renders even when nothing is unverified. It was
+  `if (unverified > 0)`, so the moment these two became verified a run of only
+  Avis and Hertz — most of the car codes, and the obvious selection once the
+  others are known unusable — printed no caveat at all. Silence reads as the
+  stronger promise. Badging per row is still the better fix.
 
   Verifying one is worth the effort because the alternative is not "a stale
   parameter" but "no search at all": Enterprise keeps its itinerary in session

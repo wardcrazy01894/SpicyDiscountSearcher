@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDeepLink, usDate } from '../src/core/deeplinks.js';
+import { airportCode, avisClock, buildDeepLink, isoParts, usDate } from '../src/core/deeplinks.js';
 import type { CarTrip, HotelTrip } from '../src/core/types.js';
 import { searchableVendors } from '../src/core/vendors.js';
 
@@ -33,7 +33,82 @@ describe('usDate', () => {
   });
 });
 
+describe('avisClock', () => {
+  it('maps midnight and noon onto a 12-hour clock', () => {
+    // The `% 12 === 0 ? 12 : …` branch was reachable by no test at all, so
+    // replacing it with a bare `% 12` kept the suite green while sending a noon
+    // pickup as hour 00 PM and midnight as 00 AM.
+    expect(avisClock('00:00')).toEqual({ hour: '12', minute: '00', ampm: 'AM' });
+    expect(avisClock('12:00')).toEqual({ hour: '12', minute: '00', ampm: 'PM' });
+    expect(avisClock('12:59')).toEqual({ hour: '12', minute: '59', ampm: 'PM' });
+    expect(avisClock('23:59')).toEqual({ hour: '11', minute: '59', ampm: 'PM' });
+  });
+
+  it('zero-pads the hour, which is the form Avis itself uses', () => {
+    // Not an assumption: Avis rewrote `pickup_hour=9` to `09` in the address
+    // bar and rendered "09:00 AM".
+    expect(avisClock('09:30')).toMatchObject({ hour: '09', ampm: 'AM' });
+  });
+
+  it('rejects a time that is not exactly hh:mm', () => {
+    // Validating the hour and passing the minute through read ':30' as 12:30 AM
+    // (Number('') is 0) and '07:5' as 07:05 — a time nobody asked for, sent
+    // without complaint.
+    for (const bad of [':30', '07:5', '0x10:00', '24:00', '10:60', '10:00:00', '', 'ten']) {
+      expect(() => avisClock(bad), bad).toThrow(/hh:mm/);
+    }
+  });
+});
+
+describe('isoParts', () => {
+  it('rejects a date that is not yyyy-mm-dd', () => {
+    // The reason this throws rather than defaulting: withParams drops empty
+    // values, so a malformed date silently omitted pickup_month and pickup_day
+    // and Avis answered with a *default-date* search — real page, real prices,
+    // quote `ok`, nothing flagged.
+    for (const bad of ['09/04/2026', '2026-9-4', '', '2026-09', 'yesterday']) {
+      expect(() => isoParts(bad), bad).toThrow(/yyyy-mm-dd/);
+    }
+    expect(isoParts('2026-09-04')).toEqual({ year: '2026', month: '09', day: '04' });
+  });
+});
+
+describe('airportCode', () => {
+  it('accepts a code in any case, with surrounding space', () => {
+    expect(airportCode(' tpa ')).toBe('TPA');
+  });
+
+  it('refuses to guess a code out of free text', () => {
+    // Taking the first three-letter word would read "New York" as the airport
+    // NEW — a real airport code, for an airport nobody asked for.
+    for (const bad of ['New York', 'Tampa Airport', 'TP', 'TPAX', '']) {
+      expect(() => airportCode(bad), bad).toThrow(/3-letter airport code/);
+    }
+  });
+});
+
 describe('buildDeepLink', () => {
+  it('refuses a malformed date rather than dropping it from the URL', () => {
+    for (const vendor of ['avis', 'hertz'] as const) {
+      expect(() => buildDeepLink(vendor, 'X1', { ...CAR, pickupDate: '09/04/2026' })).toThrow(
+        /yyyy-mm-dd/,
+      );
+    }
+  });
+
+  it('refuses a one-way trip while the return location is unreliable', () => {
+    // avis honoured return_location_code on one replay and ignored it on two
+    // others, rendering LAX -> PHL for a URL asking LAX -> LAX. A one-way
+    // rental prices nothing like the round trip the user asked for.
+    for (const vendor of ['avis', 'hertz'] as const) {
+      expect(() => buildDeepLink(vendor, 'X1', { ...CAR, dropoffLocation: 'MCO' })).toThrow(
+        /one-way/,
+      );
+    }
+    // Same airport spelled differently is not a one-way trip.
+    expect(() => buildDeepLink('avis', 'X1', { ...CAR, dropoffLocation: ' tpa ' })).not.toThrow();
+  });
+
   it('puts the Hertz CDP on the vehicles URL', () => {
     // Shape read off a hand-run search and then replayed with a changed
     // airport. The previous assertion passed against `/rentacar/reservation/`

@@ -333,9 +333,31 @@ function readTrip(): Trip {
   };
 }
 
+/** Both verified builders address a branch by IATA code, not by free text. */
+const AIRPORT_CODE_RE = /^[A-Za-z]{3}$/;
+
 function validate(trip: Trip): string | null {
   if (trip.category === 'car') {
     if (!trip.pickupLocation) return 'Enter a pick-up location.';
+    // Checked here as well as in the builders, because failing per-vendor is
+    // not a safe default. "Chicago Downtown" makes Avis and Hertz throw
+    // `link-build` and leaves the race to be decided *only* by Budget,
+    // Enterprise and National — the three whose links are known not to reach a
+    // search at all, and whose home pages answer with a "from $19/day" that
+    // wins. Rejecting before any tab opens is the difference between no answer
+    // and a confidently wrong one.
+    if (!AIRPORT_CODE_RE.test(trip.pickupLocation.trim())) {
+      return 'Pick-up must be a 3-letter airport code, e.g. TPA.';
+    }
+    if (trip.dropoffLocation.trim() && !AIRPORT_CODE_RE.test(trip.dropoffLocation.trim())) {
+      return 'Drop-off must be a 3-letter airport code, e.g. TPA.';
+    }
+    if (
+      trip.dropoffLocation.trim() &&
+      trip.dropoffLocation.trim().toUpperCase() !== trip.pickupLocation.trim().toUpperCase()
+    ) {
+      return 'One-way rentals are not supported yet — leave drop-off blank.';
+    }
     if (!trip.pickupDate || !trip.dropoffDate) return 'Enter both rental dates.';
     if (trip.dropoffDate < trip.pickupDate) return 'Drop-off is before pick-up.';
     return null;
@@ -600,19 +622,33 @@ function renderRun(state: RunState | null): void {
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
 
-  // One line for the list rather than a badge per row: every builder is
-  // best-effort today, so a per-row flag would mark every row and say nothing.
+  // One line for the list rather than a badge per row, which stays workable
+  // only while the verified vendors are few enough to name.
+  //
+  // This deliberately renders even when nothing is unverified. It used to be
+  // `if (unverified > 0)`, so the moment Avis and Hertz became `verified` a run
+  // containing only those two — which is most of the car codes, and the obvious
+  // selection once the others are known to be unusable — printed no caveat at
+  // all. `verified` is a claim about the URL shape, proved on one US round-trip
+  // from an airport; it is not a claim that the price is right for any
+  // itinerary, and silence reads as the stronger promise.
   const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
-  if (unverified > 0) {
-    const note = document.createElement('li');
-    note.className = 'hint';
-    const scope =
-      unverified === state.quotes.length
-        ? 'Vendor search links are'
-        : `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'}`;
-    note.textContent = `${scope} reverse-engineered and unverified — a result that looks wrong probably is.`;
-    quotesList.append(note);
+  const note = document.createElement('li');
+  note.className = 'hint';
+  if (unverified === state.quotes.length) {
+    note.textContent =
+      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+  } else if (unverified > 0) {
+    note.textContent =
+      `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} reverse-engineered ` +
+      'and unverified — a result that looks wrong probably is. The rest are checked against the ' +
+      'live site for US airport round-trips only, and assume a driver aged 25 or over.';
+  } else {
+    note.textContent =
+      'These search links are checked against the live site for US airport round-trips only, and ' +
+      'assume a driver aged 25 or over. Confirm the rate before booking.';
   }
+  quotesList.append(note);
 
   const spread = savings(state.quotes);
   const setAside = unrankedQuotes(state.quotes);
