@@ -170,7 +170,7 @@ describe('politeness', () => {
     const solo = { ...plan(1) };
     solo.candidates = [
       ...plan().candidates,
-      { companySlug: 'initech', companyName: 'Initech', vendor: 'budget', code: 'B1', note: null },
+      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
     ];
     await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
     await settle();
@@ -352,10 +352,11 @@ describe('diagnosing a run afterwards', () => {
     // - Comparing each quote against `buildDeepLink(...)` looked stronger but
     //   was weaker: with only hertz and avis in the plan, both sides return
     //   `verified`, so hard-coding `confidence: 'verified'` in makeQuote passed.
-    //   Asserting `buildDeepLink('budget', …)` separately proved nothing about
-    //   the worker, because budget was never in the run.
+    //   Asserting an unverified vendor separately proved nothing about the
+    //   worker, because that vendor was never in the run.
     //
-    // With budget in the plan, a hard-coded flag fails whichever value it picks.
+    // With sixt — still best-effort — in the plan alongside two verified
+    // vendors, a hard-coded flag fails whichever value it picks.
     await bootWorker();
     const mixed = { ...plan(3) };
     mixed.candidates = [

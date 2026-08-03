@@ -632,10 +632,18 @@ function renderRun(state: RunState | null): void {
   // all. `verified` is a claim about the URL shape, proved on one US round-trip
   // from an airport; it is not a claim that the price is right for any
   // itinerary, and silence reads as the stronger promise.
-  const unverified = state.quotes.filter((q) => q.confidence === 'best-effort').length;
+  // `link-build` quotes are excluded: the worker stamps them `best-effort` on
+  // the catch path, so counting them said "N of these search links are
+  // unverified" about links that were never built, let alone followed.
+  const unverified = state.quotes.filter(
+    (q) => q.confidence === 'best-effort' && q.failure !== 'link-build',
+  ).length;
+  const buildable = state.quotes.filter((q) => q.failure !== 'link-build').length;
   const note = document.createElement('li');
   note.className = 'hint';
-  if (unverified === state.quotes.length) {
+  if (buildable === 0) {
+    note.textContent = 'None of these codes could be turned into a search — nothing was looked up.';
+  } else if (unverified === buildable) {
     note.textContent =
       'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
   } else if (unverified > 0) {

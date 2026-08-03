@@ -52,6 +52,15 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `link-build` is visible; that is not. Same trade as the malformed date and
   the one-way trip.
 
+  They are also `searchable: false`, which is the half that matters to the user.
+  Throwing alone left them selectable, and `interleaveByVendor` round-robins one
+  candidate per vendor — so three vendors that could not run took **half** the
+  default cap of twelve, and the plan line promised codes the popup already knew
+  would fail. `starwood` had the same shape and the same answer for years: the
+  codes stay in the database, the vendor gets no chip, no candidate, and no host
+  permission. Dropping those three hosts from the manifest is a real reduction
+  in what the extension may read.
+
   `'verified'` is a claim about the **URL shape**, not about every itinerary,
   and the difference is load-bearing. Both were proved on a US airport round
   trip; both hard-code a US country/region and a driver age of 25, and neither
@@ -109,10 +118,10 @@ The two things that would silently produce a wrong answer, and their guards:
 - **A link that missed its search.** A vendor home page still shows
   "from $19/day", so the quote comes back `ok` and, being cheapest, wins. The
   probe reports its landed path; a quote that landed on the site root is flagged
-  in the popup. Structurally blind for Budget, whose deep link targets
-  `/en/home` already. No longer blind for Avis: its builder now targets
+  in the popup. No longer blind for Avis, whose builder now targets
   `/en/reservation/vehicle-availability`, so landing on the root is once again
-  the unambiguous tell it is everywhere else.
+  the unambiguous tell it is everywhere else — and no longer relevant to Budget,
+  which builds no link at all.
 - **A number that was never a rate.** "Total taxes and fees: $57.20" carries the
   word `total`, so it was tagged `total` — the most trusted basis — and being
   the cheapest number there it became the page's headline price. Bucketing

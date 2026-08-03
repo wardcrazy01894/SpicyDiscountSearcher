@@ -48,6 +48,11 @@ function hotelTrip(trip: Trip): HotelTrip {
  * say) turns "New York" into the airport `NEW`, which is the silent
  * wrong-search this whole file has been apologising for.
  *
+ * Imposed on Sixt too, whose builder passes the location as free text and was
+ * never checked either way — so a Sixt-only run can no longer be given "Munich
+ * Airport". Three codes, best-effort, and the alternative is a per-vendor rule
+ * in `validate()` that would have to know which builders are strict.
+ *
  * Hertz's own UI emits a branch id rather than an airport — the captured URL
  * said `pid=PHLT11` — but a bare IATA code is accepted and really does select
  * the market: TPA returned 36 vehicles at $31-$133 where PHL returned 31 at
@@ -175,6 +180,10 @@ type Builder = (code: string, trip: Trip) => DeepLink;
  * plausible wrong price.
  */
 function unsearchable(vendor: string): Builder {
+  // Defence in depth, not the primary guard: these vendors are also
+  // `searchable: false` in vendors.ts, so `buildCandidates` never proposes them
+  // and the popup never offers a chip. This catches a plan that arrives some
+  // other way.
   return () => {
     throw new Error(
       `${vendor} ignores the search URL entirely — its search lives in session state, ` +

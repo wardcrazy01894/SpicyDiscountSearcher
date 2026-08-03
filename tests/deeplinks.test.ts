@@ -149,6 +149,19 @@ describe('buildDeepLink', () => {
     expect(link.confidence).toBe('verified');
   });
 
+  it('zero-pads a single-digit hour into the Hertz timestamp', () => {
+    // The round-2 fix — building pdate from clock12's validated parts rather
+    // than the raw trip string — was unpinned: both reverting it and dropping
+    // the padStart left the whole suite green, because every other case here
+    // uses a two-digit hour. `2026-09-04T9:00:00` is not valid ISO 8601 and is
+    // the malformed timestamp the validation exists to prevent.
+    const parsed = new URL(buildDeepLink('hertz', 'X1', { ...CAR, pickupTime: '9:00' }).url);
+    expect(parsed.searchParams.get('pdate')).toBe('2026-09-04T09:00:00');
+    expect(clock12('9:00')).toMatchObject({ hour24: '09', hour: '09', ampm: 'AM' });
+    expect(clock12('00:30')).toMatchObject({ hour24: '00', hour: '12', ampm: 'AM' });
+    expect(clock12('23:59')).toMatchObject({ hour24: '23', hour: '11', ampm: 'PM' });
+  });
+
   it('splits Avis times onto a 12-hour clock', () => {
     const parsed = new URL(buildDeepLink('avis', 'A120590', CAR).url);
     // CAR drops off at 16:30.
@@ -182,6 +195,9 @@ describe('buildDeepLink', () => {
     // ignoring the query string entirely, so any URL built for them lands on a
     // page whose "from $19/day" is read as a real price and, being cheapest,
     // wins. link-build is visible; that is not.
+    //
+    // Belt and braces: they are `searchable: false` too, so nothing routes a
+    // plan here in the first place. This pins the inner guard on its own.
     for (const vendor of ['budget', 'enterprise', 'national'] as const) {
       expect(() => buildDeepLink(vendor, 'X1', CAR), vendor).toThrow(/session state/);
     }
@@ -201,12 +217,12 @@ describe('buildDeepLink', () => {
   });
 
   it('builds a valid https URL for every vendor that can be searched at all', () => {
-    // The three that ignore the URL are excluded by name rather than by
-    // catching, so adding a fourth is a deliberate edit here rather than a
-    // silently-skipped vendor.
-    const unsearchable = new Set(['budget', 'enterprise', 'national']);
-    const built = searchableVendors().filter((v) => !unsearchable.has(v.id));
-    expect(built.length).toBe(searchableVendors().length - unsearchable.size);
+    // `searchableVendors()` already excludes the ones whose site ignores the
+    // URL — they are `searchable: false` in vendors.ts, so they never reach a
+    // plan either. Pinned by count so a vendor silently dropping out of the
+    // registry fails here rather than shrinking the loop unnoticed.
+    const built = searchableVendors();
+    expect(built.filter((v) => v.category === 'car')).toHaveLength(3);
     for (const vendor of built) {
       const trip = vendor.category === 'car' ? CAR : HOTEL;
       const { url } = buildDeepLink(vendor.id, 'TESTCODE', trip);
