@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
+import { buildDeepLink } from '../src/core/deeplinks.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -346,9 +347,21 @@ describe('diagnosing a run afterwards', () => {
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
     await settle();
 
-    // Every builder is best-effort today; the point is that it reaches the UI
-    // at all, rather than being computed and thrown away.
-    expect((await getState())?.quotes.every((q) => q.confidence === 'best-effort')).toBe(true);
+    // Compared against what buildDeepLink actually returns rather than a
+    // literal. This used to pin `best-effort` for every quote, and went red the
+    // day one builder was verified against the live site — a failure that said
+    // nothing about the property under test, which is that the flag reaches the
+    // UI instead of being computed and thrown away.
+    const state = await getState();
+    expect(state?.quotes.length).toBe(2);
+    for (const quote of state?.quotes ?? []) {
+      const expected = buildDeepLink(quote.candidate.vendor, quote.candidate.code, TRIP);
+      expect(quote.confidence).toBe(expected.confidence);
+    }
+    // The loop above passes trivially if every builder returns the same flag,
+    // which both of the plan's vendors now do. Budget is still unverified, so
+    // this keeps the two values distinguishable and the loop meaningful.
+    expect(buildDeepLink('budget', 'B1', TRIP).confidence).toBe('best-effort');
   });
 });
 

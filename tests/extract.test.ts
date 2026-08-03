@@ -55,6 +55,19 @@ describe('findPrices', () => {
     expect(findPrices('$0 due today, $3.50 concession fee')).toEqual([]);
   });
 
+  it('ignores a running cart total of zero', () => {
+    // Observed on Enterprise's live "Select Vehicle Class" page: a header
+    // widget reading `TOTAL $ 0 .00` before anything is selected, with the
+    // amount split across elements so offerText joins it with spaces. It says
+    // "total", which is the most-trusted basis there is, and zero undercuts
+    // every genuine rate in the race — so this is the shape that would do the
+    // most damage if MIN_PLAUSIBLE were ever relaxed. Enterprise also renders
+    // `Estimated Total0`, which carries no currency at all and so never
+    // matches; both are pinned here because only the first is a near miss.
+    expect(findPrices('TOTAL $ 0 .00')).toEqual([]);
+    expect(findPrices('Estimated Total0')).toEqual([]);
+  });
+
   it('ignores implausibly large numbers', () => {
     expect(findPrices('$1,200,000 insurance coverage')).toEqual([]);
   });

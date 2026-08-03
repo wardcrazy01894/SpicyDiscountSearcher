@@ -30,8 +30,28 @@ encode other people's websites. They will break. Both are deliberately isolated:
 
 - Deep links are one function per vendor with a `confidence` flag, which rides
   on the `Quote` and shows in the popup. Everything else calls `buildDeepLink`
-  and doesn't care. Every builder is `'best-effort'` today, so the popup says so
-  once for the whole list rather than badging every row.
+  and doesn't care. **Avis and Hertz are `'verified'`**; the rest are still
+  `'best-effort'`. Both were captured from a search run by hand and then proved
+  to _replay_ rather than merely load — Avis by changing the airport and
+  watching the results page name Tampa, Hertz by changing it and watching the
+  inventory change (36 vehicles at $31-$133 against 31 at $36-$111). Loading
+  proves nothing on its own; that is the whole lesson of Enterprise below.
+
+  Hertz needed the second technique because its vehicles step never names the
+  location on screen, so there was nothing to read. Differing prices _and_
+  counts is what rules out a default search.
+
+  The popup still prints one caveat for the whole list, which is now wrong in
+  both directions — generous to the two verified vendors, and it under-warns
+  nobody. Badging per row is the fix and is no longer optional.
+
+  Verifying one is worth the effort because the alternative is not "a stale
+  parameter" but "no search at all": Enterprise keeps its itinerary in session
+  state, so its URL carries nothing and a builder for it cannot exist. Test a
+  captured URL in a fresh incognito window before writing one. A `curl` 403
+  proves nothing either way — both Enterprise paths return it, including the
+  live one.
+
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
   the sweep away from nav and footer. **No vendor defines an `offer` selector**,
@@ -65,8 +85,10 @@ The two things that would silently produce a wrong answer, and their guards:
 - **A link that missed its search.** A vendor home page still shows
   "from $19/day", so the quote comes back `ok` and, being cheapest, wins. The
   probe reports its landed path; a quote that landed on the site root is flagged
-  in the popup. Structurally blind for Avis and Budget, whose deep links target
-  `/en/home` already.
+  in the popup. Structurally blind for Budget, whose deep link targets
+  `/en/home` already. No longer blind for Avis: its builder now targets
+  `/en/reservation/vehicle-availability`, so landing on the root is once again
+  the unambiguous tell it is everywhere else.
 - **A number that was never a rate.** "Total taxes and fees: $57.20" carries the
   word `total`, so it was tagged `total` — the most trusted basis — and being
   the cheapest number there it became the page's headline price. Bucketing
@@ -233,7 +255,10 @@ close). Never pass it a URL or a code.
 
 ## Known gaps
 
-- Deep-link query params are unverified against live sites (see README).
+- Deep-link query params are unverified against live sites for every vendor
+  except Avis and Hertz (see README). Budget, Enterprise and National are worse
+  than unverified: all three keep the search in session state, so no query
+  string can express it and the builders they have today cannot ever work.
 - MV3 can terminate the service worker mid-run. `GET_STATE` now settles such a
   snapshot instead of leaving it looking live forever, and a restarted worker
   closes the window its predecessor orphaned — but the in-flight quotes are

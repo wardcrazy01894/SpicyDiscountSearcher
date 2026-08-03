@@ -24,7 +24,14 @@
         <section class="fields" id="car-fields">
           <label class="field">
             <span>Pick-up location</span>
-            <input type="text" name="pickupLocation" placeholder="TPA, or Tampa Airport" required />
+            <!-- Airport code only: Hertz's `pid` and Avis's `pickup_location_code`
+                 both reject free text, so "Tampa Airport" now fails as link-build. -->
+            <input
+              type="text"
+              name="pickupLocation"
+              placeholder="Airport code, e.g. TPA"
+              required
+            />
           </label>
           <label class="field">
             <span>Drop-off location <em>(optional)</em></span>
