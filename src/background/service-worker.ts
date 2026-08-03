@@ -260,12 +260,12 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
  * The only failures a content script is allowed to claim.
  *
  * The rule, rather than a list to be maintained twice: a page may claim only
- * what it is the sole witness to. Everything else — `probe-timeout`,
- * `interrupted`, `link-build`, `tab-open`, `tab-closed`, `cancelled` — is the
+ * what it is the sole witness to. Every other member of `QuoteFailure` is the
  * background's own knowledge, and a page sending one is not offering a
  * diagnosis but forging ours. `cancelled` and `tab-closed` are the dangerous
  * shapes because they read as plausible and misattribute the failure to the
- * user.
+ * user — but enumerating the excluded ones here is what let this comment and
+ * CLAUDE.md drift apart, so the rule is the specification.
  *
  * `form-fill` and `form-submit` satisfy that rule and are still **deliberately
  * absent**, because no code in this extension emits them yet. Admitting a code

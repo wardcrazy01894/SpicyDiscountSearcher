@@ -18,8 +18,12 @@ import type { ProbeAssignment } from '../src/core/messages.js';
 import type { CarTrip } from '../src/core/types.js';
 
 /**
- * Typed rather than `unknown`, so the compiler drags this fixture forward with
- * the protocol.
+ * The assignment shape, so the fixture below can be built with `satisfies` and
+ * the compiler drags it forward with the protocol.
+ *
+ * The variable stays `unknown` because other tests assign `PROBE_IDLE` and a
+ * deliberately malformed reply to it; the `satisfies` on the literal is what
+ * does the work.
  *
  * It went stale silently when `PROBE_START` grew `trip` and `code`: an untyped
  * literal still satisfied the fake, so the day a driver reads `assignment.trip`

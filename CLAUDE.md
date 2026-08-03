@@ -189,12 +189,18 @@ single fill-and-submit function is the wrong shape.
 opposite end, before the page was ever asked for a price, so "no price appeared"
 would be a lie.
 
-One thing to settle when that driver is written: `PROBE_START` binds a code to a
-_quote_, not to an _origin_. A tab that redirects between two matched hosts —
-Avis and Budget are the same parent company — re-sends `PROBE_READY` under the
-same tab id and is handed the original quote's code. Harmless for a read-only
-probe, which just applies the wrong selectors and finds nothing; a driver would
-type a Budget code into an Avis form.
+`PROBE_START` binds a code to a _quote_, not to an _origin_, and that is a live
+bug rather than only a future one. A tab that redirects between two matched
+hosts — Avis and Budget are the same parent company — re-sends `PROBE_READY`
+under the same tab id and is handed the original quote's code and vendor.
+
+Calling that harmless for a read-only probe was wrong. Every `container` list in
+`VENDOR_SELECTORS` ends with `main`, so the container matches on the sibling host
+too and the generic sweep runs over that page; `landedElsewhere` only fires for a
+bare `/`, so nothing is flagged. The result is that one vendor's prices settle
+another vendor's quote, labelled with the wrong vendor and code, `status: 'ok'`.
+A driver makes it worse rather than making it real — it would type a Budget code
+into an Avis form — but the misattribution exists today.
 
 `Quote.report` carries what the probe actually saw — landed path, page title,
 offer count, extraction branch — and renders under any failed or flagged quote.
