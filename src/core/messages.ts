@@ -1,4 +1,12 @@
-import type { Offer, ProbeReport, QuoteFailure, RunState, SearchPlan, VendorId } from './types.js';
+import type {
+  Offer,
+  ProbeReport,
+  QuoteFailure,
+  RunState,
+  SearchPlan,
+  Trip,
+  VendorId,
+} from './types.js';
 
 /** Popup -> background. */
 export type PopupRequest =
@@ -16,7 +24,23 @@ export type BackgroundRequest = PopupRequest | ProbeRequest;
 
 /** Background's answer to PROBE_READY: scrape as this vendor, or stand down. */
 export type ProbeAssignment =
-  | { type: 'PROBE_START'; vendor: VendorId; quoteId: string; timeoutMs: number }
+  | {
+      type: 'PROBE_START';
+      vendor: VendorId;
+      quoteId: string;
+      timeoutMs: number;
+      /**
+       * The itinerary and code to type into the vendor's own search form.
+       *
+       * Only needed by vendors that cannot be deep-linked at all: Enterprise
+       * keeps its search in session state, so the URL the tab opens on carries
+       * nothing and this is the only channel the trip can reach the page by.
+       * Vendors with a working deep link ignore both fields — the trip is
+       * already in their URL.
+       */
+      trip: Trip;
+      code: string;
+    }
   | { type: 'PROBE_IDLE' };
 
 /** Background -> popup, both as a GET_STATE reply and as a live broadcast. */

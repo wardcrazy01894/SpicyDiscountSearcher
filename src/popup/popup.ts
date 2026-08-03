@@ -376,6 +376,8 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   'probe-timeout': 'no answer before the deadline',
   'probe-empty': 'page loaded, no price appeared',
   'extract-threw': 'could not read this page',
+  'form-fill': 'could not fill the search form',
+  'form-submit': 'search form never returned results',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
   cancelled: 'cancelled',

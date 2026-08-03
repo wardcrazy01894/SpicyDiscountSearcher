@@ -172,9 +172,17 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`. The popup renders a short phrase per code and keeps the raw message
-in a tooltip. Assert the **code** in tests; rewording a message must not change
-what the system believes happened.
+`cancelled`, `form-fill`, `form-submit`. The popup renders a short phrase per
+code and keeps the raw message in a tooltip. Assert the **code** in tests;
+rewording a message must not change what the system believes happened.
+
+The last two have no emitter yet. They exist for vendors that cannot be
+deep-linked at all — Enterprise, Budget and National keep the search in session
+state, so a driver has to fill their form — and they are on `PROBE_FAILURES`
+because a missing field and a submit that went nowhere are things only the page
+can see. `form-fill` is deliberately distinct from `extract-threw`: it fails at
+the opposite end, before the page was ever asked for a price, so "no price
+appeared" would be a lie.
 
 `Quote.report` carries what the probe actually saw — landed path, page title,
 offer count, extraction branch — and renders under any failed or flagged quote.

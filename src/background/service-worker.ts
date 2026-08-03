@@ -263,7 +263,16 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
  * diagnosis — including plausible-looking codes like `cancelled` or
  * `tab-closed`, which would misattribute the failure to the user.
  */
-const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
+const PROBE_FAILURES = new Set<QuoteFailure>([
+  'extract-threw',
+  'probe-empty',
+  // Both belong to the page in the same way the two above do: only the content
+  // script can see that a field was missing or that submitting went nowhere.
+  // Neither implies anything about the user or the tab, which is the property
+  // that disqualifies `cancelled` and `tab-closed`.
+  'form-fill',
+  'form-submit',
+]);
 
 /**
  * Did the deep link land somewhere other than the search we asked for?
@@ -745,6 +754,8 @@ chrome.runtime.onMessage.addListener(
             vendor: quote.candidate.vendor,
             quoteId,
             timeoutMs: remaining,
+            trip: active.state.plan.trip,
+            code: quote.candidate.code,
           } satisfies ProbeAssignment);
           return;
         }
