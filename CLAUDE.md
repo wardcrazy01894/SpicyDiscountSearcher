@@ -342,10 +342,54 @@ close). Never pass it a URL or a code.
   except Avis and Hertz (see README). Budget, Enterprise and National are worse
   than unverified: all three keep the search in session state, so no query
   string can express it and the builders they have today cannot ever work.
-- MV3 can terminate the service worker mid-run. `GET_STATE` now settles such a
-  snapshot instead of leaving it looking live forever, and a restarted worker
-  closes the window its predecessor orphaned — but the in-flight quotes are
-  still lost.
+- MV3 can terminate the service worker mid-run, and did so on **any run
+  containing a page that does not price**: the probe is silent until prices
+  settle or its 45s deadline passes, which is longer than Chrome's ~30s idle
+  limit. Not on _every_ run — `PROBE_READY` and each settled quote reset the
+  countdown, so a race where both pages price in seconds never tripped it.
+  `KEEPALIVE_MS` now pokes an extension API every 20s for the life of a run.
+
+  The recovery paths remain and still matter, because a keepalive is a
+  mitigation rather than a guarantee — Chrome can still reclaim a worker under
+  memory pressure. `GET_STATE` settles a stale snapshot instead of leaving it
+  looking live forever, a restarted worker closes the window its predecessor
+  orphaned, and the in-flight quotes are still lost when it happens.
+
+  `KEEPALIVE_CEILING_MS` stops it after ten minutes **with no quote settling** —
+  inactivity, not elapsed time. As a wall clock it was reachable by an ordinary
+  race (roughly `13 x lanes` codes, so 26 at the default concurrency of two,
+  against a popup maximum of 60), and a run past it lost its keepalive mid-race
+  and left the rest of its quotes `interrupted` with their tabs open: the exact
+  bug this whole section is about, reintroduced by the guard meant to bound it.
+  `finishQuote` extends it, so a healthy race never trips it and a stuck one
+  still does — and `cancelRun` stops the keepalive when the cancelled run is
+  still the current one, because settling every quote to cancel them would
+  otherwise buy a wedged run another full ceiling after the user had already
+  cancelled it. Guarded on `active === run` rather than unconditional: a cancel
+  captures its run and then suspends three times, so an earlier one can resume
+  after a newer run is live and clear _its_ interval — which was the
+  unconditional version's own regression, and is the same guard teardown and
+  `forgetWindowId` already use.
+
+  The ceiling is derived from `PROBE_TIMEOUT_MS + STAGGER_MS` rather than
+  written as ten minutes: as inactivity it only has to exceed the longest
+  legitimate gap between two settles, which is one lane's deadline plus its
+  stagger and does not grow with the number of codes. MV3 suspension
+  used to be the backstop for a wedged run — `runQuote` awaits `ensureWindow`
+  and `chrome.tabs.create` with no timeout around either, so a lane parked on a
+  `windows.create` that never settles ended when Chrome reclaimed the worker.
+  Pinning the worker removed that, and would otherwise hold a minimised window
+  open indefinitely while the popup looks idle.
+
+  The tests assert the **gap** between pokes, not a count, and the difference is
+  the whole mechanism. A count-based version passed while `setTimeout` stood in
+  for `setInterval` — a keepalive firing once at 20s and never again, which
+  reproduces the original bug exactly. Deleting a guard is the weak mutation
+  here; these are the ones that matter, and all four were checked to fail:
+  no `startKeepAlive`, no `stopKeepAlive`, one-shot instead of repeating, and
+  `KEEPALIVE_MS = 29_500` — which leaves no margin for a delayed tick and which
+  a "under 30s" assertion would have waved through.
+
 - Marking Budget, Enterprise and National unsearchable removes **27 codes and
   six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
   `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and

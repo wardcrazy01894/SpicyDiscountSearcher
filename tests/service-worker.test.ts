@@ -65,6 +65,295 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * src/background/service-worker.ts PROBE_TIMEOUT_MS, restated so the horizon
+ * below can be derived from it rather than hard-coded to a number that silently
+ * stops covering the run if the deadline shrinks.
+ */
+const PROBE_TIMEOUT_MS = 45_000;
+/** How long the keepalive assertions watch a live run. */
+const HORIZON_MS = 150_000;
+/**
+ * The largest acceptable silence, against Chrome's ~30s idle shutdown.
+ *
+ * KEEPALIVE_MS is meant to have a usable band under this rather than one pinned
+ * value, which is why the poke-count assertions below derive their thresholds
+ * from it. A hand-written band was wrong in three successive rounds, because
+ * adding any count assertion silently moves the boundary.
+ */
+const MAX_GAP_MS = 25_000;
+/** Pokes to expect over `ms`, if no silence exceeds MAX_GAP_MS. */
+const pokesOver = (ms: number): number => Math.floor(ms / MAX_GAP_MS);
+/** src/background/service-worker.ts KEEPALIVE_CEILING_MS, same derivation. */
+const CEILING_MS = 13 * (PROBE_TIMEOUT_MS + 750);
+
+describe('surviving MV3 suspension', () => {
+  it('never leaves a 30s gap while a run is in flight', async () => {
+    // The bug this pins: a probe messages the background only when prices go
+    // stable or the 45s deadline passes, so a page that never prices leaves the
+    // worker idle far past Chrome's 30s suspension point. The worker died
+    // mid-race, its setTimeout deadlines died with it, the probe tabs were left
+    // open, and the next popup stamped every quote `interrupted` — burying the
+    // `probe-empty` and report that would have said what the page actually did.
+    //
+    // A test cannot make Chrome suspend a worker it is not running in, so the
+    // observable is the keepalive call itself. Counting pokes is not enough:
+    // one poke satisfies "greater than zero", and `setTimeout` in place of
+    // `setInterval` — a keepalive that fires once at 20s and never again —
+    // passed a count-based version of this test while reproducing the original
+    // bug exactly. The defining property is the *gap*, so that is what is
+    // asserted, and it also pins KEEPALIVE_MS's margin: 29_500 would pass a
+    // "under 30s" check with nothing left over for a delayed tick.
+    //
+    // The horizon has to outlast several keepalive periods, and the run has to
+    // still be live across all of it — so the candidate count is derived from
+    // the probe deadline rather than guessed. One lane, each candidate holding
+    // it for PROBE_TIMEOUT_MS, plus one spare so the run cannot finish early if
+    // that constant is lowered.
+    await bootWorker();
+    const candidates = Math.ceil(HORIZON_MS / PROBE_TIMEOUT_MS) + 1;
+    const long = { ...plan(1) };
+    long.candidates = Array.from({ length: candidates }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    const startedAt = Date.now();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: long });
+    await settle();
+    await settle(HORIZON_MS);
+
+    // The run must still be live, or the gaps below would just be measuring
+    // teardown.
+    expect((await getState())?.finishedAt).toBeUndefined();
+
+    const times = [startedAt, ...chromeMock.keepAlivePingTimes()];
+    const gaps = times.slice(1).map((at, index) => at - times[index]!);
+    expect(gaps.length).toBeGreaterThanOrEqual(Math.floor(HORIZON_MS / MAX_GAP_MS));
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(MAX_GAP_MS);
+  });
+
+  it('gives up after the ceiling rather than pinning the worker forever', async () => {
+    // Deleting the ceiling check outright passed the entire suite before this
+    // existed, which is how the inheritance bug below got in.
+    //
+    // What it is for: runQuote awaits ensureWindow and tabs.create with no
+    // timeout around either, so a lane parked on a windows.create that never
+    // settles has no deadline at all. MV3 suspension used to end that; holding
+    // the worker up removed the backstop and would keep a minimised window open
+    // indefinitely while the popup looks idle.
+    await bootWorker();
+    // Nothing ever settles: windows.create never resolves, so no quote finishes
+    // and nothing extends the ceiling. That is the stuck run this is for.
+    chromeMock.delayWindowCreate(10 * CEILING_MS);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    await settle(CEILING_MS - 60_000);
+    const beforeCeiling = chromeMock.keepAlivePings();
+    expect(beforeCeiling).toBeGreaterThan(0);
+
+    // Past the ceiling it must stop promptly, not merely eventually: asserting
+    // "fewer than sixty more pokes" held for any sane period and even with the
+    // ceiling deleted, which is the shape 279fb3b went through the suite to
+    // remove.
+    await settle(2 * 60_000);
+    const afterCeiling = chromeMock.keepAlivePings();
+    expect(afterCeiling - beforeCeiling).toBeLessThanOrEqual(60_000 / MAX_GAP_MS + 2);
+    await settle(CEILING_MS);
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+  });
+
+  it('does not give up on a long run that is still settling quotes', async () => {
+    // The ceiling measures *inactivity*, not elapsed time, and this is why. As
+    // a wall clock it was reachable by an ordinary race — roughly 13 x lanes
+    // codes, so 26 at the default concurrency of two, against a popup maximum
+    // of 60 — and a run past it lost its keepalive mid-race, leaving the rest of
+    // its quotes `interrupted` with their tabs open. Exactly the bug this PR
+    // exists to fix, reintroduced by the guard meant to bound it.
+    await bootWorker();
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 30 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: many });
+    await settle();
+
+    // Answer each tab as it opens, so the run stays healthy but runs long.
+    const start = Date.now();
+    while (Date.now() - start < CEILING_MS + 3 * 60_000) {
+      const tabId = [...chromeMock.tabs.keys()].at(-1);
+      if (tabId !== undefined) {
+        await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+      }
+      await settle(30_000);
+    }
+
+    // Liveness first: if the run drained early the keepalive would stop for a
+    // legitimate reason and this would fail with the same message the real bug
+    // produces.
+    expect((await getState())?.finishedAt).toBeUndefined();
+    const times = chromeMock.keepAlivePingTimes();
+    // Recency, not just the gaps between recorded pokes. A keepalive that dies
+    // at the ceiling leaves every *recorded* gap looking healthy — the silence
+    // after the last poke is invisible to a max-gap check, which is how an
+    // earlier version of this assertion let the wall-clock ceiling back in.
+    const last = times.at(-1) ?? 0;
+    expect(Date.now() - last).toBeLessThanOrEqual(MAX_GAP_MS);
+    const gaps = times.slice(1).map((at, index) => at - times[index]!);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(MAX_GAP_MS);
+  });
+
+  it('gives a second run its own ceiling instead of the first run’s remainder', async () => {
+    // The bug: `until` was captured when the interval was created, and
+    // startKeepAlive early-returns when one exists. A wedged first run whose
+    // teardown never fires left its deadline in place, so a later run inherited
+    // whatever was left of it and went quiet mid-race — the original bug, for
+    // the second run of the session.
+    //
+    // Scope note: this one does not isolate the ordering of the refresh against
+    // the idempotence check — the run below it does. Kept because the
+    // user-visible property is worth its own test: a second run gets a full
+    // ceiling, however that comes about.
+    await bootWorker();
+    chromeMock.delayWindowCreate(60 * 60_000);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    // Nine minutes into a ten-minute ceiling.
+    await settle(9 * 60_000);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const atSecondStart = chromeMock.keepAlivePings();
+    // The first run's ceiling would have fired 60s from here.
+    await settle(3 * 60_000);
+    const gained = chromeMock.keepAlivePings() - atSecondStart;
+    expect(gained).toBeGreaterThanOrEqual(pokesOver(3 * 60_000));
+  });
+
+  it('gives a run after a cancelled, wedged one a full ceiling', async () => {
+    // The user-visible property, pinned end to end: cancel a wedged run, wait
+    // out most of its ceiling, start another, and the new run gets a full one.
+    //
+    // It does *not* isolate the ordering of the `keepAliveUntil` refresh
+    // against startKeepAlive's idempotence check, and nothing does any more —
+    // `cancelRun` now stops the interval, so the next `startKeepAlive` always
+    // finds a null timer and creates a fresh deadline whichever order those two
+    // lines are in. The ordering is kept because it is the direct statement of
+    // the invariant rather than a consequence of teardown, but it is redundant
+    // and therefore unpinnable. Recorded rather than dressed up: an earlier
+    // comment here justified it as "belt to the cancel path's braces", which
+    // was simply wrong about why.
+    await bootWorker();
+    chromeMock.delayWindowCreate(10 * CEILING_MS);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    await settle(60_000);
+    await chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle();
+    await settle(CEILING_MS - 2 * 60_000);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const atSecondStart = chromeMock.keepAlivePings();
+    await settle(3 * 60_000);
+    // Derived, so that tightening KEEPALIVE_MS cannot fail this for a reason
+    // unrelated to what it tests. Inheriting the first run's remainder would
+    // cut the count to about one.
+    expect(chromeMock.keepAlivePings() - atSecondStart).toBeGreaterThanOrEqual(
+      pokesOver(3 * 60_000),
+    );
+  });
+
+  it('does not let a late cancel stop a newer run’s keepalive', async () => {
+    // `cancelRun` captures `active` at the top and then has three suspension
+    // points, so a cancel that started earlier can resume *after* a newer run
+    // is live. An unguarded `stopKeepAlive()` at the end therefore clears the
+    // new run's interval: zero pokes for its whole life, which is the original
+    // bug arriving through the fix for a different one.
+    //
+    // Not reachable by clicking — the popup hides Cancel while a start is in
+    // flight — but reachable through the message protocol, and silent.
+    await bootWorker();
+    // Run A, finished. `active` is never nulled, so it stays cancellable.
+    // One candidate, so it is over well inside the wait — plan(1) is
+    // *concurrency* one with two candidates and would still be running.
+    const solo = { ...plan(1) };
+    solo.candidates = [plan().candidates[0]!];
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
+    await settle();
+    await settle(60_000);
+    expect((await getState())?.finishedAt).toBeDefined();
+
+    // Widen the window so both cancelRun calls park inside publish().
+    chromeMock.delaySessionWrites(5_000);
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 8 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    void chromeMock.fromPopup({ type: 'START_RUN', plan: many });
+    await settle(100);
+    void chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle(60_000);
+
+    expect((await getState())?.finishedAt).toBeUndefined();
+    const times = chromeMock.keepAlivePingTimes();
+    expect(Date.now() - (times.at(-1) ?? 0)).toBeLessThanOrEqual(MAX_GAP_MS);
+  });
+
+  it('stops poking after cancelling a run that never tore itself down', async () => {
+    // Cancelling settles every quote, and settling extends the ceiling — so
+    // this bought a wedged run another ten minutes of resident worker *after*
+    // the user cancelled, with the window closed and the popup idle. The
+    // "stops poking once the run is over" test below does not catch it because
+    // its run tears down normally, which stops the interval by the other route.
+    await bootWorker();
+    chromeMock.delayWindowCreate(10 * CEILING_MS);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    await settle(2 * 60_000);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(0);
+
+    await chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle();
+    const afterCancel = chromeMock.keepAlivePings();
+    await settle(CEILING_MS);
+    expect(chromeMock.keepAlivePings()).toBe(afterCancel);
+  });
+
+  it('stops poking once the run is over', async () => {
+    // A keepalive that outlives its run pins the worker resident for the whole
+    // browser session, which is the politeness contract broken in a way nobody
+    // would see — the window is closed and the popup looks idle.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+    // Establish the keepalive was actually running first. Without this the
+    // assertion below holds trivially when there is no keepalive at all —
+    // 0 pings before and 0 after — and the test would pass against the very
+    // bug it exists to describe.
+    await settle(30_000);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(0);
+
+    await chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle();
+    expect((await getState())?.finishedAt).toBeDefined();
+
+    const afterRun = chromeMock.keepAlivePings();
+    await settle(90_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterRun);
+  });
+});
+
 describe('starting a run', () => {
   it('opens exactly one window even though both lanes start together', async () => {
     // Every lane awaits publish() before reaching ensureWindow, so a

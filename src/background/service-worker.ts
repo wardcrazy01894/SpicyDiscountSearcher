@@ -30,6 +30,60 @@ const PROBE_TIMEOUT_MS = 45_000;
 const PROBE_GRACE_MS = 5_000;
 /** Breathing room between tab loads so we don't hammer a vendor. */
 const STAGGER_MS = 750;
+/**
+ * How often to poke an extension API while a run is in flight.
+ *
+ * Chrome suspends an idle MV3 service worker at 30s, and a probe is silent for
+ * far longer than that: it messages the background only when prices go stable
+ * or `PROBE_TIMEOUT_MS` passes, so 45s of nothing is the normal case for a page
+ * that never prices. The worker was therefore being killed mid-race — every
+ * `setTimeout` deadline above dies with it, the probe tabs are left open for
+ * the user to close by hand, and the next popup reads the stale snapshot and
+ * stamps every quote `interrupted`.
+ *
+ * That last part is why this is worth a hack: `interrupted` is a diagnosis of
+ * nothing, and it *replaces* the `probe-empty` and its report that would have
+ * said what the page actually did. The commonest failure became the one with
+ * no evidence.
+ *
+ * `setTimeout` does not keep a worker alive; an extension API call resets the
+ * idle countdown, so the call below is made purely for its side effect and its
+ * result is discarded. 20s leaves 10s of margin against the 30s limit.
+ *
+ * `chrome.alarms` is the tempting alternative and does not work here: its
+ * minimum period is 30s, right at the boundary, and an alarm *restarts* a dead
+ * worker rather than preventing the death — by which point `active` and every
+ * in-flight quote are already gone.
+ */
+const KEEPALIVE_MS = 20_000;
+/**
+ * How long the keepalive holds the worker up **with no quote settling**.
+ *
+ * Deliberately not a wall clock on the whole run. As elapsed time this was
+ * reachable by an ordinary race: break-even is roughly `13 x lanes` codes, so
+ * 26 at the default concurrency of two, well inside the popup's own maximum of
+ * 60. Past that the keepalive died mid-race and the remaining quotes came back
+ * `interrupted` with their tabs left open — precisely the failure this whole
+ * file is about, reintroduced by the guard meant to bound it.
+ *
+ * Measured as inactivity instead, it means what it was always for: a run that
+ * is *stuck*. `runQuote` awaits `ensureWindow` and `chrome.tabs.create` with no
+ * timeout around either, so a lane parked on a `windows.create` that never
+ * settles has no deadline of its own; it also settles no quotes, so it trips
+ * this. A healthy sixty-code race settles one every few seconds and never
+ * comes close.
+ *
+ * Derived rather than a round ten minutes, so the two cannot drift: as
+ * inactivity it only has to exceed the longest legitimate gap between two
+ * settles, which is one lane's probe deadline plus its stagger — independent of
+ * how many codes are in the run. Thirteen times that is ~10 minutes today and
+ * shrinks automatically if the deadline does.
+ *
+ * Tripping it returns the worker to Chrome's ordinary suspension rules, which
+ * is what shipped before this keepalive existed — the worst case is the old
+ * behaviour, not a new failure.
+ */
+const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
 
 interface ActiveRun {
   state: RunState;
@@ -155,6 +209,12 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // A settled quote is progress, and the keepalive ceiling measures the absence
+  // of it rather than elapsed time. Without this, a race longer than the
+  // ceiling loses its keepalive part-way through and its remaining quotes come
+  // back `interrupted` with their tabs left open — the exact symptom this file
+  // exists to prevent, reachable at 26 codes on the default concurrency of two.
+  extendKeepAlive();
   run.waiters.get(quoteId)?.();
   run.waiters.delete(quoteId);
 }
@@ -632,6 +692,75 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
   }
 }
 
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** When the current keepalive gives up. Refreshed by every run that starts. */
+let keepAliveUntil = 0;
+
+/**
+ * Push the ceiling out because a quote settled.
+ *
+ * The null check is not about late replies — a reply for an already-settled
+ * quote returns from `finishQuote` before reaching here. What it defends is a
+ * lane settling a quote *after* the ceiling has already fired inside a run
+ * that is still going: without it, progress would resurrect the keepalive the
+ * ceiling had just given up on, and a wedged run with one slow survivor could
+ * hold the worker indefinitely.
+ */
+function extendKeepAlive(): void {
+  if (keepAliveTimer === null) return;
+  keepAliveUntil = Date.now() + KEEPALIVE_CEILING_MS;
+}
+
+/**
+ * Hold the worker resident for a run, and (re)set its inactivity ceiling.
+ *
+ * Idempotent, so a second run starting while one is winding down cannot leave
+ * two intervals running.
+ */
+function startKeepAlive(): void {
+  // Refreshed unconditionally, *before* the idempotence check, and that
+  // ordering is the whole point. Holding the deadline in a closure captured
+  // when the interval was created meant a second run inherited the first run's
+  // remaining time: run A wedges on `windows.create` so its teardown never
+  // fires, the user cancels, and run B nine minutes later finds a live timer,
+  // returns early, and loses its keepalive sixty seconds in — the original bug,
+  // silently, for the second run of the session. The same thing happens inside
+  // `STAGGER_MS` of a cancel-then-restart, where A's teardown skips
+  // `stopKeepAlive` on the `active === run` guard and B inherits.
+  keepAliveUntil = Date.now() + KEEPALIVE_CEILING_MS;
+  if (keepAliveTimer !== null) return;
+  keepAliveTimer = setInterval(() => {
+    if (Date.now() >= keepAliveUntil) {
+      // MV3 suspension used to be the backstop for a wedged run. `runQuote`
+      // awaits `ensureWindow` and `chrome.tabs.create` with no timeout around
+      // either — the probe deadline only starts once the tab exists — so a lane
+      // parked on a `windows.create` that never settles ended when Chrome
+      // reclaimed the worker at 30s. Holding the worker up removed that, and
+      // would otherwise leave a minimised window open indefinitely while the
+      // popup looks idle. Past the ceiling we hand the decision back to Chrome,
+      // which is exactly the behaviour that shipped before this keepalive.
+      //
+      // Worth a line, because the only other evidence is the absence of pings
+      // in a console nobody is watching. No URL and no code, per warn()'s rule.
+      warn('keepalive ceiling reached; letting the worker suspend', 'run exceeded the ceiling');
+      stopKeepAlive();
+      return;
+    }
+    // Deliberately ignoring the result, and deliberately swallowing failure:
+    // this call exists only to reset Chrome's idle countdown, and a rejected
+    // keepalive is not something the user can act on. warn() is reserved for
+    // failures that cost the run something.
+    void chrome.runtime.getPlatformInfo().catch(() => {});
+  }, KEEPALIVE_MS);
+}
+
+function stopKeepAlive(): void {
+  if (keepAliveTimer === null) return;
+  clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
+}
+
 async function beginRun(plan: SearchPlan): Promise<RunState> {
   await cancelRun();
 
@@ -648,10 +777,25 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     waiters: new Map(),
   };
   active = run;
-  await publish();
+  startKeepAlive();
 
-  const queue = quotes.filter((q) => !q.finishedAt);
-  const lanes = Math.max(1, Math.min(plan.concurrency, MAX_CONCURRENCY));
+  let queue: Quote[];
+  let lanes: number;
+  try {
+    await publish();
+    queue = quotes.filter((q) => !q.finishedAt);
+    lanes = Math.max(1, Math.min(plan.concurrency, MAX_CONCURRENCY));
+  } catch (error) {
+    // The teardown below is the only thing that stops the interval, and it does
+    // not exist yet — so anything that throws between starting the keepalive
+    // and installing it would pin the worker resident for the rest of the
+    // browser session, with `active` pointing at a run that never tears down.
+    // `publish` is documented as unable to throw, but this file already carries
+    // a long comment about a publish() rejection escaping and skipping
+    // teardown, which was real once.
+    stopKeepAlive();
+    throw error;
+  }
 
   void (async () => {
     try {
@@ -660,6 +804,10 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
+        // Guarded on `active === run` with the rest of teardown: a newer run
+        // has started its own keepalive, and stopping unconditionally here
+        // would suspend the worker out from under it.
+        stopKeepAlive();
         run.state.finishedAt = Date.now();
         await closeWindow(run);
         await publish();
@@ -694,6 +842,25 @@ async function cancelRun(): Promise<void> {
 
   run.state.finishedAt ??= Date.now();
   await publish();
+  // Last, after the closes and the final publish, so teardown itself is still
+  // covered by a resident worker.
+  //
+  // Needed because cancelling settles every quote, and settling extends the
+  // ceiling. Without this, cancelling a run whose lane is wedged on
+  // `windows.create` — the case where teardown never fires, so nothing else
+  // ever stops the interval — bought the worker another full ceiling *after*
+  // the cancel, with the window closed and the popup idle. Measured at 27
+  // further pokes against 2 before the inactivity change, so this is a
+  // regression that arrived with it rather than a pre-existing gap.
+  //
+  // Guarded on `active === run` for the same reason the teardown block is, and
+  // the unguarded version was a regression of its own: `run` is captured at the
+  // top of this function and three suspension points follow, so a `cancelRun`
+  // that started earlier can resume *after* a newer run is live and stop its
+  // keepalive — zero pokes, total silence, the original bug. Not reachable by
+  // clicking today, because Cancel is hidden while a start is in flight, but
+  // reachable through the message protocol and invisible when it happens.
+  if (active === run) stopKeepAlive();
 }
 
 chrome.runtime.onMessage.addListener(
