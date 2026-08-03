@@ -7,13 +7,10 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.avis.com/*",
-    "https://www.budget.com/*",
-    "https://www.enterprise.com/*",
     "https://www.hertz.com/*",
     "https://www.hilton.com/*",
     "https://www.hyatt.com/*",
     "https://www.marriott.com/*",
-    "https://www.nationalcar.com/*",
     "https://www.sixt.com/*"
   ],
   "background": {
@@ -24,13 +21,10 @@
     {
       "matches": [
         "https://www.avis.com/*",
-        "https://www.budget.com/*",
-        "https://www.enterprise.com/*",
         "https://www.hertz.com/*",
         "https://www.hilton.com/*",
         "https://www.hyatt.com/*",
         "https://www.marriott.com/*",
-        "https://www.nationalcar.com/*",
         "https://www.sixt.com/*"
       ],
       "js": ["content.js"],

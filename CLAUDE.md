@@ -30,8 +30,62 @@ encode other people's websites. They will break. Both are deliberately isolated:
 
 - Deep links are one function per vendor with a `confidence` flag, which rides
   on the `Quote` and shows in the popup. Everything else calls `buildDeepLink`
-  and doesn't care. Every builder is `'best-effort'` today, so the popup says so
-  once for the whole list rather than badging every row.
+  and doesn't care. **Avis and Hertz are `'verified'`**; the rest are still
+  `'best-effort'`. Both were captured from a search run by hand and then proved
+  to _replay_ rather than merely load — Avis by changing the airport and
+  watching the results page name Tampa, Hertz by changing it and watching the
+  inventory change (36 vehicles at $31-$133 against 31 at $36-$111). Loading
+  proves nothing on its own; that is the whole lesson of Enterprise below.
+
+  Hertz needed the second technique because its vehicles step never names the
+  location on screen, so there was nothing to read. Differing prices _and_
+  counts is what rules out a default search.
+
+  **Budget, Enterprise and National throw instead of building.** They were
+  observed ignoring the query string entirely, and returning a URL for them was
+  the worst available option: the landing page answers with a marketing
+  "from $19/day", the probe reads it as a real price, and nothing downstream
+  can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
+  with the verified vendors and wins on being cheapest. `landedElsewhere`
+  cannot catch it either, because `finalPath` is truncated at the first `#` and
+  `reservation.html#car_select` therefore compares equal to the path asked for.
+  `link-build` is visible; that is not. Same trade as the malformed date and
+  the one-way trip.
+
+  They are also `searchable: false`, which is the half that matters to the user.
+  Throwing alone left them selectable, and `interleaveByVendor` round-robins one
+  candidate per vendor — so three vendors that could not run took **half** the
+  default cap of twelve, and the plan line promised codes the popup already knew
+  would fail. `starwood` had the same shape and the same answer for years: the
+  codes stay in the database, the vendor gets no chip, no candidate, and no host
+  permission. Dropping those three hosts from the manifest is a real reduction
+  in what the extension may read.
+
+  `'verified'` is a claim about the **URL shape**, not about every itinerary,
+  and the difference is load-bearing. Both were proved on a US airport round
+  trip; both hard-code a US country/region and a driver age of 25, and neither
+  was tested outside the US. Both therefore **refuse one-way trips** rather than
+  guess: Avis honoured `return_location_code` on one replay and ignored it on
+  two others, rendering LAX to PHL for a URL asking LAX to LAX, because a return
+  location left in the browser session won. The probe tabs share the user's
+  profile, so that is reachable in normal use. `popup.ts` also validates the
+  IATA shape before any tab opens — failing per-vendor would leave the race to
+  be decided only by Sixt, whose builder takes the location as free text and
+  has never been verified either way.
+
+  The popup's single caveat now renders even when nothing is unverified. It was
+  `if (unverified > 0)`, so the moment these two became verified a run of only
+  Avis and Hertz — most of the car codes, and the obvious selection once the
+  others are known unusable — printed no caveat at all. Silence reads as the
+  stronger promise. Badging per row is still the better fix.
+
+  Verifying one is worth the effort because the alternative is not "a stale
+  parameter" but "no search at all": Enterprise keeps its itinerary in session
+  state, so its URL carries nothing and a builder for it cannot exist. Test a
+  captured URL in a fresh incognito window before writing one. A `curl` 403
+  proves nothing either way — both Enterprise paths return it, including the
+  live one.
+
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
   the sweep away from nav and footer. **No vendor defines an `offer` selector**,
@@ -65,8 +119,10 @@ The two things that would silently produce a wrong answer, and their guards:
 - **A link that missed its search.** A vendor home page still shows
   "from $19/day", so the quote comes back `ok` and, being cheapest, wins. The
   probe reports its landed path; a quote that landed on the site root is flagged
-  in the popup. Structurally blind for Avis and Budget, whose deep links target
-  `/en/home` already.
+  in the popup. No longer blind for Avis, whose builder now targets
+  `/en/reservation/vehicle-availability`, so landing on the root is once again
+  the unambiguous tell it is everywhere else — and no longer relevant to Budget,
+  which builds no link at all.
 - **A number that was never a rate.** "Total taxes and fees: $57.20" carries the
   word `total`, so it was tagged `total` — the most trusted basis — and being
   the cheapest number there it became the page's headline price. Bucketing
@@ -177,25 +233,22 @@ code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
 The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
-either — see below. They exist for the vendors whose URL cannot express a
-search. On this branch that is four, not three: Budget **and Avis** deep-link to
-`/en/home`, which is a home page whatever the query string says, and Enterprise
-and National target a reservation path a hand-run search never produces. Every
-one of them still gets the code and the whole itinerary in `location.search`;
-the sites act on none of it, so something has to re-deliver the trip where the
-page will honour it.
+either — see below. They exist for Budget, Enterprise and National, whose sites
+ignore the query string entirely: Enterprise's results page is a bare
+`#car_select`, Budget's a bare `#/vehicles`. All three now refuse to build a URL
+and are `searchable: false`, so nothing routes a run to them at all; the codes
+stay in the database waiting for something that can drive a form.
 
 Driving the form is the likely answer rather than a settled one; Enterprise's is
 a multi-step wizard whose real inputs are `display:none` behind custom controls,
 with no discount-code field on the first step, so a single fill-and-submit
 function is the wrong shape.
 
-Both that paragraph and the matching comment in `messages.ts` describe
-`deeplinks.ts` **as it is on this branch**, and the verified-deep-links work
-changes it underneath them — Avis gains a real search URL and three builders
-stop producing a URL at all. Whichever of the two lands second owns
-reconciling this, and the same applies to `landedElsewhere`'s "blind for avis
-and budget by construction" comment.
+(This paragraph and the matching comment in `messages.ts` were written when the
+plumbing landed first and described four vendors deep-linking to `/en/home`,
+including Avis. The reconciliation that text asked for is this edit: Avis has a
+real search URL now, the other three have none, and `landedElsewhere`'s
+docstring has been corrected too.)
 
 `form-fill` is deliberately distinct from `extract-threw`: it fails at the
 opposite end, before the page was ever asked for a price, so "no price appeared"
@@ -234,7 +287,7 @@ not be told apart from a consent interstitial or a country picker.
 
 It cannot always read it. The manifest holds no `tabs` permission — PR #5
 dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
-current URL is not one of the nine vendor hosts. Not a gap to paper over with a
+current URL is not one of the six vendor hosts still in the manifest. Not a gap to paper over with a
 permission, but not a diagnosis either: all it establishes is that the tab's
 address is unreadable, which is equally true of a redirect off the vendor's
 site and of a load that never committed (`about:blank`, or `chrome-error://`
@@ -285,11 +338,23 @@ close). Never pass it a URL or a code.
 
 ## Known gaps
 
-- Deep-link query params are unverified against live sites (see README).
+- Deep-link query params are unverified against live sites for every vendor
+  except Avis and Hertz (see README). Budget, Enterprise and National are worse
+  than unverified: all three keep the search in session state, so no query
+  string can express it and the builders they have today cannot ever work.
 - MV3 can terminate the service worker mid-run. `GET_STATE` now settles such a
   snapshot instead of leaving it looking live forever, and a restarted worker
   closes the window its predecessor orphaned — but the in-flight quotes are
   still lost.
+- Marking Budget, Enterprise and National unsearchable removes **27 codes and
+  six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
+  `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and
+  `University of Maryland` have no code at any reachable vendor, so they vanish
+  from the company list rather than appearing greyed out. Six more drop out of
+  the car list and survive under hotels. There is precedent — twelve
+  starwood-only companies have been invisible for as long as that flag has
+  existed — and the alternative is listing codes that cannot be raced, but it
+  is a real loss and the only explanation lives in the README.
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison

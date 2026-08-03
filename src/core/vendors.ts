@@ -23,7 +23,14 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'BCD',
     host: 'www.budget.com',
-    searchable: true,
+    // Not searchable: the site ignores the query string entirely, so no deep
+    // link can express a search. Same treatment as starwood — the codes stay in
+    // the database, but the vendor gets no chip, no candidates and no host
+    // permission. Leaving it searchable while its builder throws was worse than
+    // either: interleaveByVendor round-robins one candidate per vendor, so
+    // three doomed vendors took *half* the default cap of 12 and the plan line
+    // promised codes the popup already knew could not run.
+    searchable: false,
   },
   {
     id: 'enterprise',
@@ -31,8 +38,17 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Corporate account',
     host: 'www.enterprise.com',
-    searchable: true,
-    // The workbook stores one shared "Enterprise / National" column.
+    // Not searchable: the site ignores the query string entirely, so no deep
+    // link can express a search. Same treatment as starwood — the codes stay in
+    // the database, but the vendor gets no chip, no candidates and no host
+    // permission. Leaving it searchable while its builder throws was worse than
+    // either: interleaveByVendor round-robins one candidate per vendor, so
+    // three doomed vendors took *half* the default cap of 12 and the plan line
+    // promised codes the popup already knew could not run.
+    searchable: false,
+    // The workbook stores one shared "Enterprise / National" column. Kept even
+    // though both ends are unsearchable today, because it is a fact about the
+    // data rather than about whether we can search it.
     alsoTryAs: ['national'],
   },
   {
@@ -41,7 +57,14 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Contract ID',
     host: 'www.nationalcar.com',
-    searchable: true,
+    // Not searchable: the site ignores the query string entirely, so no deep
+    // link can express a search. Same treatment as starwood — the codes stay in
+    // the database, but the vendor gets no chip, no candidates and no host
+    // permission. Leaving it searchable while its builder throws was worse than
+    // either: interleaveByVendor round-robins one candidate per vendor, so
+    // three doomed vendors took *half* the default cap of 12 and the plan line
+    // promised codes the popup already knew could not run.
+    searchable: false,
   },
   {
     id: 'sixt',

@@ -10,7 +10,7 @@ import {
   searchCompanies,
 } from '../src/core/codes.js';
 import type { Candidate } from '../src/core/types.js';
-import { VENDORS, vendorsFor } from '../src/core/vendors.js';
+import { VENDORS, getVendor, vendorsFor } from '../src/core/vendors.js';
 
 const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
 
@@ -137,12 +137,23 @@ describe('buildCandidates', () => {
     expect(shared?.companyName).toContain('PwC');
   });
 
-  it('tries Enterprise contract ids at National too', () => {
-    const candidates = buildCandidates({ vendors: ['enterprise'] });
-    expect(candidates.some((c) => c.vendor === 'national')).toBe(true);
-    // The same code should appear once per brand, not merged into one.
-    const pwc = candidates.filter((c) => c.code === 'XZ42PWC').map((c) => c.vendor);
-    expect(pwc.sort()).toEqual(['enterprise', 'national']);
+  it('proposes nothing for Enterprise, whose search cannot be reached', () => {
+    // Enterprise and National are `searchable: false` — their sites ignore the
+    // query string, so no deep link can express a search for them. Their codes
+    // stay in the database and are still listed under their companies; they
+    // simply cannot be raced.
+    //
+    // This replaces a test asserting an Enterprise contract id also produced a
+    // National candidate. That fan-out (`alsoTryAs`) is intact and still
+    // filters on `searchable`, but with both ends unsearchable it is dormant,
+    // so there is nothing left to assert about it here. It wakes up if either
+    // vendor becomes reachable again.
+    expect(buildCandidates({ vendors: ['enterprise'] })).toEqual([]);
+    expect(buildCandidates({ vendors: ['national'] })).toEqual([]);
+    // The fan-out itself is dormant, not deleted, and deleting it currently
+    // fails nothing — so pin the registry fact it depends on. Whoever makes
+    // either brand reachable again needs this edge to still exist.
+    expect(getVendor('enterprise').alsoTryAs).toEqual(['national']);
   });
 
   it('never proposes a code for an unsearchable vendor', () => {
@@ -247,7 +258,13 @@ describe('interleaveByVendor', () => {
     // this guards — and goes red merely because a lane runs short.
     const withCodes = new Set(all.map((c) => c.vendor));
     expect(perVendor.size).toBe(withCodes.size);
-    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(3);
+    // Five, which is the true worst case: Sixt has three codes, so the other
+    // two vendors absorb the remaining nine and one of them legitimately
+    // reaches five of twelve. An exact share (`ceil(12 / vendors)` = 4) goes
+    // red merely because a lane runs short; half the cap would permit {6,3,3},
+    // which is closer to the twelve-Avis-codes bug this guards than to a fair
+    // spread.
+    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(5);
   });
 
   it('spreads the default cap across companies, not just vendors', () => {

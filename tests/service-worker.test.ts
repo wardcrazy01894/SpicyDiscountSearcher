@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
+import { buildDeepLink } from '../src/core/deeplinks.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -169,7 +170,7 @@ describe('politeness', () => {
     const solo = { ...plan(1) };
     solo.candidates = [
       ...plan().candidates,
-      { companySlug: 'initech', companyName: 'Initech', vendor: 'budget', code: 'B1', note: null },
+      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
     ];
     await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
     await settle();
@@ -352,14 +353,39 @@ describe('diagnosing a run afterwards', () => {
     expect((await getState())?.quotes[0]?.report?.path).toBe('vendor-selectors');
   });
 
-  it('carries the deep-link confidence onto the quote', async () => {
+  it('carries each quote its own builder’s confidence, not a single value', async () => {
+    // The plan mixes a verified vendor with an unverified one *inside the run*,
+    // which is the whole point. Two earlier versions of this test did not:
+    //
+    // - `every(q => q.confidence === 'best-effort')` was true only while no
+    //   builder was verified, and went red on a change that did not touch the
+    //   worker at all.
+    // - Comparing each quote against `buildDeepLink(...)` looked stronger but
+    //   was weaker: with only hertz and avis in the plan, both sides return
+    //   `verified`, so hard-coding `confidence: 'verified'` in makeQuote passed.
+    //   Asserting an unverified vendor separately proved nothing about the
+    //   worker, because that vendor was never in the run.
+    //
+    // With sixt — still best-effort — in the plan alongside two verified
+    // vendors, a hard-coded flag fails whichever value it picks.
     await bootWorker();
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    const mixed = { ...plan(3) };
+    mixed.candidates = [
+      ...plan().candidates,
+      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
+    ];
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
     await settle();
 
-    // Every builder is best-effort today; the point is that it reaches the UI
-    // at all, rather than being computed and thrown away.
-    expect((await getState())?.quotes.every((q) => q.confidence === 'best-effort')).toBe(true);
+    const state = await getState();
+    expect(state?.quotes).toHaveLength(3);
+    for (const quote of state?.quotes ?? []) {
+      const expected = buildDeepLink(quote.candidate.vendor, quote.candidate.code, TRIP);
+      expect(quote.confidence).toBe(expected.confidence);
+    }
+    expect(new Set(state?.quotes.map((q) => q.confidence))).toEqual(
+      new Set(['verified', 'best-effort']),
+    );
   });
 });
 
@@ -818,7 +844,7 @@ describe('a timed-out tab the extension cannot see', () => {
   it('says so, rather than claiming the tab never navigated', async () => {
     // The manifest grants no `tabs` permission — PR #5 dropped it — so
     // chrome omits url and title for a tab whose current URL is not one of
-    // our nine vendor hosts. An off-origin redirect is therefore invisible,
+    // our six vendor hosts. An off-origin redirect is therefore invisible,
     // and it is *also* exactly when the content script stops running, i.e. a
     // leading cause of probe-timeout. Reporting "never navigated" there was a
     // confident wrong answer in the case this whole feature exists for.
