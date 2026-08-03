@@ -1,4 +1,5 @@
 import { extract } from '../core/extract.js';
+import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
 
@@ -51,12 +52,36 @@ function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
   };
 }
 
+/**
+ * A sentence naming the mismatch, or null when the page is describing our trip.
+ *
+ * Returns the message rather than a boolean so the popup's tooltip can say
+ * which location turned up — "the page priced a different trip" is a verdict,
+ * and the code the page actually showed is the evidence for it.
+ */
+function wrongTrip(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>): string | null {
+  if (!VERIFY_TRIP.has(assignment.vendor)) return null;
+  const { rendered, unexpected } = checkTrip(assignment.trip, document.body.innerText);
+  if (!unexpected) return null;
+  return `page shows ${rendered.join(', ')}, which is not the trip requested`;
+}
+
 function fingerprint(offers: Offer[]): string {
   return offers
     .map((o) => `${o.label ?? ''}|${o.amount}|${o.basis}`)
     .sort()
     .join(';');
 }
+
+/**
+ * Vendors whose results page states the trip plainly enough to check against.
+ *
+ * Opt-in per vendor for the same reason `VENDOR_SELECTORS` is: it reads a
+ * summary the vendor happens to render, which rots, and a false "wrong trip"
+ * throws away a good quote. Avis is here because it is the vendor observed
+ * pricing a different rental from the one asked for.
+ */
+const VERIFY_TRIP = new Set<string>(['avis']);
 
 async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>) {
   const deadline = Date.now() + assignment.timeoutMs;
@@ -99,12 +124,36 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
     previous = current;
 
     if (stableReads >= STABLE_REPEATS_REQUIRED) {
+      // Checked only once the page has settled, and only once prices exist:
+      // a summary read mid-render can still be showing the previous search,
+      // which would reject a quote that was about to be correct.
+      const wrong = wrongTrip(assignment);
+      if (wrong) {
+        await send({
+          type: 'PROBE_FAILED',
+          failure: 'wrong-trip',
+          message: wrong,
+          report: report(offers, path),
+        });
+        return;
+      }
       await send({ type: 'PROBE_RESULT', offers, report: report(offers, path) });
       return;
     }
   }
 
-  // Out of time. Partial results still beat nothing.
+  // Out of time. Partial results still beat nothing — but not if they describe
+  // somebody else's trip.
+  const wrongAtDeadline = latest.length > 0 ? wrongTrip(assignment) : null;
+  if (wrongAtDeadline) {
+    await send({
+      type: 'PROBE_FAILED',
+      failure: 'wrong-trip',
+      message: wrongAtDeadline,
+      report: report(latest, path),
+    });
+    return;
+  }
   if (latest.length > 0) {
     await send({ type: 'PROBE_RESULT', offers: latest, report: report(latest, path) });
   } else {

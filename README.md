@@ -24,8 +24,12 @@ The last row is the honest caveat. None of these vendors document their search
 URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.
 Two are now checked against the live sites and marked `'verified'`:
 
-- **Hertz** — `/us/en/book/vehicles`, code as `CDP`.
-- **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`.
+- **Hertz** — `/us/en/book/vehicles`, code as `CDP`. Works from a cold browser.
+- **Avis** — `/en/reservation/vehicle-availability`, code as `awd_number`. Needs
+  two things the URL cannot supply: its saved booking widget cleared (a
+  `document_start` content script does that, because Avis's own `localStorage`
+  outranks the query string), and a one-off bot check passed by hand in your
+  browser at the start of a session.
 
 Verified means the URL shape drives a real search, tested on a **US airport
 round trip**. It is not a promise about every itinerary: both hard-code a US

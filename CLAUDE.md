@@ -86,6 +86,28 @@ encode other people's websites. They will break. Both are deliberately isolated:
   proves nothing either way — both Enterprise paths return it, including the
   live one.
 
+- **A vendor's own saved state can outrank the URL.** Avis persists its booking
+  widget in `localStorage` under `booking-widget.store`, and that state wins over
+  the query string: a profile that had once searched Philadelphia rendered
+  "Tampa Intl Airport (TPA) - Philadelphia Intl Airport (PHL)" for a link asking
+  TPA to TPA. Real page, real prices, different rental — and invisible, because
+  `landedElsewhere` only fires on the site root.
+
+  Two halves, deliberately. `src/content/reset-widget-state.ts` clears that key
+  at **`document_start`**, which is the only moment before the page hydrates from
+  it — the probe runs at `document_idle` and is far too late, which is why this
+  is a separate content script rather than a few lines in the existing one. And
+  `verify-trip.ts` compares the codes the page _rendered_ against the trip that
+  was asked for, so if the prevention ever stops working the quote fails
+  `wrong-trip` instead of quietly pricing somebody else's journey. Prevention
+  without detection would mean trusting that a fix stayed fixed.
+
+  Both are opt-in per vendor, like the selectors: the storage key and the trip
+  summary are one vendor's implementation details, and a false "wrong trip"
+  throws away a good quote. **Not yet confirmed end to end in a loaded
+  extension** — the mechanism is measured (clearing the store fixes the page),
+  the `document_start` ordering is not.
+
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
   the sweep away from nav and footer. **No vendor defines an `offer` selector**,
@@ -236,7 +258,7 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`, `form-fill`, `form-submit`. The popup renders a short phrase per
+`cancelled`, `form-fill`, `form-submit`, `wrong-trip`. The popup renders a short phrase per
 code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
