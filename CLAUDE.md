@@ -254,25 +254,34 @@ docstring has been corrected too.)
 opposite end, before the page was ever asked for a price, so "no price appeared"
 would be a lie.
 
-`PROBE_START` binds a code to a _quote_, not to an _origin_, and that is a live
-bug rather than only a future one. A tab that redirects between two matched
-hosts — Avis and Budget are the same parent company — re-sends `PROBE_READY`
-under the same tab id and is handed the original quote's code and vendor.
+`PROBE_START` binds a code to a _quote_, not to an _origin_. A tab that
+redirects between two matched hosts re-sends `PROBE_READY` under the same tab id
+and is handed the original quote's code and vendor — so one vendor's prices
+would settle another vendor's quote, labelled with the wrong vendor and code,
+`status: 'ok'`.
 
-Calling that harmless for a read-only probe was wrong. The sweep runs on the
-sibling host whatever its markup does, because `extractOffers` falls back to
-`doc.body` when no `container` matches — **not** because every `container` list
-happens to end with `main`. The difference matters: deleting `main` from those
-nine lists looks like a fix and changes nothing. `landedElsewhere` then flags
-only a redirect that lands on a bare `/`, and even that gets the wrong
-diagnosis — "the link missed its search" for a link that reached one, on the
-wrong site.
+**No currently matched pair realises that**, and an earlier version of this
+paragraph claiming it was "a live bug rather than only a future one" was
+overstated. Its evidence was that Avis and Budget share a parent, and Budget
+left `host_permissions` when it became unsearchable. The six hosts the manifest
+still matches — avis, hertz, hilton, hyatt, marriott, sixt — are six distinct
+brands with no redirect between them. Starwood shares marriott.com but is
+`searchable: false`, so it never holds a quote to misattribute. A redirect to a
+_sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
+entirely, which is the `left-our-origins` case and not this one.
 
-So one vendor's prices settle another vendor's quote, labelled with the wrong
-vendor and code, `status: 'ok'`. A driver makes it worse rather than making it
-real — it would type a Budget code into an Avis form — but the misattribution
-exists today, which is why it is in Known gaps rather than here as a note for
-later.
+It goes live again the moment two hosts of related brands are both matched —
+which is exactly what happens if Budget returns alongside Avis once something
+can drive its form. Worth fixing then, and worth knowing now:
+
+If it did fire, it would not be caught. The sweep runs on the sibling host
+whatever its markup does, because `extract` falls back to `doc.body` when no
+`container` matches — **not** because every `container` list happens to end with
+`main`, so deleting `main` from those lists looks like a fix and changes
+nothing. `landedElsewhere` flags only a redirect landing on a bare `/`, and even
+that gets the wrong diagnosis: "the link missed its search" for a link that
+reached one, on the wrong site. A driver would make it worse still, typing one
+brand's code into another's form.
 
 `Quote.report` carries what the probe actually saw — landed path, page title,
 offer count, extraction branch — and renders under any failed or flagged quote.

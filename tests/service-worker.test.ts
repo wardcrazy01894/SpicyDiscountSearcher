@@ -310,6 +310,46 @@ describe('surviving MV3 suspension', () => {
     expect(Date.now() - (times.at(-1) ?? 0)).toBeLessThanOrEqual(MAX_GAP_MS);
   });
 
+  it('does not let a late settle resurrect a keepalive the ceiling gave up on', async () => {
+    // `extendKeepAlive` returns early when no interval exists, and that early
+    // return is the whole guard. Without it, a lane that settles a quote *after*
+    // the ceiling has fired — inside a run that is still going — restarts the
+    // keepalive and pushes the deadline out another full ceiling. A wedged run
+    // with one slow survivor would then hold the worker indefinitely, which is
+    // exactly what the ceiling exists to stop.
+    //
+    // Constructed by wedging windows.create for longer than the ceiling: nothing
+    // settles, so the ceiling fires; then the window finally opens, a tab
+    // answers, and a quote settles into a stopped keepalive.
+    await bootWorker();
+    chromeMock.delayWindowCreate(CEILING_MS + 2 * 60_000);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    await settle(CEILING_MS + 60_000);
+
+    const afterCeiling = chromeMock.keepAlivePings();
+    // The ceiling has fired and stayed fired.
+    await settle(30_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // Now the window opens and a quote settles.
+    await settle(2 * 60_000);
+    const tabId = [...chromeMock.tabs.keys()][0];
+    expect(tabId).toBeDefined();
+    await chromeMock.fromTab(tabId!, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    await settle(1_000);
+
+    // Progress must not restart it.
+    await settle(3 * 60_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // Scope note: this kills the mutation that matters — replacing
+    // extendKeepAlive's body with startKeepAlive(). Removing only the early
+    // return while keeping the assignment still passes, and should: writing
+    // keepAliveUntil with no interval running is dead state, not a
+    // resurrection, since both readers guard on keepAliveTimer.
+  });
+
   it('stops poking after cancelling a run that never tore itself down', async () => {
     // Cancelling settles every quote, and settling extends the ceiling — so
     // this bought a wedged run another ten minutes of resident worker *after*
