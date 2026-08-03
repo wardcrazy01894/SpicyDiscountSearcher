@@ -120,11 +120,22 @@ encode other people's websites. They will break. Both are deliberately isolated:
   airtight; registering the script only for the length of a run needs the
   `scripting` permission and belongs with the change that adds it.
 
-  **Confirmed end to end in a loaded extension**, which is what the two halves
-  were waiting on: the mechanism was measured (clearing the store fixes the
-  page) and `document_start` is documented to run before any other script, but
-  whether our injection actually wins that race against Avis's own early
-  scripts was an assumption until a real run returned Avis prices.
+  **Confirmed end to end in a loaded extension** — the mechanism was measured
+  (clearing the store fixes the page) and `document_start` is documented to run
+  before any other script, but whether our injection wins that race against
+  Avis's own early scripts was an assumption until a real run returned Avis
+  prices. It does.
+
+  **And then Avis rate-limited the profile.** Not the bot check — that at least
+  offers a way through — but a harder block, where the availability page stops
+  serving the check at all. Reached after a handful of runs racing several Avis
+  codes. So these two halves make Avis _correct_, and do nothing to make it
+  _sustainable_: the remaining problem is request volume, and it is a
+  politeness problem rather than a parsing one. Racing a dozen Avis codes is
+  what the extension is for and is also what Avis objects to. Whatever the
+  answer is — a per-vendor concurrency of one, a much longer stagger for this
+  vendor, or accepting that Avis can only be sampled — it is a separate change
+  and it is not made here.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope
