@@ -356,7 +356,14 @@ describe('surviving MV3 suspension', () => {
     const tabId = [...chromeMock.tabs.keys()][0];
     expect(tabId).toBeDefined();
     await chromeMock.fromTab(tabId!, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
-    await settle(1_000);
+    // Must exceed MAX_GAP_MS, or the window in which a resurrected keepalive
+    // would be *seen* is narrower than one of its own periods. With a 1s settle
+    // the kill had about a second of margin: KEEPALIVE_MS = 24_000 — legal under
+    // the band declared at the top of this file — left the mutation alive with
+    // nothing red, which would have made CLAUDE.md's "all five were checked to
+    // fail" false without a single failing test. The run has minutes of life
+    // left here, so the extra time is free.
+    await settle(MAX_GAP_MS + 5_000);
     expect((await getState())?.finishedAt).toBeUndefined();
     expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
 

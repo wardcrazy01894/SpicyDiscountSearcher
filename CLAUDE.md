@@ -270,9 +270,11 @@ brands with no redirect between them. Starwood shares marriott.com but is
 _sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
 entirely, which is the `left-our-origins` case and not this one.
 
-It goes live again the moment two hosts of related brands are both matched —
-which is exactly what happens if Budget returns alongside Avis once something
-can drive its form. Worth fixing then, and worth knowing now:
+It goes live again the moment **any** two matched hosts can redirect to each
+other. Related brands make that likely rather than being the condition — an
+affiliate hop, a shared booking platform or a country router would do it just as
+well — and Budget returning alongside Avis, once something can drive its form,
+is the concrete case to expect. Worth fixing then, and worth knowing now:
 
 If it did fire, it would not be caught. The sweep runs on the sibling host
 whatever its markup does, because `extract` falls back to `doc.body` when no
