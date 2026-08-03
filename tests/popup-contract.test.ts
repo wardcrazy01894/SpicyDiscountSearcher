@@ -353,6 +353,31 @@ describe('the popup half of the double-run guard', () => {
     expect(box).not.toMatch(/1 other code quoted daily rates/i);
   });
 
+  it('still shows the summary when a suspect quote is the only thing to explain', async () => {
+    // `savingsBox.hidden` had to learn about the second reason too, and nothing
+    // pinned that half: the sibling test above has a spread, so `!spread`
+    // short-circuits before the counts are consulted. One real quote and one
+    // suspect quote share no bucket pair, so there is no spread — and hiding
+    // the box would take the only sentence explaining why nothing was ranked
+    // with it, leaving a $35 row and no summary at all.
+    const winner = quote({
+      id: 'hertz:H1',
+      best: { label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' }],
+    });
+    const homePage = quote({
+      id: 'sixt:S1',
+      suspect: 'landed-elsewhere',
+      best: { label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 35, currency: 'USD', basis: 'per-day' }],
+    });
+    await caveatFor([winner, homePage]);
+
+    const box = document.querySelector<HTMLElement>('#savings');
+    expect(box?.hidden).toBe(false);
+    expect(box?.textContent ?? '').toMatch(/home page/i);
+  });
+
   it('always says something about the links, even when all are verified', async () => {
     // The whole block was deletable with the suite green, including the branch
     // this PR added: it used to be `if (unverified > 0)`, so a run of only

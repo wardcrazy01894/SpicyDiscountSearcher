@@ -224,7 +224,19 @@ describe('a quote that landed somewhere other than the search', () => {
     // ones, and only `pricedOnly`'s filter — in a different function — keeps a
     // quote out of both halves. Re-including suspect there would list the same
     // code twice and inflate the popup's count.
-    const ids = unrankedQuotes([landed(), real()]).map((q) => q.id);
+    //
+    // The suspect quote has to sit *outside* the primary bucket for this to mean
+    // anything. An earlier version used a suspect quote in the same basis and
+    // currency as the winner, so `comparisonGroups(...).slice(1)` was empty
+    // whatever `pricedOnly` did and the test passed under the very mutation its
+    // comment named.
+    const outsider = quote('sixt', 'ok', [['Economy', 35, 'total', 'EUR']]);
+    outsider.suspect = 'landed-elsewhere';
+    const ids = unrankedQuotes([
+      outsider,
+      real(),
+      quote('avis', 'ok', [['Economy', 100, 'per-day']]),
+    ]).map((q) => q.id);
     expect(ids.filter((id) => id === 'sixt')).toHaveLength(1);
   });
 

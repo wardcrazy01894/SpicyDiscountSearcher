@@ -68,6 +68,15 @@ export const VENDORS: Vendor[] = [
   },
   {
     id: 'sixt',
+    // Deliberately still searchable, and it is a close call worth recording
+    // here rather than only in the builder. Its deep link is *measured* to reach
+    // no search — `/php/reservation` 302s to the site root with the location
+    // ignored — which is the same evidence that made budget, enterprise and
+    // national unsearchable. It stays because nothing shows it cannot work at
+    // some other path, and because its quotes can no longer rank: a home-page
+    // price is flagged `suspect` and excluded by `compare.ts`, so the harm is
+    // bounded to three of the default twelve slots and the tabs they open.
+    // Revisit if that stops being true, or capture a working URL and fix it.
     label: 'Sixt',
     category: 'car',
     codeLabel: 'Corporate code',

@@ -155,12 +155,13 @@ export function orderForDisplay(quotes: Quote[]): Quote[] {
   // was rendered at the top of the list with the real winner highlighted
   // underneath it — a quieter version of the reading this all exists to remove.
   // Anything unranked sorts *after* every bucket. `suspect` is tested directly
-  // rather than inferred from a missing bucket key, because the common case is
-  // a home-page price in the *same* basis and currency as the winner: its key
-  // is present, so a `?? bucketRank.size` fallback never fires and the excluded
-  // quote sorted to the top on amount — rendered first, with the real winner
-  // highlighted underneath, which is a quieter version of the reading this
-  // whole change exists to remove.
+  // rather than inferred from a missing bucket key, because the common case is a
+  // home-page price in the *same* basis and currency as the winner: its key is
+  // present, the lookup succeeds, and it lands in the primary bucket on a
+  // legitimate hit. So `?? bucketRank.size` alone looked like the fix and did
+  // nothing — the excluded price still sorted to the top on amount, rendered
+  // first with the real winner highlighted underneath, which is a quieter
+  // version of the reading this whole exclusion exists to remove.
   const bucketOf = (quote: Quote): number =>
     quote.best && !quote.suspect
       ? (bucketRank.get(groupKey(quote.best)) ?? bucketRank.size)

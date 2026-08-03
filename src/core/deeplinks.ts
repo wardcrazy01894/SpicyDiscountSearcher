@@ -356,8 +356,14 @@ const BUILDERS: Record<VendorId, Builder> = {
    *
    * Until then the damage is contained rather than absent: the landing page is
    * the site root, so `landedElsewhere` flags the quote `suspect`, and
-   * `compare.ts` now keeps suspect quotes out of the ranking entirely. That
-   * matters because $35 is cheaper than any genuine rate and used to win.
+   * `compare.ts` keeps suspect quotes out of the ranking entirely. That matters
+   * because $35 is cheaper than any genuine rate and used to win.
+   *
+   * That containment is a measurement, not a property. `landedElsewhere` fires
+   * only on a landed path of `/`, so if this 302 ever targets `/en/` — a locale
+   * split, a market router, an A/B — the quote is no longer `suspect`, the $35
+   * re-enters the primary bucket and wins again, with nothing red and nothing on
+   * screen. It holds *while* the redirect target is the bare root.
    *
    * The airport-code rule `validate()` applies to the whole car form therefore
    * costs nothing here: `pickupStation` takes free text, but no value of it
