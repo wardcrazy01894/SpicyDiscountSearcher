@@ -350,7 +350,7 @@ const BUILDERS: Record<VendorId, Builder> = {
    * `https://www.sixt.com/` with the location field empty, the dates ignored,
    * and a marketing "$35" on the page. So this is not merely unverified in the
    * way the hotel builders are — it is known not to work, and the only reason
-   * it is not `unsearchable` alongside Budget and Enterprise is that nothing
+   * it is not `unsearchable` alongside Budget, Enterprise and National is that nothing
    * proves it *cannot* work. Its search may well be URL-expressible at some
    * other path; nobody has captured one. Do that before trusting it.
    *
