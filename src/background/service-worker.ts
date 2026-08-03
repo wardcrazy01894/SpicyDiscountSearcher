@@ -259,9 +259,21 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
 /**
  * The only failures a content script is allowed to claim.
  *
- * It runs in a page we do not control, so anything else it sends is not a
- * diagnosis — including plausible-looking codes like `cancelled` or
- * `tab-closed`, which would misattribute the failure to the user.
+ * The rule, rather than a list to be maintained twice: a page may claim only
+ * what it is the sole witness to. Every other member of `QuoteFailure` is the
+ * background's own knowledge, and a page sending one is not offering a
+ * diagnosis but forging ours. `cancelled` and `tab-closed` are the dangerous
+ * shapes because they read as plausible and misattribute the failure to the
+ * user — but enumerating the excluded ones here is what let this comment and
+ * CLAUDE.md drift apart, so the rule is the specification.
+ *
+ * `form-fill` and `form-submit` satisfy that rule and are still **deliberately
+ * absent**, because no code in this extension emits them yet. Admitting a code
+ * before its emitter exists means every instance that arrives is necessarily
+ * forged, and the popup would render "could not fill the search form" for a
+ * build containing no form-filling code at all — a confident, specific, wrong
+ * diagnosis with a 100% false-positive rate, which this repo rates as worse
+ * than none. They join the day a driver can send them.
  */
 const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
 
@@ -745,6 +757,8 @@ chrome.runtime.onMessage.addListener(
             vendor: quote.candidate.vendor,
             quoteId,
             timeoutMs: remaining,
+            trip: active.state.plan.trip,
+            code: quote.candidate.code,
           } satisfies ProbeAssignment);
           return;
         }
