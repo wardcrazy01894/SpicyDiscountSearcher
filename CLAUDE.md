@@ -247,7 +247,14 @@ close). Never pass it a URL or a code.
   looking live forever, a restarted worker closes the window its predecessor
   orphaned, and the in-flight quotes are still lost when it happens.
 
-  `KEEPALIVE_CEILING_MS` stops it after ten minutes regardless. MV3 suspension
+  `KEEPALIVE_CEILING_MS` stops it after ten minutes **with no quote settling** —
+  inactivity, not elapsed time. As a wall clock it was reachable by an ordinary
+  race (roughly `13 x lanes` codes, so 26 at the default concurrency of two,
+  against a popup maximum of 60), and a run past it lost its keepalive mid-race
+  and left the rest of its quotes `interrupted` with their tabs open: the exact
+  bug this whole section is about, reintroduced by the guard meant to bound it.
+  `finishQuote` extends it, so a healthy race never trips it and a stuck one
+  still does. MV3 suspension
   used to be the backstop for a wedged run — `runQuote` awaits `ensureWindow`
   and `chrome.tabs.create` with no timeout around either, so a lane parked on a
   `windows.create` that never settles ended when Chrome reclaimed the worker.

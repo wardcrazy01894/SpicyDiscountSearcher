@@ -57,14 +57,25 @@ const STAGGER_MS = 750;
  */
 const KEEPALIVE_MS = 20_000;
 /**
- * How long the keepalive may hold the worker up before giving in.
+ * How long the keepalive holds the worker up **with no quote settling**.
  *
- * Generous against a real run — 60 codes at the 45s probe deadline, one lane,
- * is 45 minutes, so this will cut short a genuinely enormous race — but the
- * alternative it guards is unbounded. Exceeding it returns the worker to
- * Chrome's ordinary suspension rules, which is what shipped before this
- * keepalive existed, so the worst case is the old behaviour rather than a new
- * failure.
+ * Deliberately not a wall clock on the whole run. As elapsed time this was
+ * reachable by an ordinary race: break-even is roughly `13 x lanes` codes, so
+ * 26 at the default concurrency of two, well inside the popup's own maximum of
+ * 60. Past that the keepalive died mid-race and the remaining quotes came back
+ * `interrupted` with their tabs left open — precisely the failure this whole
+ * file is about, reintroduced by the guard meant to bound it.
+ *
+ * Measured as inactivity instead, it means what it was always for: a run that
+ * is *stuck*. `runQuote` awaits `ensureWindow` and `chrome.tabs.create` with no
+ * timeout around either, so a lane parked on a `windows.create` that never
+ * settles has no deadline of its own; it also settles no quotes, so it trips
+ * this. A healthy sixty-code race settles one every few seconds and never
+ * comes close.
+ *
+ * Tripping it returns the worker to Chrome's ordinary suspension rules, which
+ * is what shipped before this keepalive existed — the worst case is the old
+ * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 10 * 60_000;
 
@@ -192,6 +203,12 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // A settled quote is progress, and the keepalive ceiling measures the absence
+  // of it rather than elapsed time. Without this, a race longer than the
+  // ceiling loses its keepalive part-way through and its remaining quotes come
+  // back `interrupted` with their tabs left open — the exact symptom this file
+  // exists to prevent, reachable at 26 codes on the default concurrency of two.
+  extendKeepAlive();
   run.waiters.get(quoteId)?.();
   run.waiters.delete(quoteId);
 }
@@ -661,6 +678,17 @@ let keepAliveUntil = 0;
  * Keep the worker resident for the duration of a run. Idempotent: a second run
  * starting while one is winding down must not leave two intervals running.
  */
+/**
+ * Push the ceiling out because something happened.
+ *
+ * Separate from `startKeepAlive` so that progress cannot accidentally *create*
+ * a keepalive: a late reply arriving after teardown must not resurrect one.
+ */
+function extendKeepAlive(): void {
+  if (keepAliveTimer === null) return;
+  keepAliveUntil = Date.now() + KEEPALIVE_CEILING_MS;
+}
+
 function startKeepAlive(): void {
   // Refreshed unconditionally, *before* the idempotence check, and that
   // ordering is the whole point. Holding the deadline in a closure captured

@@ -74,10 +74,13 @@ const PROBE_TIMEOUT_MS = 45_000;
 const HORIZON_MS = 150_000;
 /**
  * The largest acceptable silence, against Chrome's ~30s idle shutdown. Leaves
- * KEEPALIVE_MS a usable band — 20s and 25s pass, 26s and above fail — rather
- * than pinning one exact value.
+ * KEEPALIVE_MS a band rather than pinning one value: 21s-24s pass, 26s and
+ * above fail the gap test. 25s fails too, but on the second-run test's poke
+ * count rather than on the gap — so treat 24s as the practical top of the band.
  */
 const MAX_GAP_MS = 25_000;
+/** src/background/service-worker.ts KEEPALIVE_CEILING_MS. */
+const CEILING_MS = 10 * 60_000;
 
 describe('surviving MV3 suspension', () => {
   it('never leaves a 30s gap while a run is in flight', async () => {
@@ -137,19 +140,58 @@ describe('surviving MV3 suspension', () => {
     // the worker up removed the backstop and would keep a minimised window open
     // indefinitely while the popup looks idle.
     await bootWorker();
-    chromeMock.delayWindowCreate(60 * 60_000);
+    // Nothing ever settles: windows.create never resolves, so no quote finishes
+    // and nothing extends the ceiling. That is the stuck run this is for.
+    chromeMock.delayWindowCreate(10 * CEILING_MS);
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
     await settle();
-    await settle(9 * 60_000);
-    expect(chromeMock.keepAlivePings()).toBeGreaterThan(20);
-
+    await settle(CEILING_MS - 60_000);
     const beforeCeiling = chromeMock.keepAlivePings();
-    await settle(5 * 60_000);
-    // Stopped somewhere in there, and stayed stopped.
+    expect(beforeCeiling).toBeGreaterThan(0);
+
+    // Past the ceiling it must stop promptly, not merely eventually: asserting
+    // "fewer than sixty more pokes" held for any sane period and even with the
+    // ceiling deleted, which is the shape 279fb3b went through the suite to
+    // remove.
+    await settle(2 * 60_000);
     const afterCeiling = chromeMock.keepAlivePings();
-    expect(afterCeiling - beforeCeiling).toBeLessThan(60);
-    await settle(5 * 60_000);
+    expect(afterCeiling - beforeCeiling).toBeLessThanOrEqual(60_000 / MAX_GAP_MS + 2);
+    await settle(CEILING_MS);
     expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+  });
+
+  it('does not give up on a long run that is still settling quotes', async () => {
+    // The ceiling measures *inactivity*, not elapsed time, and this is why. As
+    // a wall clock it was reachable by an ordinary race — roughly 13 x lanes
+    // codes, so 26 at the default concurrency of two, against a popup maximum
+    // of 60 — and a run past it lost its keepalive mid-race, leaving the rest of
+    // its quotes `interrupted` with their tabs open. Exactly the bug this PR
+    // exists to fix, reintroduced by the guard meant to bound it.
+    await bootWorker();
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 30 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: many });
+    await settle();
+
+    // Answer each tab as it opens, so the run stays healthy but runs long.
+    const start = Date.now();
+    while (Date.now() - start < CEILING_MS + 3 * 60_000) {
+      const tabId = [...chromeMock.tabs.keys()].at(-1);
+      if (tabId !== undefined) {
+        await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+      }
+      await settle(30_000);
+    }
+
+    const times = chromeMock.keepAlivePingTimes();
+    const recent = times.filter((at) => at > Date.now() - 2 * MAX_GAP_MS);
+    expect(recent.length).toBeGreaterThan(0);
   });
 
   it('gives a second run its own ceiling instead of the first run’s remainder', async () => {
@@ -158,6 +200,15 @@ describe('surviving MV3 suspension', () => {
     // teardown never fires left its deadline in place, so a later run inherited
     // whatever was left of it and went quiet mid-race — the original bug, for
     // the second run of the session.
+    //
+    // Honest scope note: this no longer isolates the ordering of the refresh
+    // against the idempotence check. `beginRun` starts by cancelling, which
+    // settles the previous run's quotes, and settling now calls
+    // `extendKeepAlive` — so the deadline is refreshed on that path too and
+    // reverting the ordering alone keeps this green. The ordering is retained
+    // as the direct guarantee rather than a side effect of teardown, but it is
+    // belt to the cancel path's braces, and unpinned. What this test does still
+    // hold is the user-visible property: a second run gets a full ceiling.
     await bootWorker();
     chromeMock.delayWindowCreate(60 * 60_000);
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
