@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildDeepLink } from '../src/core/deeplinks.js';
 import { clearStaleState, shouldClear } from '../src/content/reset-widget-state.js';
+import type { Trip } from '../src/core/types.js';
 
 /**
  * The prevention half of the Avis fix, which shipped untested in its first
@@ -24,6 +26,25 @@ const from = (storage: Pick<Storage, 'removeItem'> | undefined) => () => storage
 describe('shouldClear', () => {
   it('fires on our own search link', () => {
     expect(shouldClear(OURS)).toBe(true);
+  });
+
+  it('fires on a link the builder actually produces', () => {
+    // The gate names the path and the parameter, and so does `deeplinks.ts` —
+    // two hard-coded copies with nothing tying them together. Rename either in
+    // the builder, update the builder's own tests, and the whole reset becomes
+    // a no-op that no test notices: the clear stops firing on the one page it
+    // exists for, and the failure is a silently wrong trip, which is the exact
+    // shape this pair of files was written to prevent.
+    const trip: Trip = {
+      category: 'car',
+      pickupLocation: 'TPA',
+      dropoffLocation: '',
+      pickupDate: '2026-10-02',
+      pickupTime: '10:00',
+      dropoffDate: '2026-10-09',
+      dropoffTime: '10:00',
+    };
+    expect(shouldClear(new URL(buildDeepLink('avis', 'D486600', trip).url))).toBe(true);
   });
 
   it('leaves the user’s own browsing alone', () => {

@@ -261,6 +261,23 @@ describe('the popup half of the double-run guard', () => {
     expect(asked.getTime()).toBeGreaterThan(Date.now());
   });
 
+  it('says so when the bot-check tab cannot be opened', async () => {
+    // The whole point of the button is that the user then goes and does
+    // something in that tab. A button that silently does nothing sends them to
+    // wait at a page that never opened, so the failure has to be visible — and
+    // it was deletable with the suite green.
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: () => Promise.reject(new Error('no window')),
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
+    await Promise.resolve();
+
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/bot check/i);
+    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+  });
+
   it('refuses a time that is not hh:mm', async () => {
     // Unreachable through the form today — the inputs carry no `step`, so
     // Chrome emits hh:mm — but adding one makes Chrome emit hh:mm:ss, which

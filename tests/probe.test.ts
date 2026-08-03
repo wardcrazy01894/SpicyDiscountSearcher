@@ -173,7 +173,11 @@ describe('checking the trip the page priced', () => {
     // deadline" about a page that had already parsed prices — a confident wrong
     // diagnosis arriving by a different door.
     assignment = avisAssignment();
-    document.body.innerHTML = summary('Select drop-off location');
+    // The *mismatching* summary on purpose. With a matching one a pass would be
+    // ambiguous between "the catch worked" and "there was nothing to report":
+    // this markup would fail as wrong-trip if the check ran at all, so a
+    // PROBE_RESULT can only mean the throw was caught.
+    document.body.innerHTML = summary('Philadelphia Intl Airport (PHL)');
     Object.defineProperty(document.body, 'innerText', {
       configurable: true,
       get() {

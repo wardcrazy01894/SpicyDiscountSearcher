@@ -56,13 +56,19 @@ export interface TripCheck {
  * location", which is the correct round trip with the drop-off simply unstated.
  *
  * An unexpected code is only reported when one of the asked-for codes is
- * rendered *too*, and that precondition is the difference between a guard and a
- * liability. `(USD)`, `(EST)`, `(GPS)` are all parenthesised uppercase triplets
- * a booking page might carry, and without it a currency selector appearing
- * above the summary would fail every Avis quote in every run while the popup
- * announced "the page priced a different trip" about a correct page. The
- * observed failure had `TPA` present alongside the stale `PHL`, so requiring
- * the anchor costs nothing there.
+ * rendered *too*. `(USD)`, `(EST)`, `(GPS)` are all parenthesised uppercase
+ * triplets a booking page might carry, and the anchor is what stops a page that
+ * renders one of those and *no* airport code — a consent interstitial, a
+ * country picker, a page whose summary moved — from failing as the wrong trip.
+ *
+ * It is only half of that problem, and the half it does not solve is the
+ * likelier one: once `(TPA)` is on the page, which is the normal correct case,
+ * any other triplet in the first `SUMMARY_CHARS` becomes `unexpected` and fails
+ * the quote. A currency selector rendered *inside* the summary would do it. The
+ * mitigation is not the anchor but the failure mode — `wrong-trip` names the
+ * codes it saw, so a false positive is a loud discarded quote rather than a
+ * wrong price, which is the direction to be wrong in. Today's Avis page renders
+ * no such triplet; that is an observation about one page, not a property.
  *
  * What it gives up, stated rather than discovered later: a page that replaced
  * *both* ends of the trip is invisible to this. That is a narrower hole than a
