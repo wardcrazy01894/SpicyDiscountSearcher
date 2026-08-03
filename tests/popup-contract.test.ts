@@ -41,6 +41,7 @@ const SELECTORS = [
   '#results',
   '#savings',
   '#quotes',
+  '#avis-captcha-btn',
 ];
 
 /** Every message the popup sent, so a double submit is countable. */
@@ -224,6 +225,40 @@ describe('the popup half of the double-run guard', () => {
 
     expect(sentMessages.filter((m) => m.type === 'START_RUN')).toHaveLength(0);
     expect(document.querySelector('#plan-summary')?.textContent).toMatch(/airport code/i);
+  });
+
+  it('opens a real Avis availability page for the bot check, dated ahead', async () => {
+    // The button is a session chore, not a search: it must work with the form
+    // empty, which is exactly when someone reaches for it. Dates are computed
+    // from today so it cannot start asking for a date in the past, and it
+    // carries no discount code because the point is to reach the page that
+    // shows the check, not to price anything.
+    const opened: Array<{ url?: string; active?: boolean }> = [];
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: (options: { url?: string; active?: boolean }) => {
+        opened.push(options);
+        return Promise.resolve({ id: 1 });
+      },
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
+
+    expect(opened).toHaveLength(1);
+    const url = new URL(opened[0]!.url!);
+    expect(url.host).toBe('www.avis.com');
+    expect(url.pathname).toBe('/en/reservation/vehicle-availability');
+    // Focused and visible — the user has to interact with it, unlike a probe tab.
+    expect(opened[0]!.active).toBe(true);
+    // No code: withParams drops empty values.
+    expect(url.searchParams.get('awd_number')).toBeNull();
+    // Dated ahead of today, which is the part that stops it rotting.
+    const asked = new Date(
+      Number(url.searchParams.get('pickup_year')),
+      Number(url.searchParams.get('pickup_month')) - 1,
+      Number(url.searchParams.get('pickup_day')),
+    );
+    expect(asked.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('refuses a time that is not hh:mm', async () => {
