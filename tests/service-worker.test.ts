@@ -310,6 +310,82 @@ describe('surviving MV3 suspension', () => {
     expect(Date.now() - (times.at(-1) ?? 0)).toBeLessThanOrEqual(MAX_GAP_MS);
   });
 
+  it('does not let a late settle resurrect a keepalive the ceiling gave up on', async () => {
+    // `extendKeepAlive` returns early when no interval exists, and that early
+    // return is the whole guard. Without it, a lane settling a quote *after* the
+    // ceiling has fired — inside a run that is still going — restarts the
+    // keepalive and pushes the deadline out another full ceiling, so a wedged
+    // run with one slow survivor holds the worker indefinitely.
+    //
+    // Constructed by wedging windows.create past the ceiling: nothing settles,
+    // so the ceiling fires. Enough candidates that the run is still live well
+    // after the window finally opens, because both settles below have to land
+    // mid-run — one during teardown proves nothing, since teardown stops the
+    // keepalive by another route entirely.
+    //
+    // Neither block below is ballast, and which one lands the kill depends on
+    // KEEPALIVE_MS. At the shipped 20s the probe-deadline settle gets there
+    // first, so ablating the hand-delivered block still kills the mutation — but
+    // at 21s and above it does not, and the final block becomes the only half
+    // that catches it. Since this file deliberately gives KEEPALIVE_MS a band
+    // rather than one value, both halves have to stay.
+    //
+    // Said the other way because an earlier version of this comment claimed the
+    // hand-delivered block was secondary, generalised from one measurement at
+    // 20s — which would have read as licence to delete it, and at 20s nothing
+    // would have gone red while the pin evaporated across the rest of the band.
+    //
+    // An earlier version of the *test* asserted only after the hand-delivered
+    // result, by which time the run had finished and `stopKeepAlive` had already
+    // run — it passed for a reason its own comment did not describe.
+    await bootWorker();
+    chromeMock.delayWindowCreate(CEILING_MS + 60_000);
+    const many = { ...plan(1) };
+    many.candidates = Array.from({ length: 8 }, (_, index) => ({
+      companySlug: `c${index}`,
+      companyName: `Company ${index}`,
+      vendor: 'hertz' as const,
+      code: `H${index}`,
+      note: null,
+    }));
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: many });
+    await settle();
+    await settle(CEILING_MS + 30_000);
+
+    const afterCeiling = chromeMock.keepAlivePings();
+    expect(afterCeiling).toBeGreaterThan(0);
+    await settle(20_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // The window opens, quote one gets a tab, and that tab reaches its deadline.
+    await settle(PROBE_TIMEOUT_MS + 30_000);
+    expect((await getState())?.finishedAt).toBeUndefined();
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // And a quote settling by answering, rather than by timing out.
+    const tabId = [...chromeMock.tabs.keys()][0];
+    expect(tabId).toBeDefined();
+    await chromeMock.fromTab(tabId!, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    // Must exceed MAX_GAP_MS, or the window in which a resurrected keepalive
+    // would be *seen* is narrower than one of its own periods. With a 1s settle
+    // the kill had about a second of margin: KEEPALIVE_MS = 24_000 — legal under
+    // the band declared at the top of this file — left the mutation alive with
+    // nothing red, which would have made CLAUDE.md's "all five were checked to
+    // fail" false without a single failing test. The run has minutes of life
+    // left here, so the extra time is free.
+    await settle(MAX_GAP_MS + 5_000);
+    expect((await getState())?.finishedAt).toBeUndefined();
+    expect(chromeMock.keepAlivePings()).toBe(afterCeiling);
+
+    // Scope note: this kills the mutation that matters — replacing
+    // extendKeepAlive's body with startKeepAlive(). Removing only the early
+    // return while keeping the assignment still passes, and should. Not because
+    // "both readers guard on keepAliveTimer" — there is one reader, and it is
+    // simply unreachable while stopped — but because `startKeepAlive` overwrites
+    // `keepAliveUntil` unconditionally before creating an interval, so no stale
+    // value can ever be inherited.
+  });
+
   it('stops poking after cancelling a run that never tore itself down', async () => {
     // Cancelling settles every quote, and settling extends the ceiling — so
     // this bought a wedged run another ten minutes of resident worker *after*
