@@ -14,6 +14,29 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ProbeAssignment } from '../src/core/messages.js';
+import type { CarTrip } from '../src/core/types.js';
+
+/**
+ * Typed rather than `unknown`, so the compiler drags this fixture forward with
+ * the protocol.
+ *
+ * It went stale silently when `PROBE_START` grew `trip` and `code`: an untyped
+ * literal still satisfied the fake, so the day a driver reads `assignment.trip`
+ * every test here would have run it against `undefined` and passed.
+ */
+type StartAssignment = Extract<ProbeAssignment, { type: 'PROBE_START' }>;
+
+const FIXTURE_TRIP: CarTrip = {
+  category: 'car',
+  pickupLocation: 'TPA',
+  dropoffLocation: '',
+  pickupDate: '2026-09-04',
+  pickupTime: '10:00',
+  dropoffDate: '2026-09-08',
+  dropoffTime: '10:00',
+};
+
 /** src/content/probe.ts POLL_INTERVAL_MS. */
 const POLL = 1_500;
 
@@ -37,7 +60,14 @@ let failNext: number;
 function installChrome(): void {
   sent = [];
   failNext = 0;
-  assignment = { type: 'PROBE_START', vendor: 'hertz', quoteId: 'hertz:H1', timeoutMs: TIMEOUT_MS };
+  assignment = {
+    type: 'PROBE_START',
+    vendor: 'hertz',
+    quoteId: 'hertz:H1',
+    timeoutMs: TIMEOUT_MS,
+    trip: FIXTURE_TRIP,
+    code: 'H1',
+  } satisfies StartAssignment;
   (globalThis as { chrome?: unknown }).chrome = {
     runtime: {
       sendMessage: (message: Sent) => {

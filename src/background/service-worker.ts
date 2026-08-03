@@ -259,20 +259,23 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
 /**
  * The only failures a content script is allowed to claim.
  *
- * It runs in a page we do not control, so anything else it sends is not a
- * diagnosis — including plausible-looking codes like `cancelled` or
- * `tab-closed`, which would misattribute the failure to the user.
+ * The rule, rather than a list to be maintained twice: a page may claim only
+ * what it is the sole witness to. Everything else — `probe-timeout`,
+ * `interrupted`, `link-build`, `tab-open`, `tab-closed`, `cancelled` — is the
+ * background's own knowledge, and a page sending one is not offering a
+ * diagnosis but forging ours. `cancelled` and `tab-closed` are the dangerous
+ * shapes because they read as plausible and misattribute the failure to the
+ * user.
+ *
+ * `form-fill` and `form-submit` satisfy that rule and are still **deliberately
+ * absent**, because no code in this extension emits them yet. Admitting a code
+ * before its emitter exists means every instance that arrives is necessarily
+ * forged, and the popup would render "could not fill the search form" for a
+ * build containing no form-filling code at all — a confident, specific, wrong
+ * diagnosis with a 100% false-positive rate, which this repo rates as worse
+ * than none. They join the day a driver can send them.
  */
-const PROBE_FAILURES = new Set<QuoteFailure>([
-  'extract-threw',
-  'probe-empty',
-  // Both belong to the page in the same way the two above do: only the content
-  // script can see that a field was missing or that submitting went nowhere.
-  // Neither implies anything about the user or the tab, which is the property
-  // that disqualifies `cancelled` and `tab-closed`.
-  'form-fill',
-  'form-submit',
-]);
+const PROBE_FAILURES = new Set<QuoteFailure>(['extract-threw', 'probe-empty']);
 
 /**
  * Did the deep link land somewhere other than the search we asked for?

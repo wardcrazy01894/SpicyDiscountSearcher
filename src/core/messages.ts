@@ -32,11 +32,18 @@ export type ProbeAssignment =
       /**
        * The itinerary and code to type into the vendor's own search form.
        *
-       * Only needed by vendors that cannot be deep-linked at all: Enterprise
-       * keeps its search in session state, so the URL the tab opens on carries
-       * nothing and this is the only channel the trip can reach the page by.
-       * Vendors with a working deep link ignore both fields — the trip is
-       * already in their URL.
+       * Needed by the vendors whose URL the site ignores. Enterprise, Budget
+       * and National keep the search in session state: `buildDeepLink` does
+       * put the code and every trip field in the query string for them, and
+       * the site acts on none of it — the URL is present but inert, so the
+       * values have to be re-delivered somewhere the page will honour.
+       *
+       * Not a new exposure. `location.search` already carries the same values
+       * into all nine vendor pages, where any script on the page can read it;
+       * this payload reaches only the content script's isolated world.
+       *
+       * Vendors with a working deep link ignore both fields — their trip is
+       * already in a URL the site does read.
        */
       trip: Trip;
       code: string;

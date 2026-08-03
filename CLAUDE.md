@@ -176,13 +176,25 @@ stays disabled after a failed send" was false until this flag existed.
 code and keeps the raw message in a tooltip. Assert the **code** in tests;
 rewording a message must not change what the system believes happened.
 
-The last two have no emitter yet. They exist for vendors that cannot be
-deep-linked at all — Enterprise, Budget and National keep the search in session
-state, so a driver has to fill their form — and they are on `PROBE_FAILURES`
-because a missing field and a submit that went nowhere are things only the page
-can see. `form-fill` is deliberately distinct from `extract-threw`: it fails at
-the opposite end, before the page was ever asked for a price, so "no price
-appeared" would be a lie.
+The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
+either — see below. They exist for the vendors whose URL the site ignores:
+Enterprise, Budget and National keep the search in session state, so their deep
+link is present but inert and something has to re-deliver the trip where the
+page will honour it. Driving the form is the likely answer rather than a settled
+one; Enterprise's is a multi-step wizard whose real inputs are `display:none`
+behind custom controls, with no discount-code field on the first step, so a
+single fill-and-submit function is the wrong shape.
+
+`form-fill` is deliberately distinct from `extract-threw`: it fails at the
+opposite end, before the page was ever asked for a price, so "no price appeared"
+would be a lie.
+
+One thing to settle when that driver is written: `PROBE_START` binds a code to a
+_quote_, not to an _origin_. A tab that redirects between two matched hosts —
+Avis and Budget are the same parent company — re-sends `PROBE_READY` under the
+same tab id and is handed the original quote's code. Harmless for a read-only
+probe, which just applies the wrong selectors and finds nothing; a driver would
+type a Budget code into an Avis form.
 
 `Quote.report` carries what the probe actually saw — landed path, page title,
 offer count, extraction branch — and renders under any failed or flagged quote.
@@ -229,9 +241,16 @@ price, because a page that missed its deadline must not win a race the user
 already saw finish. `ActiveRun.retiredTabs` is what makes that possible, and is
 deliberately a second map rather than a delayed delete from `tabs`.
 
-A content script may only claim `extract-threw` or `probe-empty`. Anything else
-is the background's own knowledge, and a page claiming `cancelled` would
-misattribute its failure to the user.
+A content script may only claim what it is the sole witness to, which today
+means `extract-threw` and `probe-empty` and nothing else. Everything else is the
+background's own knowledge, and a page claiming `cancelled` would misattribute
+its failure to the user. State the rule when you extend `PROBE_FAILURES`, not a
+second copy of the list — the two drifted apart once already.
+
+`form-fill` and `form-submit` satisfy the rule and are still deliberately **not**
+on the allowlist, because nothing emits them yet. A code admitted before its
+emitter exists can only ever arrive forged, and the popup would print "could not
+fill the search form" for a build with no form-filling code in it.
 
 `warn()` in the service worker is the only place this extension logs. There is
 no log store and the worker's console dies with it, so the structured fields

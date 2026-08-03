@@ -232,6 +232,17 @@ describe('probe assignment', () => {
       'avis',
       'hertz',
     ]);
+
+    // The code travels per quote, not per run. A driver types whatever arrives
+    // here into the vendor's form, so handing every tab the first candidate's
+    // code would race one code against itself and report it as several — a
+    // result that looks entirely healthy. The trip is the same for every tab by
+    // construction, and is asserted to have arrived at all.
+    const paired = assignments.map((a) => a as { vendor: string; code: string; trip: unknown });
+    expect(paired.find((a) => a.vendor === 'hertz')?.code).toBe('H1');
+    expect(paired.find((a) => a.vendor === 'avis')?.code).toBe('A1');
+    expect(paired.every((a) => a.trip !== undefined)).toBe(true);
+    expect(paired[0]?.trip).toEqual(TRIP);
   });
 
   it('stands a probe down once its deadline has passed', async () => {
