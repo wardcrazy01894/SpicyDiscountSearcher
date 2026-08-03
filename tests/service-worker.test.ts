@@ -64,6 +64,51 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('surviving MV3 suspension', () => {
+  it('keeps poking an extension API through a silent probe', async () => {
+    // The bug this pins: a probe messages the background only when prices go
+    // stable or the 45s deadline passes, so a page that never prices leaves the
+    // worker idle far past Chrome's 30s suspension point. The worker died
+    // mid-race, its setTimeout deadlines died with it, the probe tabs were left
+    // open, and the next popup stamped every quote `interrupted` — burying the
+    // `probe-empty` and report that would have said what the page actually did.
+    //
+    // A test cannot make Chrome suspend a worker it is not running in, so the
+    // observable is the keepalive call itself: while a run is in flight, the
+    // gap between pokes must stay under 30s.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    const atStart = chromeMock.keepAlivePings();
+    await settle(30_000);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(atStart);
+  });
+
+  it('stops poking once the run is over', async () => {
+    // A keepalive that outlives its run pins the worker resident for the whole
+    // browser session, which is the politeness contract broken in a way nobody
+    // would see — the window is closed and the popup looks idle.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+    // Establish the keepalive was actually running first. Without this the
+    // assertion below holds trivially when there is no keepalive at all —
+    // 0 pings before and 0 after — and the test would pass against the very
+    // bug it exists to describe.
+    await settle(30_000);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(0);
+
+    await chromeMock.fromPopup({ type: 'CANCEL_RUN' });
+    await settle();
+    expect((await getState())?.finishedAt).toBeDefined();
+
+    const afterRun = chromeMock.keepAlivePings();
+    await settle(90_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterRun);
+  });
+});
+
 describe('starting a run', () => {
   it('opens exactly one window even though both lanes start together', async () => {
     // Every lane awaits publish() before reaching ensureWindow, so a

@@ -30,6 +30,32 @@ const PROBE_TIMEOUT_MS = 45_000;
 const PROBE_GRACE_MS = 5_000;
 /** Breathing room between tab loads so we don't hammer a vendor. */
 const STAGGER_MS = 750;
+/**
+ * How often to poke an extension API while a run is in flight.
+ *
+ * Chrome suspends an idle MV3 service worker at 30s, and a probe is silent for
+ * far longer than that: it messages the background only when prices go stable
+ * or `PROBE_TIMEOUT_MS` passes, so 45s of nothing is the normal case for a page
+ * that never prices. The worker was therefore being killed mid-race — every
+ * `setTimeout` deadline above dies with it, the probe tabs are left open for
+ * the user to close by hand, and the next popup reads the stale snapshot and
+ * stamps every quote `interrupted`.
+ *
+ * That last part is why this is worth a hack: `interrupted` is a diagnosis of
+ * nothing, and it *replaces* the `probe-empty` and its report that would have
+ * said what the page actually did. The commonest failure became the one with
+ * no evidence.
+ *
+ * `setTimeout` does not keep a worker alive; an extension API call resets the
+ * idle countdown, so the call below is made purely for its side effect and its
+ * result is discarded. 20s leaves 10s of margin against the 30s limit.
+ *
+ * `chrome.alarms` is the tempting alternative and does not work here: its
+ * minimum period is 30s, right at the boundary, and an alarm *restarts* a dead
+ * worker rather than preventing the death — by which point `active` and every
+ * in-flight quote are already gone.
+ */
+const KEEPALIVE_MS = 20_000;
 
 interface ActiveRun {
   state: RunState;
@@ -615,6 +641,29 @@ async function startRun(plan: SearchPlan): Promise<RunState> {
   }
 }
 
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Keep the worker resident for the duration of a run. Idempotent: a second run
+ * starting while one is winding down must not leave two intervals running.
+ */
+function startKeepAlive(): void {
+  if (keepAliveTimer !== null) return;
+  keepAliveTimer = setInterval(() => {
+    // Deliberately ignoring the result, and deliberately swallowing failure:
+    // this call exists only to reset Chrome's idle countdown, and a rejected
+    // keepalive is not something the user can act on. warn() is reserved for
+    // failures that cost the run something.
+    void chrome.runtime.getPlatformInfo().catch(() => {});
+  }, KEEPALIVE_MS);
+}
+
+function stopKeepAlive(): void {
+  if (keepAliveTimer === null) return;
+  clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
+}
+
 async function beginRun(plan: SearchPlan): Promise<RunState> {
   await cancelRun();
 
@@ -631,6 +680,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     waiters: new Map(),
   };
   active = run;
+  startKeepAlive();
   await publish();
 
   const queue = quotes.filter((q) => !q.finishedAt);
@@ -643,6 +693,10 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
+        // Guarded on `active === run` with the rest of teardown: a newer run
+        // has started its own keepalive, and stopping unconditionally here
+        // would suspend the worker out from under it.
+        stopKeepAlive();
         run.state.finishedAt = Date.now();
         await closeWindow(run);
         await publish();

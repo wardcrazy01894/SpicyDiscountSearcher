@@ -234,10 +234,24 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites (see README).
-- MV3 can terminate the service worker mid-run. `GET_STATE` now settles such a
-  snapshot instead of leaving it looking live forever, and a restarted worker
-  closes the window its predecessor orphaned — but the in-flight quotes are
-  still lost.
+- MV3 can terminate the service worker mid-run, and used to do so on nearly
+  every real run: a probe is silent until prices settle or its 45s deadline
+  passes, which is twice Chrome's 30s idle limit. `KEEPALIVE_MS` now pokes an
+  extension API every 20s for the life of a run, which is what stops it.
+
+  The recovery paths remain and still matter, because a keepalive is a
+  mitigation rather than a guarantee — Chrome can still reclaim a worker under
+  memory pressure. `GET_STATE` settles a stale snapshot instead of leaving it
+  looking live forever, a restarted worker closes the window its predecessor
+  orphaned, and the in-flight quotes are still lost when it happens.
+
+  Both directions are pinned, and both tests were checked against a deleted
+  guard: without `startKeepAlive` the first fails at zero pings, and without
+  `stopKeepAlive` the second sees six where it wants one. The second test
+  deliberately proves pings happened _before_ asserting they stopped — with no
+  keepalive at all it would otherwise pass at zero-before, zero-after, against
+  the exact bug it describes.
+
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison

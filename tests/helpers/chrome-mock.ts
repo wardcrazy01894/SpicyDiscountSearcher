@@ -52,6 +52,14 @@ export interface ChromeHarness {
   local: Map<string, unknown>;
   /** Messages the worker broadcast to the popup. */
   broadcasts: unknown[];
+  /**
+   * How many times the worker has poked `runtime.getPlatformInfo`.
+   *
+   * That call is the MV3 keepalive and has no other purpose, so counting it is
+   * the only way to assert the worker would still be resident — a test cannot
+   * make Chrome suspend a worker it isn't running in.
+   */
+  keepAlivePings: () => number;
   /** Send a message as the popup (no sender tab) and await the reply. */
   fromPopup: (message: unknown) => Promise<unknown>;
   /** Send a message as a content script running in `tabId`. */
@@ -96,6 +104,7 @@ export function installChromeMock(): ChromeHarness {
   const tabOptions: Array<{ options: chrome.tabs.CreateProperties; at: number }> = [];
   let nextTabId = 100;
   let nextWindowId = 1;
+  let keepAlivePings = 0;
   let failSessionWrite = false;
   let delaySessionWrite = 0;
   let failWindowCreate = false;
@@ -128,6 +137,12 @@ export function installChromeMock(): ChromeHarness {
         return Promise.reject(
           new Error('Could not establish connection. Receiving end does not exist.'),
         );
+      },
+      // The worker calls this purely to reset Chrome's MV3 idle countdown, so
+      // the only thing worth modelling is that it was called at all.
+      getPlatformInfo: () => {
+        keepAlivePings += 1;
+        return Promise.resolve({ os: 'mac', arch: 'arm64', nacl_arch: 'arm64' });
       },
     },
     storage: {
@@ -264,6 +279,7 @@ export function installChromeMock(): ChromeHarness {
     session,
     local,
     broadcasts,
+    keepAlivePings: () => keepAlivePings,
     fromPopup: (message) => deliver(message, {}),
     fromTab: (tabId, message) =>
       deliver(message, { tab: { id: tabId } } as unknown as chrome.runtime.MessageSender),
