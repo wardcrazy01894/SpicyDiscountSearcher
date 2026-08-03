@@ -126,16 +126,20 @@ encode other people's websites. They will break. Both are deliberately isolated:
   Avis's own early scripts was an assumption until a real run returned Avis
   prices. It does.
 
-  **And then Avis rate-limited the profile.** Not the bot check — that at least
-  offers a way through — but a harder block, where the availability page stops
-  serving the check at all. Reached after a handful of runs racing several Avis
-  codes. So these two halves make Avis _correct_, and do nothing to make it
-  _sustainable_: the remaining problem is request volume, and it is a
-  politeness problem rather than a parsing one. Racing a dozen Avis codes is
-  what the extension is for and is also what Avis objects to. Whatever the
-  answer is — a per-vendor concurrency of one, a much longer stagger for this
-  vendor, or accepting that Avis can only be sampled — it is a separate change
-  and it is not made here.
+  **Avis will rate-limit a profile that hits it hard.** Not the bot check —
+  that at least offers a way through — but a harder block, where the
+  availability page stops serving the check at all. Reached during development,
+  after repeated runs racing several Avis codes plus a lot of manual probing in
+  one afternoon.
+
+  Deliberately not designed around. Real use is a few searches a trip, weeks
+  apart, which is nowhere near that volume; the block is a testing hazard rather
+  than a product limit, and building a per-vendor throttle for a ceiling nobody
+  reaches in practice would be solving the wrong problem. Worth knowing before
+  an afternoon of iterating on Avis, though — when it trips, the tell is an
+  availability page that serves neither prices nor a check, and it clears with
+  time. If ordinary use ever does reach it, the lever is request volume: a
+  per-vendor concurrency of one, or a longer stagger for this vendor.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
   All nine vendors define a `container` selector, and those do run — they scope

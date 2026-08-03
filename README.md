@@ -18,7 +18,7 @@ and ranks them.
 | Popup, trip form, code selection, ranking, savings | ✅ done                                                                  |
 | Orchestration (tab pool, throttling, cancel)       | ✅ done                                                                  |
 | Price extraction from a results page               | ✅ generic sweep, heavily tested — per-vendor `offer` selectors unfilled |
-| Deep links that pre-apply a code                   | ⚠️ **Hertz works; Avis is correct but rate-limited; rest best-effort**   |
+| Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis work; the rest best-effort or impossible**           |
 
 The last row is the honest caveat. None of these vendors document their search
 URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.
@@ -35,6 +35,10 @@ Two are now checked against the live sites and marked `'verified'`:
   bot check"** button for the second — it opens one ordinary tab on a throwaway
   search dated two months out, you answer the check there, and the clearance
   carries for the rest of the session. It does not answer anything itself.
+
+  Avis will also rate-limit a browser that hits it hard — reachable in an
+  afternoon of testing, not by a few searches a trip. The tell is an
+  availability page serving neither prices nor a bot check; it clears with time.
 
 Verified means the URL shape drives a real search, tested on a **US airport
 round trip**. It is not a promise about every itinerary: both hard-code a US
