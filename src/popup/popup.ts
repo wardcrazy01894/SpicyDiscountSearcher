@@ -55,6 +55,7 @@ const results = el<HTMLElement>('#results');
 const savingsBox = el<HTMLElement>('#savings');
 const quotesList = el<HTMLOListElement>('#quotes');
 const avisCaptchaBtn = el<HTMLButtonElement>('#avis-captcha-btn');
+const budgetCaptchaBtn = el<HTMLButtonElement>('#budget-captcha-btn');
 
 interface UiState {
   category: Category;
@@ -1022,6 +1023,37 @@ avisCaptchaBtn.addEventListener('click', () => {
     planSummary.textContent = 'Could not build the Avis bot-check link.';
     planSummary.classList.add('is-warning');
   }
+});
+
+/**
+ * Where to send someone to clear Budget's bot check.
+ *
+ * A plain constant rather than `buildDeepLink('budget', …)`, because that
+ * builder throws by design — Budget keeps its search in session state and will
+ * never have a URL. There is no driver to take a `startUrl` from yet either, so
+ * two vendors with two shapes is not a registry.
+ *
+ * The difference from Avis matters and is not cosmetic. Avis carries its check
+ * on the availability page, so its button lands on the check itself and the
+ * chore is one click. Budget's appeared only on *submitting* a search — a fully
+ * filled form, first submission from a clean page — so this lands on the form
+ * and the user has to run a search to raise it. Capturing the URL the challenge
+ * is served at would make this one-click too; nobody has recorded it.
+ */
+const BUDGET_BOT_CHECK_URL = 'https://www.budget.com/en/home';
+
+budgetCaptchaBtn.addEventListener('click', () => {
+  // Same contract as the Avis button above: one ordinary focused tab, and it
+  // answers nothing. Passing the check is the user's to do — this only puts
+  // them in front of it, and the clearance it leaves in the profile is what any
+  // later probe tab rides on.
+  void chrome.tabs.create({ url: BUDGET_BOT_CHECK_URL, active: true }).catch(() => {
+    // Visible, for the reason the Avis one is: the user's next move is to go and
+    // do something in a tab, so a silent failure sends them to wait at a page
+    // that never opened.
+    planSummary.textContent = 'Could not open a tab for the Budget bot check.';
+    planSummary.classList.add('is-warning');
+  });
 });
 
 cancelBtn.addEventListener('click', () => {

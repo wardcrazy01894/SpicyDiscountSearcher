@@ -42,6 +42,7 @@ const SELECTORS = [
   '#savings',
   '#quotes',
   '#avis-captcha-btn',
+  '#budget-captcha-btn',
 ];
 
 /** Every message the popup sent, so a double submit is countable. */
@@ -275,6 +276,44 @@ describe('the popup half of the double-run guard', () => {
     await Promise.resolve();
 
     expect(document.querySelector('#plan-summary')?.textContent).toMatch(/bot check/i);
+    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+  });
+
+  it('opens one focused Budget tab for the bot check, and no search', async () => {
+    const opened: Array<{ url?: string; active?: boolean }> = [];
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: (options: { url?: string; active?: boolean }) => {
+        opened.push(options);
+        return Promise.resolve({ id: 1 });
+      },
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
+
+    expect(opened).toHaveLength(1);
+    const url = new URL(opened[0]!.url!);
+    expect(url.host).toBe('www.budget.com');
+    // Focused and visible — the user has to interact with it, unlike a probe tab.
+    expect(opened[0]!.active).toBe(true);
+    // No code and no itinerary. Unlike Avis this cannot carry one — Budget's
+    // builder throws by design — and it must not start looking like a search.
+    expect(url.search).toBe('');
+  });
+
+  it('says so when the Budget bot-check tab cannot be opened', async () => {
+    // Same reasoning as the Avis case: the button's whole purpose is to send
+    // the user somewhere, so a failure that says nothing leaves them waiting at
+    // a tab that never opened.
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: () => Promise.reject(new Error('no window')),
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
+    await Promise.resolve();
+
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Budget bot check/i);
     expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
   });
 

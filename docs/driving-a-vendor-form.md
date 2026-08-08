@@ -74,7 +74,7 @@ and what "nothing happened" looks like.
 | Hertz | yes | Deep link `verified`, differential-replay-proved |
 | Sixt | **yes** | Builder measured to 302 to the site root. Enabled but useless — see below |
 | Enterprise | no | Driver written and tested; blocked on the date control |
-| Budget | no | Form fully mapped and easy to fill — but submitting raises a bot check. See below |
+| Budget | no | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
 | National | no | Form fully mapped, date control driven and verified. Two questions open. See below |
 | Hilton / Marriott / Hyatt | yes | `best-effort`, never checked against the live site |
 | Starwood | no | Correctly so; folded into Marriott in 2018, no site to search |
@@ -152,13 +152,35 @@ exactly that format.
 Slide right to secure your access" challenge. That was reached on the first
 submission from a clean page, with every field filled synthetically.
 
-This is a stop, not an obstacle to route around. Solving or evading such a check
-is out of bounds, and the challenge is the site stating plainly that it does not
-want automated searching. Budget should be assumed **permanently unsearchable**
-unless something changes, and that is a stronger reason than the session-state
-one currently recorded against it. Worth confirming whether an ordinary
-hand-driven search trips it too — if it does not, the trigger is the automation
-and the conclusion stands regardless.
+An earlier draft of this section called that **permanently unsearchable**. That
+was wrong, and the disproof was already in this repo: Avis shows a bot check too,
+and the answer to it has shipped for months — `#avis-captcha-btn` opens one
+ordinary focused tab, the user passes the check themselves, and the clearance it
+leaves in the profile is what the probe tabs then ride on for the session. The
+extension never answers a challenge; it just puts a human in front of one.
+
+Budget now has the same affordance, `#budget-captcha-btn`, with one honest
+difference. Avis carries its check on the availability page, so its button lands
+on the check itself and the chore is a single click. Budget's appeared only on
+*submitting* a search, so its button lands on the form and the user has to run
+one search to raise it. Capturing the URL the challenge is served at would make
+this one-click too — nobody recorded it, and that is the cheapest improvement
+here.
+
+So Budget is blocked on two things, neither of them a wall:
+
+1. **Does a human pass actually clear it for later automated submits?**
+   Untested, and the only question that matters. The Avis precedent says a
+   profile-level clearance is the usual shape, but that is a precedent rather
+   than a measurement of Budget. Press the button, pass the check by hand, then
+   re-run the synthetic fill from the table above and see whether it reaches
+   results.
+2. **The driver itself**, which cannot be written until (1) lets a run reach a
+   results page worth reading.
+
+What stays true regardless: nothing in this codebase may solve or evade a
+challenge, and no amount of clearance changes the politeness posture — Budget
+gets the same capped concurrency and stagger as everyone else.
 
 **Sixt is the odd one out and deserves a decision.** It is the only vendor that
 is `searchable: true` while being *known* not to reach a search: its builder
