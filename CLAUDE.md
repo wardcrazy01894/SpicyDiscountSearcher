@@ -291,21 +291,87 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`, `form-fill`, `form-submit`, `wrong-trip`. The popup renders a short phrase per
-code and keeps the raw message in a tooltip. Assert the **code** in tests;
-rewording a message must not change what the system believes happened.
+`cancelled`, `form-fill`, `form-submit`, `code-rejected`, `wrong-trip`. The popup
+renders a short phrase per code and keeps the raw message in a tooltip. Assert
+the **code** in tests; rewording a message must not change what the system
+believes happened.
 
-The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
-either — see below. They exist for Budget, Enterprise and National, whose sites
-ignore the query string entirely: Enterprise's results page is a bare
-`#car_select`, Budget's a bare `#/vehicles`. All three now refuse to build a URL
-and are `searchable: false`, so nothing routes a run to them at all; the codes
-stay in the database waiting for something that can drive a form.
+The three form codes have an emitter now — `core/drivers/enterprise.ts` — but no
+*reachable* one, and they are still off `PROBE_FAILURES` for exactly that reason
+(see below). They exist for Budget, Enterprise and National, whose sites ignore
+the query string entirely: Enterprise's results page is a bare `#car_select`,
+Budget's a bare `#/vehicles`. All three refuse to build a URL and are
+`searchable: false`, so nothing routes a run to them at all; the codes stay in
+the database waiting for a driver that can run.
 
-Driving the form is the likely answer rather than a settled one; Enterprise's is
-a multi-step wizard whose real inputs are `display:none` behind custom controls,
-with no discount-code field on the first step, so a single fill-and-submit
-function is the wrong shape.
+Driving the form is the answer for Enterprise, and the shape of it is now
+measured rather than guessed. **The three sentences that used to sit here were
+wrong on every count** — they described a multi-step wizard whose real inputs
+were `display:none` behind custom controls, with no discount-code field on the
+first step, and concluded a single fill-and-submit was the wrong shape. Checked
+against the live site on 2026-08-08, `/en/reserve.html` is *one* visible step:
+
+- `input[name="location-search"]`, an autocomplete; `#sameLocation` reveals a
+  second one for a one-way drop-off
+- two date controls and two time `select`s, plus `#age`
+- **`#cid`** — a plain visible `input[type=text]` labelled "Corporate Account
+  Number". That is where the `XZ…` codes go, on step one.
+
+It drives with the ordinary React recipe — native value setter plus
+`input`/`change`, `.click()` on the autocomplete option and on "Browse Vehicles"
+— and lands on `/en/reserve.html#car_select` with real inventory (71 classes,
+$46–$341 for a TPA round trip). Three things that fall out of that run and
+should shape the driver when it is written:
+
+- **The results page names the account holder.** IBM's `5666666` rendered
+  `I B M CORP (USA)` in the header. That is a per-code verification signal of
+  the same kind `verify-trip.ts` gives us for Avis, and it is the good news
+  here: it can prove the code *applied* rather than being silently dropped.
+- **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
+  "this account number cannot be used online. Please contact your account
+  manager." A real answer, not a broken driver, and a distinct outcome from
+  "no prices" — it wants its own failure code rather than being folded into
+  `form-submit`.
+- **Hydration is slow and unreliable.** `#cid` took ~10s to appear on one load
+  and ~40s on another, and later would not appear at all: the document returns
+  200, the nav and footer render, the booking app never mounts, and the request
+  log carries a 503. That is the Avis rate-limit pattern in a different suit,
+  reached the same way — repeated loads from one profile in one afternoon.
+  Against `PROBE_TIMEOUT_MS` of 45s it is also a live risk to the driver, not
+  just a testing hazard.
+
+`?cid=XZ15J55` in the URL does **not** pre-fill the field, so none of this
+rescues a deep link. The URL findings below stand unchanged.
+
+**That driver now exists**, in `src/core/form-driver.ts` (the framework) and
+`src/core/drivers/enterprise.ts` (the vendor). `docs/driving-a-vendor-form.md`
+is the procedure, including the recon snippet to run on Budget and National and
+the checklist of everything that has to land in the same change as a
+`searchable: true`.
+
+The framework's one rule, which is the whole reason it is not just a sequence of
+`querySelector` calls: **every step verifies against what the page then
+renders**, and a step that cannot be verified fails the quote. Not "we set the
+field" but "the form now shows what we set". `fillLocation` nearly shipped with
+that wrong — it confirmed the branch name was on the page, which the suggestion
+menu guarantees whether or not the click did anything, so it now requires the
+name somewhere the menu is *not*. A test pins that distinction.
+
+**And it is deliberately unreachable.** `FORM_DRIVERS` is empty, Enterprise is
+still `searchable: false`, and `enterpriseDriver.drive` always fails — because
+the date control was never exercised. Both live runs used the form's default
+dates, and the control is custom rather than a `select`, so nothing says the
+trip's dates can be set, let alone verified after setting. `applyDates` therefore
+refuses outright, and is ordered *before* the code fill and the submit so a form
+that cannot express the trip is never sent. A test asserts that failure; when
+the control is measured and driven, that test is replaced rather than deleted.
+
+Everything else in the driver is measured and tested: hydration (with the
+throttle case given its own message, because "back off" and "go read the DOM"
+are opposite responses), the location autocomplete, the account-number field
+with a waited read-back, and all three submit outcomes. `code-rejected` is new
+and is the vendor answering rather than anything breaking — the form worked, the
+submission worked, and Enterprise said no.
 
 (This paragraph and the matching comment in `messages.ts` were written when the
 plumbing landed first and described four vendors deep-linking to `/en/home`,

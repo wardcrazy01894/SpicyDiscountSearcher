@@ -161,6 +161,17 @@ export type QuoteFailure =
   /** The form was filled, but submitting it never produced a results page. */
   | 'form-submit'
   /**
+   * The vendor read the code and refused it.
+   *
+   * Distinct from every other failure here because nothing is broken: the
+   * search form worked, the submission worked, and the answer was no. Enterprise
+   * returns "this account number cannot be used online. Please contact your
+   * account manager" for some corporate accounts — a fact about the code, not
+   * about the run, and one worth telling the user plainly rather than reporting
+   * as "no price appeared".
+   */
+  | 'code-rejected'
+  /**
    * The page priced a different trip from the one asked for.
    *
    * Not a missing price — a real one, for the wrong rental. Avis lets its

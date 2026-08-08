@@ -1,4 +1,5 @@
 import { extract } from '../core/extract.js';
+import { DriverError, FORM_DRIVERS } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
@@ -98,8 +99,76 @@ function fingerprint(offers: Offer[]): string {
  */
 const VERIFY_TRIP = new Set<string>(['avis']);
 
+/**
+ * How much of a quote's budget a form driver may spend before pricing starts.
+ *
+ * A guess, and flagged as one because it is the number most likely to be wrong.
+ * Enterprise's widget alone took ~40s of a 45s `PROBE_TIMEOUT_MS` to hydrate on
+ * one measured load, so this split does not currently leave a driven vendor
+ * enough of either half — raising the timeout is part of making the first one
+ * searchable, and `KEEPALIVE_CEILING_MS` is derived from it, so that is a
+ * deliberate change rather than a nudge. Nothing is registered in
+ * `FORM_DRIVERS` today, so no run is affected yet.
+ */
+const DRIVE_SHARE = 0.6;
+
+/**
+ * Fill and submit the vendor's own search form, for vendors that need it.
+ *
+ * A no-op for every vendor today: `FORM_DRIVERS` is empty of anything
+ * reachable, because the vendors that would use one are all `searchable: false`.
+ *
+ * Returns the failure to report, or null when there is nothing to drive or the
+ * drive succeeded. Reporting rather than sending, so the caller keeps the one
+ * place that decides what a `ProbeReport` looks like.
+ */
+async function driveForm(
+  assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>,
+  start: number,
+): Promise<{ failure: DriverError['failure']; message: string } | null> {
+  const driver = FORM_DRIVERS[assignment.vendor];
+  if (!driver) return null;
+  try {
+    await driver.drive({
+      doc: document,
+      trip: assignment.trip,
+      code: assignment.code,
+      deadline: start + assignment.timeoutMs * DRIVE_SHARE,
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    return null;
+  } catch (error) {
+    if (error instanceof DriverError) return { failure: error.failure, message: error.message };
+    // Our own bug rather than the vendor's markup, but it fails at the same end
+    // — the page was never asked for a price — so `form-fill` is the honest
+    // code. Reporting `extract-threw` would point the next reader at
+    // `extract.ts`, which never ran.
+    return {
+      failure: 'form-fill',
+      message: `driver threw: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>) {
-  const deadline = Date.now() + assignment.timeoutMs;
+  const start = Date.now();
+  const deadline = start + assignment.timeoutMs;
+
+  const driveFailure = await driveForm(assignment, start);
+  if (driveFailure) {
+    await send({
+      type: 'PROBE_FAILED',
+      failure: driveFailure.failure,
+      message: driveFailure.message,
+      // `generic-sweep` is the branch this probe would have used had it got as
+      // far as reading prices. It never did, and the report's other fields say
+      // so — offerCount 0, and whatever path the form left us on.
+      report: report([], 'generic-sweep'),
+    });
+    return;
+  }
+
   let previous = '';
   let stableReads = 0;
   let latest: Offer[] = [];

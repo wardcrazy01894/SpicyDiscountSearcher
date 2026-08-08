@@ -468,6 +468,9 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   // Not "never returned results", which reads as a synonym for probe-empty.
   // The distinction is that the search was never run, not that it found nothing.
   'form-submit': 'submitting the search never loaded a results page',
+  // The vendor's own verdict on the code, not a fault in the run — so it says
+  // what happened to the code rather than what failed to happen to the page.
+  'code-rejected': 'the vendor refused this code',
   'wrong-trip': 'the page priced a different trip',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',

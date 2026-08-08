@@ -327,13 +327,20 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
  * user — but enumerating the excluded ones here is what let this comment and
  * CLAUDE.md drift apart, so the rule is the specification.
  *
- * `form-fill` and `form-submit` satisfy that rule and are still **deliberately
- * absent**, because no code in this extension emits them yet. Admitting a code
- * before its emitter exists means every instance that arrives is necessarily
- * forged, and the popup would render "could not fill the search form" for a
- * build containing no form-filling code at all — a confident, specific, wrong
- * diagnosis with a 100% false-positive rate, which this repo rates as worse
- * than none. They join the day a driver can send them.
+ * `form-fill`, `form-submit` and `code-rejected` satisfy that rule and are still
+ * **deliberately absent**. There is now a driver that emits all three
+ * (`core/drivers/enterprise.ts`), which is a change from when this comment first
+ * said "no code emits them" — but it is not *reachable*: `FORM_DRIVERS` is
+ * empty, and every vendor that would use a driver is `searchable: false`, so no
+ * run can route to one. An unreachable emitter is the same situation as no
+ * emitter for the purpose of this list — every instance that arrived would
+ * still necessarily be forged, and the popup would render "could not fill the
+ * search form" for a build that cannot fill a form.
+ *
+ * They join in the same change that makes the first driver-backed vendor
+ * searchable, which is also the change that has to raise `PROBE_TIMEOUT_MS` for
+ * a form that needs driving. Admitting them earlier buys nothing and costs the
+ * guarantee.
  */
 const PROBE_FAILURES = new Set<QuoteFailure>([
   'extract-threw',

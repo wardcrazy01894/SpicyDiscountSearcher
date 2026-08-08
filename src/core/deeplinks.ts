@@ -340,6 +340,17 @@ const BUILDERS: Record<VendorId, Builder> = {
    * be searched. That is the same trade this file makes for a malformed date
    * and a one-way trip: a visible failure beats an invisible wrong price. They
    * come back when something drives their forms.
+   *
+   * For Enterprise that is now closer than this comment used to imply, and the
+   * detail is in CLAUDE.md rather than repeated here. In short: `/en/reserve.html`
+   * is a single visible step carrying `#cid`, "Corporate Account Number", and it
+   * drives to a priced `#car_select` with synthetic events. Its results page
+   * even names the account holder, which is a per-code check Avis's does not
+   * offer. What is still missing is the date control — both live runs used the
+   * form's defaults — so a driver today would price whatever dates Enterprise
+   * felt like, which is the failure this file exists to refuse. `?cid=` does not
+   * pre-fill the field either, so none of it makes a URL work and this builder
+   * stays as it is.
    */
   budget: unsearchable('budget'),
   enterprise: unsearchable('enterprise'),
