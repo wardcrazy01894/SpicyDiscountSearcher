@@ -57,10 +57,12 @@ import type { CarTrip } from '../types.js';
  * - A stale location chip suppresses the autocomplete entirely — typing into a
  *   field that already holds a selection offers no suggestions, which is a
  *   measured failure and not a theory. `clearStaleLocation` removes it first.
- * - A one-way search left in that state reopens the "DIFFERENT RETURN" panel,
- *   which would have this driver — which refuses one-way trips — fill only the
- *   pick-up and price a one-way rental. `clearStaleLocation` collapses it and
- *   verifies the collapse.
+ * - A stale *drop-off* is the one that could price a journey nobody asked for.
+ *   `clearStaleLocation` removes every chip, and `fillLocation` then refuses if
+ *   more than one location is selected once it has picked ours. Deliberately a
+ *   count of selections rather than anything about the "DIFFERENT RETURN"
+ *   panel: an earlier version tried to collapse that panel on an unmeasured
+ *   rule and failed every live run — see the comment there.
  * - Concurrent National tabs in one profile share that state, so two lanes
  *   racing two codes could settle on one. `Vendor.maxLanes` is why they cannot:
  *   National runs one tab at a time however wide the rest of the race is. The
@@ -215,34 +217,21 @@ export function timeIndex(hhmm: string): string {
  * is attempted and then *verified*, and a failure to collapse fails the quote.
  * That is the framework's rule doing its job on a step nobody has watched.
  */
-const LOCATION_FIELDS = '[id^="search-autocomplete__input-"]';
+/** The control that removes a selected location, one per chip. */
+const CHIP_REMOVE = 'button.input-pseudo__close-btn';
 
 export async function clearStaleLocation(ctx: DriveContext): Promise<void> {
   // Bounded rather than `while`, so a chip whose remove button does not remove
   // it is a timeout with a message instead of a spin.
   for (let i = 0; i < 4; i += 1) {
-    const remove = ctx.doc.querySelector<HTMLElement>('button.input-pseudo__close-btn');
+    const remove = ctx.doc.querySelector<HTMLElement>(CHIP_REMOVE);
     if (!remove) break;
     remove.click();
     await waitFor(ctx, 'the stale location chip to clear', () => !remove.isConnected);
   }
-  if (ctx.doc.querySelector('button.input-pseudo__close-btn')) {
+  if (ctx.doc.querySelector(CHIP_REMOVE)) {
     throw new DriverError('form-fill', 'could not clear the previous search from the form');
   }
-
-  if (ctx.doc.querySelectorAll(LOCATION_FIELDS).length <= 1) return;
-  const toggle = [...ctx.doc.querySelectorAll<HTMLElement>('button')].find((el) =>
-    /different return/i.test(textOf(el)),
-  );
-  if (!toggle) {
-    throw new DriverError('form-fill', 'form is in one-way mode with no way back to round trip');
-  }
-  toggle.click();
-  await waitFor(
-    ctx,
-    'the form to leave the one-way mode a previous search left it in',
-    () => ctx.doc.querySelectorAll(LOCATION_FIELDS).length <= 1,
-  );
 }
 
 export async function fillLocation(ctx: DriveContext): Promise<void> {
@@ -303,6 +292,30 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     const menu = ctx.doc.querySelector('.search-autocomplete__results');
     return textOutside(widget, menu).includes(`(${iata})`) || null;
   });
+
+  // Exactly one location selected, and it is the one we just chose.
+  //
+  // This is what guards the one-way case, and it replaces a worse idea. An
+  // earlier version inferred "the return panel is open" from a second
+  // `search-autocomplete__input-*` existing, and clicked "DIFFERENT RETURN" to
+  // collapse it — a rule nobody had measured. Against the live site it failed
+  // every run with "timed out waiting for the form to leave the one-way mode":
+  // a hidden return input in the DOM makes that count 2 on an ordinary
+  // round-trip form, so the click *opened* one-way mode and then waited forever
+  // for the state it had just created.
+  //
+  // Counting chips asks the question that actually matters. A journey we did
+  // not ask for needs a *selected* drop-off, and every selection carries a
+  // remove control — so one chip means one location, whatever the panel is
+  // doing. An empty return field cannot price anything; at worst National
+  // declines the search, which surfaces as `form-submit`.
+  const selected = ctx.doc.querySelectorAll(CHIP_REMOVE).length;
+  if (selected > 1) {
+    throw new DriverError(
+      'form-fill',
+      `form holds ${selected} locations after picking ${iata}; refusing to price a one-way trip`,
+    );
+  }
 }
 
 /**

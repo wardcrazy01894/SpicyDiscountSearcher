@@ -62,6 +62,8 @@ interface FormOptions {
   selectionDoesNothing?: boolean;
   /** Render the chip's text and its remove button in one element, not as siblings. */
   chipWrapsRemove?: boolean;
+  /** The site restores a drop-off alongside the pick-up we choose. */
+  selectionAddsReturn?: boolean;
   /** Days the calendar refuses. */
   disabledDays?: string[];
   /** Which months the calendar renders. */
@@ -83,6 +85,7 @@ function renderForm(options: FormOptions = {}): void {
     staleOneWay = false,
     selectionDoesNothing = false,
     chipWrapsRemove = false,
+    selectionAddsReturn = false,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
     onSubmit = 'results-with-account',
@@ -169,6 +172,17 @@ function renderForm(options: FormOptions = {}): void {
       if (selectionDoesNothing) return;
       menu.remove();
       addChip();
+      // The site restoring a drop-off of its own alongside our pick-up: two
+      // locations selected, which is the only shape that can price a one-way.
+      if (selectionAddsReturn) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = 'Philadelphia Intl Airport (PHL)';
+        const remove = document.createElement('button');
+        remove.className = 'input-pseudo__close-btn';
+        remove.textContent = 'Remove Location';
+        chips.append(chip, remove);
+      }
     });
     menu.append(dead, real);
     widget.append(menu);
@@ -390,18 +404,35 @@ describe('fillLocation', () => {
     expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
   });
 
-  it('leaves the one-way mode a previous search left behind', async () => {
-    // National restores the whole previous search. A profile whose last search
-    // was one-way comes back with a second location field, and this driver
-    // refuses one-way trips — so filling only the pick-up and submitting would
-    // price a one-way rental as the answer to a round-trip question.
+  it('ignores a second location field and works from a one-way starting state', async () => {
+    // The regression that broke every live run. An earlier version read "a
+    // second `search-autocomplete__input-*` exists" as "the return panel is
+    // open" and clicked DIFFERENT RETURN to collapse it — so on an ordinary
+    // form carrying a hidden return input, the click *opened* one-way mode and
+    // the driver waited forever for the state it had just created.
+    //
+    // The field's mere existence is not evidence of anything, and the driver
+    // must not care about it.
     renderForm({ staleLocation: true, staleOneWay: true });
     expect(document.querySelectorAll('[id^="search-autocomplete__input-"]')).toHaveLength(2);
 
-    await fillLocation(makeContext());
+    await expect(fillLocation(makeContext())).resolves.toBeUndefined();
 
-    expect(document.querySelectorAll('[id^="search-autocomplete__input-"]')).toHaveLength(1);
     expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
+    // One selection, which is the invariant that actually matters.
+    expect(document.querySelectorAll('button.input-pseudo__close-btn')).toHaveLength(1);
+  });
+
+  it('refuses when a second location is still selected after filling', async () => {
+    // What the one-way guard is really for: a *selected* drop-off is the only
+    // way this form can price a journey nobody asked for. Modelled by the site
+    // restoring one of its own alongside the pick-up we choose — a chip that is
+    // merely stale gets cleared before the fill and fails earlier, with a
+    // different and better message.
+    renderForm({ selectionAddsReturn: true });
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/one-way/);
   });
 
   it('refuses a one-way trip', async () => {
