@@ -60,6 +60,8 @@ interface FormOptions {
   staleOneWay?: boolean;
   /** Model a site change where picking a suggestion no longer selects it. */
   selectionDoesNothing?: boolean;
+  /** Render the chip's text and its remove button in one element, not as siblings. */
+  chipWrapsRemove?: boolean;
   /** Days the calendar refuses. */
   disabledDays?: string[];
   /** Which months the calendar renders. */
@@ -80,6 +82,7 @@ function renderForm(options: FormOptions = {}): void {
     staleCode = '',
     staleOneWay = false,
     selectionDoesNothing = false,
+    chipWrapsRemove = false,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
     onSubmit = 'results-with-account',
@@ -116,7 +119,6 @@ function renderForm(options: FormOptions = {}): void {
   const addChip = (): void => {
     const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.textContent = 'Tampa International Airport (TPA)';
     const remove = document.createElement('button');
     remove.className = 'input-pseudo__close-btn';
     remove.textContent = 'Remove Location';
@@ -125,7 +127,16 @@ function renderForm(options: FormOptions = {}): void {
       remove.remove();
       input.value = '';
     });
-    chips.append(chip, remove);
+    if (chipWrapsRemove) {
+      // The shape that breaks a leaf-only readback: the branch name is a direct
+      // text node of an element that also holds the remove button, so no leaf
+      // element anywhere contains "(TPA)".
+      chip.append('Tampa International Airport (TPA)', remove);
+      chips.append(chip);
+    } else {
+      chip.textContent = 'Tampa International Airport (TPA)';
+      chips.append(chip, remove);
+    }
   };
   if (staleLocation) addChip();
 
@@ -365,6 +376,18 @@ describe('fillLocation', () => {
     const error = await failureOf(fillLocation(makeContext()));
     expect(error.failure).toBe('form-fill');
     expect(document.querySelector('.chip')).toBeNull();
+  });
+
+  it('reads the chip back whatever shape the markup gives it', async () => {
+    // The readback must not assume the branch name sits in a childless element.
+    // A chip marked up as `<span>Tampa International Airport (TPA)<button>Remove
+    // Location</button></span>` puts the name in a direct text node of a
+    // *non*-leaf, so a leaf-only search finds nothing and the driver fails
+    // `form-fill` on a form it had filled perfectly. Nobody has inspected
+    // National's chip at this level, so the check must not care.
+    renderForm({ chipWrapsRemove: true });
+    await expect(fillLocation(makeContext())).resolves.toBeUndefined();
+    expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
   });
 
   it('leaves the one-way mode a previous search left behind', async () => {

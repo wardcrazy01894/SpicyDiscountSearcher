@@ -165,6 +165,38 @@ export function textOf(el: Element | null | undefined): string {
 }
 
 /**
+ * The text under `root`, ignoring everything inside `exclude`.
+ *
+ * For the question every location readback actually asks: does the branch we
+ * picked appear somewhere that is *not* the suggestion menu? The menu contains
+ * the branch name by construction — it is where the name came from — so a plain
+ * text search of the field's container passes whether or not the click selected
+ * anything.
+ *
+ * Written as a walk rather than "find a leaf element containing the name",
+ * which is what this was first. That version assumed the chip's text sits in an
+ * element with no children, and a chip marked up as
+ * `<div>Tampa International Airport (TPA)<button>Remove</button></div>` has the
+ * text in a *non*-leaf — so the check could never pass, and the driver would
+ * fail `form-fill` on a form it had filled correctly. Walking text nodes makes
+ * no assumption about the shape at all.
+ */
+export function textOutside(root: Element | null, exclude: Element | null): string {
+  if (!root) return '';
+  let out = '';
+  const walk = (node: Node): void => {
+    if (node === exclude) return;
+    if (node.nodeType === node.TEXT_NODE) {
+      out += ` ${node.nodeValue ?? ''}`;
+      return;
+    }
+    for (const child of node.childNodes) walk(child);
+  };
+  walk(root);
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Does `haystack` contain `token` as a standalone word?
  *
  * Airport codes are three letters and turn up inside ordinary words —

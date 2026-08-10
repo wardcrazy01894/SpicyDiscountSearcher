@@ -7,6 +7,7 @@ import {
   POLL_MS,
   setNativeValue,
   textOf,
+  textOutside,
   waitFor,
 } from '../form-driver.js';
 import type { CarTrip } from '../types.js';
@@ -298,11 +299,9 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   // left the driver submitting whatever location session state had restored.
   // `drivers/enterprise.ts` carries the same exclusion for the same reason.
   await waitFor(ctx, `the form to show the ${iata} branch`, () => {
+    const widget = ctx.doc.querySelector('.search-autocomplete');
     const menu = ctx.doc.querySelector('.search-autocomplete__results');
-    const leaves = [...ctx.doc.querySelectorAll<HTMLElement>('*')].filter(
-      (el) => el.children.length === 0 && textOf(el).includes(`(${iata})`),
-    );
-    return leaves.some((el) => !menu?.contains(el)) || null;
+    return textOutside(widget, menu).includes(`(${iata})`) || null;
   });
 }
 

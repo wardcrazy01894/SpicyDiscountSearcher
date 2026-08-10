@@ -6,6 +6,7 @@ import {
   hasToken,
   setNativeValue,
   textOf,
+  textOutside,
   waitFor,
 } from '../form-driver.js';
 import type { CarTrip } from '../types.js';
@@ -179,10 +180,7 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     // once opened. The proof is the name rendered somewhere the menu is not:
     // the form shows the chosen branch as a chip beside the field.
     const menu = ctx.doc.querySelector('[class*="location-dropdown"]');
-    const leaves = [...ctx.doc.body.querySelectorAll<HTMLElement>('*')].filter(
-      (el) => el.children.length === 0 && textOf(el).includes(expected),
-    );
-    return leaves.some((el) => !menu?.contains(el)) || null;
+    return textOutside(ctx.doc.body, menu).includes(expected) || null;
   });
 }
 
