@@ -239,11 +239,29 @@ function renderCompanyList(): void {
 
       const vendorList = document.createElement('span');
       vendorList.className = 'vendors';
+      // Which of the *selected* vendors this company can actually be raced at,
+      // by the same `codeReaches` rule as the filter above and the chip counts.
+      //
+      // It used to be `vendors.includes(c.vendor)`, and it was the last copy of
+      // that mistake. Two symptoms, reported together: National never appeared
+      // on any row — every National code is filed under Enterprise — and some
+      // rows were *blank*, which was this half-fix's own fault. Correcting the
+      // filter above let those eight companies into the list while this line
+      // still asked the old question, so they matched and then had nothing to
+      // show for it.
+      //
+      // Rendered as labels rather than raw ids, so a row reads
+      // "Avis · National" instead of "avis · national". The ids are internal
+      // and this is the picker.
       vendorList.textContent = [
         ...new Set(
-          company.codes.filter((c) => c.code && vendors.includes(c.vendor)).map((c) => c.vendor),
+          company.codes
+            .filter((c) => c.code)
+            .flatMap((c) => vendors.filter((vendor) => codeReaches(c.vendor, vendor))),
         ),
-      ].join(' · ');
+      ]
+        .map((id) => findVendor(id)?.label ?? id)
+        .join(' · ');
 
       row.append(box, name, vendorList);
       return row;

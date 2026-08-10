@@ -170,6 +170,31 @@ describe('the popup half of the double-run guard', () => {
     });
   }
 
+  it('labels a company with a vendor it only reaches through alsoTryAs', async () => {
+    // Reported from a loaded extension: "the codes-to-race list doesn't have
+    // any that say National. It has ones that say avis or hertz or sixt and
+    // some that are blank."
+    //
+    // Both halves on one line. `vendors.includes(c.vendor)` is the exact-match
+    // rule that has now been wrong in four places — every National code is
+    // filed under Enterprise, so National could never appear — and the blanks
+    // were the previous half-fix's own fault: correcting the *filter* let those
+    // companies into the list while this line still asked the old question, so
+    // they matched and had nothing to show. The ids were raw, too.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const rows = [...document.querySelectorAll('#company-list .company')];
+    const labels = rows.map((row) => row.querySelector('.vendors')?.textContent ?? '');
+
+    // No row that made it into the list may be blank: being listed means at
+    // least one selected vendor can race one of its codes.
+    expect(labels.filter((text) => text.trim() === '')).toHaveLength(0);
+    // Labels, not internal ids.
+    expect(labels.join(' ')).not.toMatch(/\bnational\b/);
+    expect(labels.some((text) => text.includes('National'))).toBe(true);
+  });
+
   it('drops a saved vendor that can no longer be searched', async () => {
     // What an upgrading user has in chrome.storage from before Budget,
     // Enterprise and National became unsearchable. restoreForm filtered against
@@ -203,7 +228,10 @@ describe('the popup half of the double-run guard', () => {
       ),
     );
     expect(listed.size).toBeGreaterThan(0);
-    expect([...listed].sort()).toEqual(['avis', 'hertz', 'sixt']);
+    // Labels now, not raw ids — and National belongs here: it is searchable via
+    // its driver, so a saved selection naming it survives. Budget and
+    // Enterprise are what must not, which is the invariant this test is for.
+    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National', 'Sixt']);
   });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {
