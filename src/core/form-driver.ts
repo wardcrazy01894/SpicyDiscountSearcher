@@ -130,6 +130,58 @@ export async function waitFor<T>(
 }
 
 /**
+ * How long to leave a page alone before prompting it a second time.
+ *
+ * Deliberately generous, and the number matters more than it looks. Probe tabs
+ * run in a minimised window, where `setTimeout` is throttled to roughly 1/s and
+ * National's suggestion lookup takes about 2s — so a retry on every poll
+ * cancelled the request the previous one had started and the page never
+ * answered at all. That shipped, and broke every live run. A retry must be rare
+ * enough that the thing it is retrying has had a fair chance to finish.
+ */
+export const RETRY_INTERVAL_MS = 4_000;
+
+/**
+ * Wait for the page to do something, prompting it again if it does not.
+ *
+ * The plain `waitFor` assumes an interaction landed. Twice now that has been
+ * false on the live site in ways that cost a whole run: a keystroke typed into
+ * a field whose component had not mounted, and a toggle clicked while the
+ * widget was still settling from the previous step. Both leave nothing to wait
+ * for, so the driver waits out its entire budget and reports a timeout on a
+ * form it could have driven.
+ *
+ * `retry` runs at most every `RETRY_INTERVAL_MS`, never on the first pass —
+ * the interaction has already happened by the time this is called, and
+ * repeating it immediately is what caused the livelock above. It must be safe
+ * to run more than once: nudge a value rather than retype it, and click a
+ * toggle only while its panel is closed.
+ */
+export async function waitWithRetry<T>(
+  ctx: DriveContext,
+  describe: string,
+  read: () => T | null | undefined | false,
+  retry: () => void,
+  failure: DriverFailure = 'form-fill',
+): Promise<T> {
+  let last = ctx.now();
+  return waitFor(
+    ctx,
+    describe,
+    () => {
+      const value = read();
+      if (value !== null && value !== undefined && value !== false) return value;
+      if (ctx.now() - last >= RETRY_INTERVAL_MS) {
+        last = ctx.now();
+        retry();
+      }
+      return null;
+    },
+    failure,
+  );
+}
+
+/**
  * Set an input's value the way a framework-backed page will notice.
  *
  * Assigning `.value` directly updates the DOM and tells React nothing, so the
@@ -151,6 +203,21 @@ export function setNativeValue(el: HTMLInputElement | HTMLSelectElement, value: 
   else el.value = value;
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/**
+ * Tell a field's own component to look at it again, changing nothing.
+ *
+ * The gentle half of recovering a lost keystroke. Setting the value again — let
+ * alone clearing it first — restarts whatever the component had in flight; this
+ * only re-announces the value already there, which is enough for a component
+ * that has just finished mounting and missed the original event. Measured on
+ * National: a bare `input` on a field already holding `PHL` produced the full
+ * suggestion list.
+ */
+export function nudgeInput(el: HTMLInputElement): void {
+  el.focus();
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /** Layout-aware where the browser offers it, `textContent` where it does not.

@@ -27,7 +27,6 @@ import {
   fillAccountNumber,
   fillLocation,
   nationalDriver,
-  setDate,
   submitSearch,
   timeIndex,
   verifyResults,
@@ -69,6 +68,23 @@ interface FormOptions {
    * markup, and the widget — its listener included — mounts later.
    */
   widgetMountsAfterMs?: number;
+  /**
+   * Debounce the suggestion lookup, as the live site does (~2s in a hidden
+   * tab). A new keystroke cancels a pending one — which is what makes an
+   * over-eager retry starve it forever.
+   */
+  suggestDelayMs?: number;
+  /** Swallow the first click on the date toggle and the account panel. */
+  swallowFirstClick?: boolean;
+  /**
+   * Behave the way the live calendar does: one shared range, where the first
+   * click resets it and blanks the pick-up until a second click completes it.
+   */
+  rangePicker?: boolean;
+  /** Start with a range already chosen, as a restored session does. */
+  existingRange?: boolean;
+  /** Never let the range settle, so the driver has to give up and say why. */
+  refuseRange?: boolean;
   /** Days the calendar refuses. */
   disabledDays?: string[];
   /** Which months the calendar renders. */
@@ -92,6 +108,11 @@ function renderForm(options: FormOptions = {}): void {
     chipWrapsRemove = false,
     selectionAddsReturn = false,
     widgetMountsAfterMs = 0,
+    suggestDelayMs = 0,
+    swallowFirstClick = false,
+    rangePicker = false,
+    existingRange = false,
+    refuseRange = false,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
     onSubmit = 'results-with-account',
@@ -172,7 +193,20 @@ function renderForm(options: FormOptions = {}): void {
     }, widgetMountsAfterMs);
   }
 
+  let pending: ReturnType<typeof setTimeout> | null = null;
   function suggest(): void {
+    // Every input cancels the request in flight and starts a new one.
+    if (pending) clearTimeout(pending);
+    widget.querySelectorAll('.search-autocomplete__results').forEach((e) => e.remove());
+    if (suggestDelayMs > 0) {
+      pending = setTimeout(render, suggestDelayMs);
+      return;
+    }
+    render();
+  }
+
+  function render(): void {
+    pending = null;
     widget.querySelectorAll('.search-autocomplete__results').forEach((e) => e.remove());
     // The measured behaviour: a chip suppresses suggestions entirely.
     if (chips.querySelector('.input-pseudo__close-btn') || !input.value) return;
@@ -207,10 +241,43 @@ function renderForm(options: FormOptions = {}): void {
   if (widgetMountsAfterMs === 0) input.addEventListener('input', suggest);
 
   const host = form.querySelector<HTMLElement>('#calendar-host')!;
+  const pickupToggle = form.querySelector<HTMLElement>('#date-time__pickup-toggle')!;
+  const returnToggle = form.querySelector<HTMLElement>('#date-time__return-toggle')!;
+  if (existingRange) {
+    pickupToggle.textContent = 'Aug 20';
+    returnToggle.textContent = 'Aug 22';
+  }
+  // Range semantics, measured live: the first click starts a new range and
+  // blanks the pick-up; the second completes it.
+  let rangeStart: string | null = null;
+  const chooseDay = (monthName: string, day: number): void => {
+    const label = `${monthName.slice(0, 3)} ${day}`;
+    if (!rangePicker) return;
+    if (rangeStart === null) {
+      rangeStart = label;
+      pickupToggle.textContent = 'Date';
+      return;
+    }
+    if (!refuseRange) {
+      pickupToggle.textContent = rangeStart;
+      returnToggle.textContent = label;
+    }
+    rangeStart = null;
+  };
+
+  const swallowed = new Set<string>();
   for (const toggleId of ['date-time__pickup-toggle', 'date-time__return-toggle']) {
     const toggle = form.querySelector<HTMLElement>(`#${toggleId}`)!;
     toggle.addEventListener('click', () => {
+      // The widget is busy settling and the click simply does not register.
+      if (swallowFirstClick && !swallowed.has(toggleId)) {
+        swallowed.add(toggleId);
+        return;
+      }
       host.replaceChildren();
+      const months_ = document.createElement('div');
+      months_.className = 'date-selector__months';
+      host.append(months_);
       for (const monthYear of months) {
         const wrapper = document.createElement('div');
         wrapper.className = 'date-selector__month-wrapper';
@@ -224,12 +291,17 @@ function renderForm(options: FormOptions = {}): void {
           cell.setAttribute('aria-label', label);
           cell.disabled = disabledDays.includes(label);
           cell.addEventListener('click', () => {
+            if (rangePicker) {
+              chooseDay(monthName, day);
+              host.replaceChildren();
+              return;
+            }
             toggle.textContent = `${monthName.slice(0, 3)} ${day}`;
             host.replaceChildren();
           });
           wrapper.append(cell);
         }
-        host.append(wrapper);
+        months_.append(wrapper);
       }
     });
   }
@@ -243,7 +315,12 @@ function renderForm(options: FormOptions = {}): void {
     field.value = staleCode;
     panel.append(field);
   };
-  form.querySelector<HTMLElement>('.contract-promo__tog')!.addEventListener('click', openPanel);
+  let panelClicks = 0;
+  form.querySelector<HTMLElement>('.contract-promo__tog')!.addEventListener('click', () => {
+    panelClicks += 1;
+    if (swallowFirstClick && panelClicks === 1) return;
+    openPanel();
+  });
   if (staleCode) openPanel();
 
   const showResults = (): void => {
@@ -429,6 +506,24 @@ describe('fillLocation', () => {
     expect(document.querySelector('.chip')).toBeNull();
   });
 
+  it('lets a debounced lookup finish instead of restarting it', async () => {
+    // The bug that broke every live run, and the reason the recovery above is
+    // throttled rather than eager.
+    //
+    // National debounces its suggestion lookup — about 2s in a hidden tab,
+    // which is what a probe tab is, and where `setTimeout` is throttled to
+    // roughly 1/s. The first version of the lost-keystroke recovery cleared the
+    // field and retyped on *every* poll, so each attempt cancelled the request
+    // the previous one had started: fifteen polls, zero results, every time.
+    // Measured live, and reproduced here — with the eager version this test
+    // times out, and deleting the recovery altogether passes it.
+    renderForm({ suggestDelayMs: 600 });
+    await expect(
+      fillLocation(realTimerContext({ deadline: Date.now() + 5_000 })),
+    ).resolves.toBeUndefined();
+    expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
+  }, 25_000);
+
   it('survives a page whose location field exists before its widget does', async () => {
     // The failure that took three rounds of live testing to find, and that the
     // fixture could not previously express because it rendered the whole form
@@ -446,7 +541,7 @@ describe('fillLocation', () => {
 
     await expect(nationalDriver.drive(realTimerContext())).resolves.toBeUndefined();
     expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
-  });
+  }, 25_000);
 
   it('reads the chip back whatever shape the markup gives it', async () => {
     // The readback must not assume the branch name sits in a childless element.
@@ -508,32 +603,7 @@ describe('fillLocation', () => {
   });
 });
 
-describe('setDate and applyDates', () => {
-  it('picks the day and confirms the field reads it back', async () => {
-    renderForm();
-    await setDate(makeContext(), 'date-time__pickup-toggle', '2026-09-04', 'pick-up');
-    expect(document.querySelector('#date-time__pickup-toggle')!.textContent).toBe('Sep 4');
-  });
-
-  it('says so when the calendar refuses that day', async () => {
-    renderForm({ disabledDays: ['September 4'] });
-    const error = await failureOf(
-      setDate(makeContext(), 'date-time__pickup-toggle', '2026-09-04', 'pick-up'),
-    );
-    expect(error.failure).toBe('form-fill');
-    // Distinct from "no such cell": a disabled day is the site declining, and
-    // the two want different fixes.
-    expect(error.message).toMatch(/will not accept/);
-  });
-
-  it('fails when the month is not on screen', async () => {
-    renderForm({ months: ['September 2026'] });
-    const error = await failureOf(
-      setDate(makeContext(), 'date-time__return-toggle', '2026-12-02', 'return'),
-    );
-    expect(error.message).toContain('December 2026');
-  });
-
+describe('applyDates', () => {
   it('sets both dates and both times', async () => {
     renderForm();
     await applyDates(makeContext());
@@ -542,6 +612,69 @@ describe('setDate and applyDates', () => {
     expect(document.querySelector<HTMLSelectElement>('#PICKUP')!.value).toBe('24');
     expect(document.querySelector<HTMLSelectElement>('#RETURN')!.value).toBe('24');
   });
+
+  it('drives a range picker that blanks the pick-up on the first click', async () => {
+    // The live behaviour, and what the first version got wrong. On a form
+    // already carrying a range — the state National restores by default —
+    // clicking a day starts a *new* range and blanks the pick-up until a second
+    // day completes it. A driver that verified the pick-up right after clicking
+    // it hung there forever.
+    renderForm({ rangePicker: true, existingRange: true });
+    await expect(
+      applyDates(realTimerContext({ deadline: Date.now() + 12_000 })),
+    ).resolves.toBeUndefined();
+    expect(document.querySelector('#date-time__pickup-toggle')!.textContent).toBe('Sep 4');
+    expect(document.querySelector('#date-time__return-toggle')!.textContent).toBe('Sep 6');
+  }, 25_000);
+
+  it('says what the form kept when the range will not take', async () => {
+    renderForm({ rangePicker: true, existingRange: true, refuseRange: true });
+    const error = await failureOf(applyDates(realTimerContext({ deadline: Date.now() + 12_000 })));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/instead of Sep 4 to Sep 6/);
+  }, 25_000);
+
+  it('says so when the calendar refuses that day', async () => {
+    renderForm({ disabledDays: ['September 4'] });
+    const error = await failureOf(applyDates(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/will not accept/);
+  });
+
+  it('fails when the month is not on screen', async () => {
+    renderForm({ months: ['September 2026'] });
+    const error = await failureOf(
+      applyDates(makeContext({ trip: { ...TRIP, dropoffDate: '2026-12-02' } })),
+    );
+    expect(error.message).toContain('December 2026');
+  });
+});
+
+describe('clicks the widget swallows', () => {
+  // Measured on the live site while verifying the autocomplete fix: clicking
+  // the date toggle immediately after choosing a location can land while the
+  // widget is still settling and simply not register. The calendar never opens,
+  // and a driver that clicks once then waits burns its whole budget on a form
+  // it could have driven. The account panel's toggle has the same shape.
+  //
+  // Both retries are safe to repeat because they only fire while the thing is
+  // *closed* — a toggle clicked twice would shut it again.
+
+  it('re-opens a calendar whose toggle click was swallowed', async () => {
+    renderForm({ swallowFirstClick: true });
+    await expect(
+      applyDates(realTimerContext({ deadline: Date.now() + 12_000 })),
+    ).resolves.toBeUndefined();
+    expect(document.querySelector('#date-time__pickup-toggle')!.textContent).toBe('Sep 4');
+  }, 25_000);
+
+  it('re-opens an account panel whose toggle click was swallowed', async () => {
+    renderForm({ swallowFirstClick: true });
+    await expect(
+      fillAccountNumber(realTimerContext({ deadline: Date.now() + 12_000 })),
+    ).resolves.toBeUndefined();
+    expect(document.querySelector<HTMLInputElement>('#contract__input')!.value).toBe('5666666');
+  }, 25_000);
 });
 
 describe('fillAccountNumber', () => {

@@ -104,12 +104,16 @@ const VERIFY_TRIP = new Set<string>(['avis']);
  * How much of a quote's budget a form driver may spend before pricing starts.
  *
  * **A guess, and the number here most likely to be wrong.** It is live for
- * National, which mounts its widget in about 8s and fits inside the ~27s this
- * leaves of a 45s `PROBE_TIMEOUT_MS`. Enterprise is what will break it: its
- * widget alone took ~40s on one measured load, leaving nothing for filling,
- * submitting or pricing. Raising the timeout is the answer there, and
- * `KEEPALIVE_CEILING_MS` derives from it, so that is a deliberate change rather
- * than a nudge.
+ * National, and the margin is thinner than it looks. Measured in a throttled tab,
+ * its drive costs ~2s for the location and up to ~12s for the date range, which
+ * can need three verify-and-retry passes — inside the ~27s this leaves of a 45s
+ * `PROBE_TIMEOUT_MS`, but not by much.
+ *
+ * Raising `PROBE_TIMEOUT_MS` is the real answer if that margin proves too thin,
+ * and it is deliberately **not** done here: `KEEPALIVE_CEILING_MS` derives from
+ * it and five timing tests restate it, so it is a change to make on evidence
+ * from a real run rather than pre-emptively. Enterprise will force the question
+ * anyway — its widget alone took ~40s on one measured load.
  */
 const DRIVE_SHARE = 0.6;
 

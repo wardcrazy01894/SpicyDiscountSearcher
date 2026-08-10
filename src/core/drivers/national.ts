@@ -4,7 +4,9 @@ import {
   type DriveContext,
   type FormDriver,
   hasToken,
+  nudgeInput,
   POLL_MS,
+  waitWithRetry,
   setNativeValue,
   textOf,
   textOutside,
@@ -243,6 +245,28 @@ const CHIP_REMOVE = 'button.input-pseudo__close-btn';
  */
 const HYDRATED_MARKER = '.booking-widget__go-cta';
 
+/** The open calendar, whichever toggle opened it — there is only ever one. */
+const CALENDAR = '.date-selector__months';
+
+/**
+ * How many times to re-drive the whole date range before giving up.
+ *
+ * More than one because the first click's behaviour depends on the state the
+ * form starts in: on a form already carrying a range it resets rather than
+ * sets, so one pass can legitimately land half-applied. Small because a run
+ * that needs a third attempt is not flaky, it is broken.
+ */
+const RANGE_ATTEMPTS = 3;
+
+/**
+ * Polls to let a completed range render before calling the attempt failed.
+ *
+ * Kept small because each one costs about a second in a probe tab, not the
+ * 250ms it reads as — the window is minimised, so timers are throttled. Eight
+ * polls across three attempts spent 21s of a 27s budget on the live site.
+ */
+const SETTLE_POLLS = 4;
+
 export async function clearStaleLocation(ctx: DriveContext): Promise<void> {
   // Bounded rather than `while`, so a chip whose remove button does not remove
   // it is a timeout with a message instead of a spin.
@@ -288,26 +312,27 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   // it renders the same text and swallows a click silently, which cost a whole
   // debugging pass — the menu closed, nothing was selected, and the next step
   // looked like the site had changed.
-  const option = await waitFor(ctx, `the autocomplete to offer ${iata}`, () => {
-    const results = [
-      ...ctx.doc.querySelectorAll<HTMLElement>('button.search-autocomplete__result'),
-    ];
-    // Nothing offered at all means the keystroke was very likely lost — the
-    // field is static markup, so it can be typed into before its component is
-    // listening, and one event into a dead component leaves no trace to wait
-    // for. `HYDRATED_MARKER` makes that unlikely rather than impossible, so
-    // this re-types instead of trusting it. Cleared first: re-setting the same
-    // value is not a change, and a change is the whole point.
-    if (results.length === 0) {
-      field.focus();
-      setNativeValue(field, '');
-      setNativeValue(field, iata);
+  // The retry never clears the field. A missing value is set — the component
+  // wiped it — and an intact one is only re-announced, which leaves any lookup
+  // in flight alone. Clearing and retyping is exactly what broke every live
+  // run; see `RETRY_INTERVAL_MS`.
+  const option = await waitWithRetry(
+    ctx,
+    `the autocomplete to offer ${iata}`,
+    () => {
+      const results = [
+        ...ctx.doc.querySelectorAll<HTMLElement>('button.search-autocomplete__result'),
+      ];
+      // Offered something, just not ours. The timeout message already names the
+      // code that was never offered, and a retry would only thrash.
+      if (results.length > 0) return results.find((el) => hasToken(textOf(el), iata)) ?? null;
       return null;
-    }
-    // Offered something, just not ours — retyping would only thrash, and the
-    // timeout message already names the code that was never offered.
-    return results.find((el) => hasToken(textOf(el), iata)) ?? null;
-  });
+    },
+    () => {
+      if (field.value === iata) nudgeInput(field);
+      else setNativeValue(field, iata);
+    },
+  );
   option.click();
 
   // The widget renders the branch as `Tampa International Airport (TPA)`, so the
@@ -355,64 +380,123 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   }
 }
 
-/**
- * Set one date through the calendar, and confirm the field took it.
- *
- * The control is a `<button role="combobox">` with no input behind it, so
- * clicking a day cell is the only route. Day buttons carry
- * `aria-label="September 4"` and sit inside a wrapper labelled
- * `Calendar - September 2026`; past days are `disabled`, which is reported as
- * such rather than as a missing cell because the two want different fixes.
- *
- * The readback is the toggle's own text becoming `Sep 4`. That is the step that
- * makes this trustworthy, and the one Enterprise's driver is still missing.
- */
-export async function setDate(
-  ctx: DriveContext,
-  toggleId: string,
-  iso: string,
-  which: string,
-): Promise<void> {
-  const { month, day } = calendarLabels(iso);
+/** "September 4" as the toggle renders it once chosen: "Sep 4". */
+function toggleLabel(day: string): string {
+  const [month, number] = day.split(' ');
+  return `${(month ?? '').slice(0, 3)} ${number ?? ''}`.trim();
+}
+
+/** Open the calendar under a toggle, re-clicking if the click was swallowed. */
+async function openCalendar(ctx: DriveContext, toggleId: string, which: string): Promise<void> {
   const toggle = ctx.doc.querySelector<HTMLElement>(`#${toggleId}`);
   if (!toggle) throw new DriverError('form-fill', `no ${which} date control on the form`);
-  toggle.click();
-
-  const cell = await waitFor(ctx, `the calendar to offer ${day} ${month}`, () => {
-    const wrappers = [...ctx.doc.querySelectorAll<HTMLElement>('.date-selector__month-wrapper')];
-    const wrapper = wrappers.find(
-      (el) =>
-        (el.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim() === `Calendar - ${month}`,
-    );
-    if (!wrapper) return null;
-    return wrapper.querySelector<HTMLButtonElement>(
-      `button.date-selector__day[aria-label="${day}"]`,
-    );
-  });
-
-  if (cell.disabled) {
-    throw new DriverError('form-fill', `national will not accept ${which} date ${iso}`);
-  }
-  cell.click();
-
-  // `Sep 4` for `September 4`. Compared on the abbreviation and the number so a
-  // change to the toggle's formatting fails loudly here rather than letting a
-  // default date through.
-  const expected = `${day.slice(0, 3)} ${day.split(' ')[1] ?? ''}`.trim();
-  await waitFor(
+  if (!ctx.doc.querySelector(CALENDAR)) toggle.click();
+  // Measured: clicking this immediately after the location is chosen can land
+  // while the widget is still settling and never register. Only re-clicked
+  // while the calendar is closed, because a toggle clicked twice closes it.
+  await waitWithRetry(
     ctx,
-    `the ${which} field to read ${expected}`,
-    () => textOf(toggle).toLowerCase() === expected.toLowerCase() || null,
+    `the ${which} calendar to open`,
+    () => ctx.doc.querySelector(CALENDAR),
+    () => {
+      if (!ctx.doc.querySelector(CALENDAR)) toggle.click();
+    },
   );
 }
 
+/** Click one day in whichever calendar is open. */
+async function clickDay(
+  ctx: DriveContext,
+  labels: { month: string; day: string },
+  which: string,
+): Promise<void> {
+  const cell = await waitFor(ctx, `the calendar to offer ${labels.day} ${labels.month}`, () => {
+    const wrappers = [...ctx.doc.querySelectorAll<HTMLElement>('.date-selector__month-wrapper')];
+    const wrapper = wrappers.find(
+      (el) =>
+        (el.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim() ===
+        `Calendar - ${labels.month}`,
+    );
+    if (!wrapper) return null;
+    return wrapper.querySelector<HTMLButtonElement>(
+      `button.date-selector__day[aria-label="${labels.day}"]`,
+    );
+  });
+  if (cell.disabled) {
+    throw new DriverError('form-fill', `national will not accept the ${which} date ${labels.day}`);
+  }
+  cell.click();
+}
+
+/** Both toggles reading the trip back, which is the only success signal. */
+function datesRead(ctx: DriveContext, pickup: string, dropoff: string): boolean {
+  return (
+    textOf(ctx.doc.querySelector('#date-time__pickup-toggle')).toLowerCase() ===
+      pickup.toLowerCase() &&
+    textOf(ctx.doc.querySelector('#date-time__return-toggle')).toLowerCase() ===
+      dropoff.toLowerCase()
+  );
+}
+
+/**
+ * Set both dates, as the one range they are.
+ *
+ * **This is a range picker, not two date fields**, which is what the first
+ * version got wrong and why it failed intermittently on the live site. Measured
+ * on a form carrying a previous search — the state National restores by default
+ * — clicking a day does not set the field it was opened from: it *starts a new
+ * range*, blanking the pick-up until a second day completes it.
+ *
+ * | after | pick-up | return |
+ * | --- | --- | --- |
+ * | (restored) | Sep 4 | Sep 6 |
+ * | click Sep 4 | **Date** | Sep 6 |
+ * | click Sep 6 | Sep 6 | Sep 6 |
+ *
+ * So a driver that clicks one day and waits for that toggle to read it back
+ * hangs, and one that verifies each field as it goes can be satisfied by a
+ * half-applied range. Both clicks happen first, then *both* toggles are checked
+ * together — and the whole selection is retried, because the state it starts
+ * from decides how the first click behaves.
+ *
+ * The earlier version passed twice by luck of starting state, which is a good
+ * reminder that a driven form has to be tested from the state a user's profile
+ * will actually be in, not from the one a fresh page happens to give.
+ */
 export async function applyDates(ctx: DriveContext): Promise<void> {
   const trip = carTrip(ctx);
-  await setDate(ctx, 'date-time__pickup-toggle', trip.pickupDate, 'pick-up');
-  // The return calendar opens on the pick-up's month rather than today's, so
-  // this must run after the pick-up is set or the wrapper it looks for may not
-  // be rendered.
-  await setDate(ctx, 'date-time__return-toggle', trip.dropoffDate, 'return');
+  const pickup = calendarLabels(trip.pickupDate);
+  const dropoff = calendarLabels(trip.dropoffDate);
+  const wantPickup = toggleLabel(pickup.day);
+  const wantDropoff = toggleLabel(dropoff.day);
+
+  for (let attempt = 0; attempt < RANGE_ATTEMPTS; attempt += 1) {
+    await openCalendar(ctx, 'date-time__pickup-toggle', 'pick-up');
+    await clickDay(ctx, pickup, 'pick-up');
+    // Re-opened rather than assumed still open: completing a range closes the
+    // calendar on some paths and leaves it open on others.
+    await openCalendar(ctx, 'date-time__return-toggle', 'return');
+    await clickDay(ctx, dropoff, 'return');
+
+    let settled = false;
+    for (let poll = 0; poll < SETTLE_POLLS; poll += 1) {
+      if (datesRead(ctx, wantPickup, wantDropoff)) {
+        settled = true;
+        break;
+      }
+      if (ctx.now() >= ctx.deadline) break;
+      await ctx.sleep(POLL_MS);
+    }
+    if (settled) break;
+    if (attempt === RANGE_ATTEMPTS - 1) {
+      throw new DriverError(
+        'form-fill',
+        `national kept ${textOf(ctx.doc.querySelector('#date-time__pickup-toggle'))} to ` +
+          `${textOf(ctx.doc.querySelector('#date-time__return-toggle'))} instead of ` +
+          `${wantPickup} to ${wantDropoff}`,
+      );
+    }
+  }
 
   for (const [id, time] of [
     ['PICKUP', trip.pickupTime],
@@ -439,8 +523,14 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
   // so this is a step rather than a convenience.
   if (!ctx.doc.querySelector('#contract__input')) toggle.click();
 
-  const field = await waitFor(ctx, 'the account number field', () =>
-    ctx.doc.querySelector<HTMLInputElement>('#contract__input'),
+  // Same hazard as the calendar: the panel toggle can be clicked while the
+  // widget is busy and simply not register. Only re-clicked while the field is
+  // still absent, so an open panel is never toggled shut.
+  const field = await waitWithRetry(
+    ctx,
+    'the account number field',
+    () => ctx.doc.querySelector<HTMLInputElement>('#contract__input'),
+    () => toggle.click(),
   );
 
   // Written unconditionally, never appended to. Session state can leave another
