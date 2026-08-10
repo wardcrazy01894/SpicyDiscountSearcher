@@ -36,18 +36,26 @@ rendered. It dumps the facts a driver needs and nothing else.
     url: location.origin + location.pathname,
     hash: location.hash,
     fields: [...document.querySelectorAll('input,select,textarea')].map((e) => ({
-      tag: e.tagName, type: e.type, id: e.id, name: e.name,
-      placeholder: e.placeholder, aria: e.getAttribute('aria-label'),
-      visible: vis(e), value: e.value,
+      tag: e.tagName,
+      type: e.type,
+      id: e.id,
+      name: e.name,
+      placeholder: e.placeholder,
+      aria: e.getAttribute('aria-label'),
+      visible: vis(e),
+      value: e.value,
       options: e.tagName === 'SELECT' ? e.options.length : undefined,
     })),
     buttons: [...document.querySelectorAll('button,[role="button"],input[type=submit]')]
-      .filter(vis).map((e) => ({ text: t(e), id: e.id, cls: String(e.className).slice(0, 50) })),
+      .filter(vis)
+      .map((e) => ({ text: t(e), id: e.id, cls: String(e.className).slice(0, 50) })),
     // The date control is the step every driver so far has died on. If it is
     // not in `fields` above, it is a custom widget and needs opening.
-    dateish: [...document.querySelectorAll('*')].filter(vis)
+    dateish: [...document.querySelectorAll('*')]
+      .filter(vis)
       .filter((e) => e.children.length === 0 && /^\d{1,2}$|^\d{4}$|^[A-Z][a-z]{2}$/.test(t(e)))
-      .slice(0, 20).map((e) => ({ text: t(e), tag: e.tagName, cls: String(e.className).slice(0, 40) })),
+      .slice(0, 20)
+      .map((e) => ({ text: t(e), tag: e.tagName, cls: String(e.className).slice(0, 40) })),
   };
 })();
 ```
@@ -59,7 +67,7 @@ Then, for each field the trip needs, answer three questions:
    happens, it is a custom widget and needs clicking.
 2. **How is the result confirmed?** Find the text the form renders back once the
    field holds a value. This is the half people skip.
-3. **What does a wrong answer look like?** Load the page with a *different*
+3. **What does a wrong answer look like?** Load the page with a _different_
    value already in session state and check the verification catches it.
 
 Then submit, and record all three outcomes: the success signal (Enterprise sets
@@ -68,34 +76,34 @@ and what "nothing happened" looks like.
 
 ## Vendor state
 
-| Vendor | Searchable | Where it stands |
-| --- | --- | --- |
-| Avis | yes | Deep link `verified`, replay-proved, widget-reset + trip-check |
-| Hertz | yes | Deep link `verified`, differential-replay-proved |
-| Sixt | **yes** | Builder measured to 302 to the site root. Enabled but useless — see below |
-| Enterprise | no | Driver written and tested; blocked on the date control |
-| Budget | no | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
-| National | no | Form fully mapped, date control driven and verified. Two questions open. See below |
-| Hilton / Marriott / Hyatt | yes | `best-effort`, never checked against the live site |
-| Starwood | no | Correctly so; folded into Marriott in 2018, no site to search |
+| Vendor                    | Searchable | Where it stands                                                                                                                                |
+| ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                 |
+| Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                               |
+| Sixt                      | **yes**    | Builder measured to 302 to the site root. Enabled but useless — see below                                                                      |
+| Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
+| Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
+| National                  | no         | **Driver written, tested, and proved against the live site.** Blocked only on per-vendor concurrency of one. See below                         |
+| Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                             |
+| Starwood                  | no         | Correctly so; folded into Marriott in 2018, no site to search                                                                                  |
 
 ## National — measured 2026-08-08, and the furthest along
 
 Reconnaissance run against `https://www.nationalcar.com/en/home.html`, which was
 **not** throttling. The form is on the home page, not a `/reserve` route.
 
-| Piece | How |
-| --- | --- |
-| Location | `#search-autocomplete__input-PICKUP`; options are `button.search-autocomplete__result` (the `<li>` around them is **not** clickable) |
-| Location readback | a chip reading `Tampa International Airport (TPA)`; the input's own value is cleared on selection |
-| Pick-up / return date | `#date-time__pickup-toggle` / `#date-time__return-toggle` — `<button role="combobox">`, no hidden input |
-| Day cell | `button.date-selector__day[aria-label="September 4"]`, inside `.date-selector__month-wrapper[aria-label="Calendar - September 2026"]`; past days carry `disabled` |
-| Date readback | the toggle's own text becomes `Sep 4` |
-| Times | `#PICKUP` / `#RETURN` `<select>`, value is a half-hour index from midnight (`24` = 12:00 PM) |
-| Age | `#age-selector` |
-| Account number | `button.contract-promo__tog` ("ACCOUNT NUMBER / COUPONS") reveals `#contract__input` |
-| Account readback | the toggle's label becomes `ACCOUNT NUMBER (5666666) / COUPONS` |
-| Submit | `button.booking-widget__go-cta`, "CHECK AVAILABILITY" |
+| Piece                 | How                                                                                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Location              | `#search-autocomplete__input-PICKUP`; options are `button.search-autocomplete__result` (the `<li>` around them is **not** clickable)                              |
+| Location readback     | a chip reading `Tampa International Airport (TPA)`; the input's own value is cleared on selection                                                                 |
+| Pick-up / return date | `#date-time__pickup-toggle` / `#date-time__return-toggle` — `<button role="combobox">`, no hidden input                                                           |
+| Day cell              | `button.date-selector__day[aria-label="September 4"]`, inside `.date-selector__month-wrapper[aria-label="Calendar - September 2026"]`; past days carry `disabled` |
+| Date readback         | the toggle's own text becomes `Sep 4`                                                                                                                             |
+| Times                 | `#PICKUP` / `#RETURN` `<select>`, value is a half-hour index from midnight (`24` = 12:00 PM)                                                                      |
+| Age                   | `#age-selector`                                                                                                                                                   |
+| Account number        | `button.contract-promo__tog` ("ACCOUNT NUMBER / COUPONS") reveals `#contract__input`                                                                              |
+| Account readback      | the toggle's label becomes `ACCOUNT NUMBER (5666666) / COUPONS`                                                                                                   |
+| Submit                | `button.booking-widget__go-cta`, "CHECK AVAILABILITY"                                                                                                             |
 
 **The date control is driven and verified** — the blocker that stopped
 Enterprise. Clicking the toggle and then the day button, both synthetically,
@@ -112,19 +120,60 @@ done nothing.
 Results land on `/en/reserve.html#/car_select` (note the slash, unlike
 Enterprise's `#car_select`), title "Select Vehicle". **The results page renders a
 full trip summary — `TPA Sep 4 at 12:00 PM … Sep 6 at 12:00 PM`** — which is a
-better verification signal than any other vendor here offers: location *and*
+better verification signal than any other vendor here offers: location _and_
 both dates, checkable against the trip. Retail baseline for that itinerary was
 $74.00/day, $193.80 total.
 
-Two things still open, both of which must be closed before a driver ships:
+### Proved 2026-08-10 — the code applies, and it moves the price
 
-- **Does the account number change the price?** Not verified. The successful
-  end-to-end run was the retail one; the run carrying `5666666` never reached
-  results. For a discount-code racer this is the load-bearing question.
-- **The location autocomplete is focus-sensitive.** The suggestion request fires
-  and returns 200, but the menu does not render — or closes again — when the
-  field loses focus, which a driver polling from another context can easily
-  cause. A content script must keep focus on the field while suggestions arrive.
+A controlled differential, same session, same trip, minutes apart:
+
+|                            | with `5666666`      | control             |
+| -------------------------- | ------------------- | ------------------- |
+| `ACCOUNT NAME`             | `I B M CORP (USA)`  | absent              |
+| rate label                 | "Custom Rate"       | absent              |
+| Compact SUV (Hyundai Kona) | $70.30/day, $185.05 | $74.00/day, $193.80 |
+| results                    | 34                  | 34                  |
+
+Same vehicle, same result count, different price. Two runs is what makes this a
+measurement rather than a hopeful anecdote — a single discounted run cannot tell
+"the code applied" from "prices moved since Tuesday", which is exactly the trap
+`deeplinks.ts` describes for a URL that merely loads.
+
+`src/core/drivers/national.ts` is the driver, and it is fully tested. Both of
+last session's open questions closed:
+
+- The focus sensitivity is real but is not a property of the site — it was an
+  artefact of driving the field across several separate evaluations. Done in one
+  pass, keeping focus, the autocomplete behaves.
+- Everything is verified by readback: the location chip must render `(TPA)`, each
+  date toggle must read `Sep 4`, the account field must keep the code, and the
+  **results page must carry `ACCOUNT NAME`** — its absence is `code-rejected`,
+  because that is precisely the control run and its prices are retail.
+
+### Why National is still not registered
+
+**It carries the previous search in session state — location, dates _and_ the
+account number.** Reloading the form showed the chip, both dates, and
+`#contract__input` still holding `5666666`, with the toggle reading
+`Account Number (I B M CORP (USA)) / Coupons`.
+
+Two consequences. The first is handled: a stale chip suppresses the autocomplete
+outright, so `clearStaleLocation` removes it before typing — a regression test
+covers a run that starts from stale state, and deleting the clear fails it.
+
+The second is not, and it is the blocker: **concurrent National tabs in one
+profile share that state**, so two lanes racing two codes can settle on one. The
+`ACCOUNT NAME` check does not save us — both tabs would render the same name,
+and nothing maps a code to the name it should produce. National needs a
+per-vendor concurrency of one, which the worker cannot express today; `Vendor`
+has no `maxLanes` and `runQuote` reads a single run-wide number. That is the
+next change, and it is what stands between this driver and
+`searchable: true`.
+
+This is the same hazard CLAUDE.md records as an open question for Avis
+("Concurrent Avis tabs share one `localStorage`"), except here it is observed
+rather than suspected. Whatever shape the fix takes should serve both.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.
@@ -136,13 +185,13 @@ whether a given contract id is valid at both.
 `https://www.budget.com/en/home`, an AngularJS form (`ng-pristine` classes).
 Easier to fill than either of the others:
 
-| Piece | How |
-| --- | --- |
-| Location | `#PicLoc_value` (`name="anguPicLoc"`), free text, no suggestion menu observed |
-| Dates | **`#from` and `#to` are plain text inputs**, placeholder `mm/dd/yyyy` |
-| Times | `select[name="reservationModel.pickUpTime"]` / `…dropTime`, 48 options |
+| Piece    | How                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Location | `#PicLoc_value` (`name="anguPicLoc"`), free text, no suggestion menu observed                                                  |
+| Dates    | **`#from` and `#to` are plain text inputs**, placeholder `mm/dd/yyyy`                                                          |
+| Times    | `select[name="reservationModel.pickUpTime"]` / `…dropTime`, 48 options                                                         |
 | Discount | `button.customer-discount-toggle` reveals `#awd` (placeholder **"BCD Code"**), `#coupon`, and `#res-home-wizNum` (Customer ID) |
-| Submit | `button.selectMyCar`, "Show Cars" |
+| Submit   | `button.selectMyCar`, "Show Cars"                                                                                              |
 
 The dates are the good news: `setNativeValue(from, '09/04/2026')` took, so no
 calendar driving is needed at all, and `usDate()` in `deeplinks.ts` already emits
@@ -162,7 +211,7 @@ extension never answers a challenge; it just puts a human in front of one.
 Budget now has the same affordance, `#budget-captcha-btn`, with one honest
 difference. Avis carries its check on the availability page, so its button lands
 on the check itself and the chore is a single click. Budget's appeared only on
-*submitting* a search, so its button lands on the form and the user has to run
+_submitting_ a search, so its button lands on the form and the user has to run
 one search to raise it. Capturing the URL the challenge is served at would make
 this one-click too — nobody recorded it, and that is the cheapest improvement
 here.
@@ -183,7 +232,7 @@ challenge, and no amount of clearance changes the politeness posture — Budget
 gets the same capped concurrency and stagger as everyone else.
 
 **Sixt is the odd one out and deserves a decision.** It is the only vendor that
-is `searchable: true` while being *known* not to reach a search: its builder
+is `searchable: true` while being _known_ not to reach a search: its builder
 302s to the site root, where a marketing "$35" sits. The damage is contained —
 `landedElsewhere` flags the quote `suspect` and `compare.ts` keeps suspect
 quotes out of the ranking — but it still spends a tab and a lane on every run to
@@ -197,13 +246,17 @@ URL or make it unsearchable.
 Landing a driver is not one change. All of these belong in it:
 
 - **Register the driver** in `FORM_DRIVERS`. Writing one does not enable it.
+- **Cap the vendor to one lane** if its site keeps the search in session state.
+  National demonstrably does, and Avis is suspected of it. `Vendor` has no
+  `maxLanes` today and `runQuote` reads one run-wide number, so this is real
+  work rather than a flag.
 - **Raise `PROBE_TIMEOUT_MS`.** Enterprise's widget took ~40s of the current 45s
   budget to hydrate on one measured load. `KEEPALIVE_CEILING_MS` is derived from
   this constant, so it is a deliberate change, not a nudge. `DRIVE_SHARE` in
   `probe.ts` splits the budget between driving and pricing and is currently a
   guess.
 - **Admit `form-fill`, `form-submit` and `code-rejected`** to `PROBE_FAILURES`
-  in the service worker. They are held out precisely because no *reachable*
+  in the service worker. They are held out precisely because no _reachable_
   emitter exists yet; the moment one does, they should be admitted in the same
   change.
 - **Decide what `LinkConfidence` means for a driven vendor.** Neither `verified`

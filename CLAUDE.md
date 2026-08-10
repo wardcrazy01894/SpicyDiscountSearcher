@@ -297,7 +297,7 @@ the **code** in tests; rewording a message must not change what the system
 believes happened.
 
 The three form codes have an emitter now — `core/drivers/enterprise.ts` — but no
-*reachable* one, and they are still off `PROBE_FAILURES` for exactly that reason
+_reachable_ one, and they are still off `PROBE_FAILURES` for exactly that reason
 (see below). They exist for Budget, Enterprise and National, whose sites ignore
 the query string entirely: Enterprise's results page is a bare `#car_select`,
 Budget's a bare `#/vehicles`. All three refuse to build a URL and are
@@ -309,7 +309,7 @@ measured rather than guessed. **The three sentences that used to sit here were
 wrong on every count** — they described a multi-step wizard whose real inputs
 were `display:none` behind custom controls, with no discount-code field on the
 first step, and concluded a single fill-and-submit was the wrong shape. Checked
-against the live site on 2026-08-08, `/en/reserve.html` is *one* visible step:
+against the live site on 2026-08-08, `/en/reserve.html` is _one_ visible step:
 
 - `input[name="location-search"]`, an autocomplete; `#sameLocation` reveals a
   second one for a one-way drop-off
@@ -326,7 +326,7 @@ should shape the driver when it is written:
 - **The results page names the account holder.** IBM's `5666666` rendered
   `I B M CORP (USA)` in the header. That is a per-code verification signal of
   the same kind `verify-trip.ts` gives us for Avis, and it is the good news
-  here: it can prove the code *applied* rather than being silently dropped.
+  here: it can prove the code _applied_ rather than being silently dropped.
 - **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
   "this account number cannot be used online. Please contact your account
   manager." A real answer, not a broken driver, and a distinct outcome from
@@ -355,14 +355,14 @@ renders**, and a step that cannot be verified fails the quote. Not "we set the
 field" but "the form now shows what we set". `fillLocation` nearly shipped with
 that wrong — it confirmed the branch name was on the page, which the suggestion
 menu guarantees whether or not the click did anything, so it now requires the
-name somewhere the menu is *not*. A test pins that distinction.
+name somewhere the menu is _not_. A test pins that distinction.
 
 **And it is deliberately unreachable.** `FORM_DRIVERS` is empty, Enterprise is
 still `searchable: false`, and `enterpriseDriver.drive` always fails — because
 the date control was never exercised. Both live runs used the form's default
 dates, and the control is custom rather than a `select`, so nothing says the
 trip's dates can be set, let alone verified after setting. `applyDates` therefore
-refuses outright, and is ordered *before* the code fill and the submit so a form
+refuses outright, and is ordered _before_ the code fill and the submit so a form
 that cannot express the trip is never sent. A test asserts that failure; when
 the control is measured and driven, that test is replaced rather than deleted.
 
