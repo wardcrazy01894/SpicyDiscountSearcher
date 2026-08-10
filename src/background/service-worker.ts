@@ -2,6 +2,7 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
+import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
   Offer,
@@ -107,6 +108,24 @@ interface ActiveRun {
   cancelled: boolean;
   /** Resolvers waiting on a quote to finish, keyed by quote id. */
   waiters: Map<string, () => void>;
+  /** Vendor id -> tabs currently open at it, for `Vendor.maxLanes`. */
+  vendorInFlight: Map<string, number>;
+  /**
+   * Lanes parked because every quote left belongs to a capped vendor.
+   *
+   * Woken when a quote releases its vendor slot, and — the part that matters —
+   * on cancel. A parked lane that nothing wakes never returns, `Promise.all`
+   * over the lanes never settles, and teardown never runs: the window stays
+   * open and the popup sits on "Racing codes…" forever. That is the same shape
+   * as every other stranded-teardown bug in this file.
+   */
+  laneWaiters: Set<() => void>;
+}
+
+/** Release every parked lane, so each can re-check the queue and the cancel flag. */
+function wakeLanes(run: ActiveRun): void {
+  for (const resolve of run.laneWaiters) resolve();
+  run.laneWaiters.clear();
 }
 
 let active: ActiveRun | null = null;
@@ -660,12 +679,55 @@ async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
   }
 }
 
+/**
+ * Take the first quote whose vendor has a free slot, claiming that slot.
+ *
+ * Skips past a capped vendor rather than blocking on it, so one National quote
+ * in flight does not stall a lane that could be pricing Hertz. Synchronous on
+ * purpose: read-and-claim happens with no `await` between, which is what stops
+ * two lanes both seeing the last free slot. An async guard is not a guard, and
+ * this file already records `cancelRun()` failing at exactly that.
+ */
+function takeNext(run: ActiveRun, queue: Quote[]): Quote | null {
+  for (let i = 0; i < queue.length; i += 1) {
+    const quote = queue[i]!;
+    const vendor = quote.candidate.vendor;
+    // An unknown vendor is uncapped rather than skipped: `findVendor` tolerates
+    // an id the registry has dropped, and a quote nothing will ever take is a
+    // lane parked forever.
+    const cap = findVendor(vendor)?.maxLanes ?? Infinity;
+    if ((run.vendorInFlight.get(vendor) ?? 0) < cap) {
+      queue.splice(i, 1);
+      run.vendorInFlight.set(vendor, (run.vendorInFlight.get(vendor) ?? 0) + 1);
+      return quote;
+    }
+  }
+  return null;
+}
+
 async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
   for (;;) {
     if (run.cancelled) return;
-    const next = queue.shift();
-    if (!next) return;
-    await runQuote(run, next);
+    const next = takeNext(run, queue);
+    if (!next) {
+      // Nothing left for anyone: this lane is done.
+      if (queue.length === 0) return;
+      // Work remains, but all of it belongs to vendors at their cap. Park until
+      // a slot frees rather than spin — and rather than return, which would
+      // quietly drop those quotes on the floor with the run reported complete.
+      await new Promise<void>((resolve) => run.laneWaiters.add(resolve));
+      continue;
+    }
+    try {
+      await runQuote(run, next);
+    } finally {
+      // In a finally because a throw here would otherwise leak the slot, and a
+      // leaked slot on a vendor capped at one parks every lane for the rest of
+      // the run.
+      const vendor = next.candidate.vendor;
+      run.vendorInFlight.set(vendor, Math.max(0, (run.vendorInFlight.get(vendor) ?? 1) - 1));
+      wakeLanes(run);
+    }
     await new Promise((resolve) => setTimeout(resolve, STAGGER_MS));
   }
 }
@@ -789,6 +851,8 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     windowPromise: null,
     cancelled: false,
     waiters: new Map(),
+    vendorInFlight: new Map(),
+    laneWaiters: new Set(),
   };
   active = run;
   startKeepAlive();
@@ -848,6 +912,16 @@ async function cancelRun(): Promise<void> {
   // today; this is the cheap guard for a plan that arrives another way.
   for (const resolve of run.waiters.values()) resolve();
   run.waiters.clear();
+  // Lanes parked on a vendor cap are waiting for a slot that will never free.
+  //
+  // Deliberately not claimed as a stranded-teardown bug: `cancelRun` closes the
+  // window and stamps `finishedAt` itself, so today a parked lane leaks a lane
+  // promise that never settles rather than leaving a window open — which is why
+  // deleting this line still passes `tests/vendor-lane-cap.test.ts`, and that is
+  // recorded there rather than papered over. It stays because the leak is real,
+  // and because the natural next refactor is to let the lanes promise drive
+  // teardown, at which point an unwoken lane *would* hang the run.
+  wakeLanes(run);
   for (const tabId of run.tabs.keys()) await closeTab(tabId);
   run.tabs.clear();
   run.deadlines.clear();

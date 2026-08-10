@@ -32,6 +32,24 @@ export interface Vendor {
    * "Enterprise / National" column because the two brands share contract ids.
    */
   alsoTryAs?: VendorId[];
+  /**
+   * How many tabs may be open at this vendor at once, if fewer than the run's
+   * own concurrency.
+   *
+   * For sites that keep the search in session state rather than in the URL.
+   * National is the measured case: reloading its form showed the previous
+   * search's location, dates *and* account number still in place, and tabs in
+   * one profile share that state — so two lanes racing two codes can settle on
+   * one, and the result is one company's price reported under another's code.
+   *
+   * A cap rather than a boolean because "one" is the only value anyone needs
+   * today but is not obviously the only value anyone will ever need, and a
+   * number costs nothing extra to honour.
+   *
+   * Absent means no vendor-specific limit; the run's concurrency is the only
+   * bound.
+   */
+  maxLanes?: number;
 }
 
 /** One discount code for one company at one vendor, as parsed from the workbook. */

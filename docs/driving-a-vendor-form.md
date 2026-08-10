@@ -83,7 +83,7 @@ and what "nothing happened" looks like.
 | Sixt                      | **yes**    | Builder measured to 302 to the site root. Enabled but useless — see below                                                                      |
 | Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
 | Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
-| National                  | no         | **Driver written, tested, and proved against the live site.** Blocked only on per-vendor concurrency of one. See below                         |
+| National                  | no         | **Driver written, tested, and proved against the live site**; capped at one lane. Remaining: register it, and the shared go-live checklist     |
 | Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                             |
 | Starwood                  | no         | Correctly so; folded into Marriott in 2018, no site to search                                                                                  |
 
@@ -162,18 +162,23 @@ Two consequences. The first is handled: a stale chip suppresses the autocomplete
 outright, so `clearStaleLocation` removes it before typing — a regression test
 covers a run that starts from stale state, and deleting the clear fails it.
 
-The second is not, and it is the blocker: **concurrent National tabs in one
+The second was the blocker and is now handled: **concurrent National tabs in one
 profile share that state**, so two lanes racing two codes can settle on one. The
-`ACCOUNT NAME` check does not save us — both tabs would render the same name,
-and nothing maps a code to the name it should produce. National needs a
-per-vendor concurrency of one, which the worker cannot express today; `Vendor`
-has no `maxLanes` and `runQuote` reads a single run-wide number. That is the
-next change, and it is what stands between this driver and
-`searchable: true`.
+`ACCOUNT NAME` check does not save us there — both tabs would render the same
+name, and nothing maps a code to the name it should produce.
+
+`Vendor.maxLanes` is the answer. A lane takes the first queued quote whose vendor
+has a free slot and _skips past_ a capped one, so a single National tab in flight
+never idles a lane that could be pricing Hertz; when everything left is capped,
+the lane parks on a waiter rather than spinning or returning — returning would
+drop those quotes with the run reported complete. National and Enterprise are
+both `maxLanes: 1`.
 
 This is the same hazard CLAUDE.md records as an open question for Avis
-("Concurrent Avis tabs share one `localStorage`"), except here it is observed
-rather than suspected. Whatever shape the fix takes should serve both.
+("Concurrent Avis tabs share one `localStorage`"), except at National it is
+observed rather than suspected. Avis is deliberately left uncapped: capping it
+would halve its throughput on a hunch, and it is now a one-line change the day
+someone measures it.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.
@@ -246,10 +251,13 @@ URL or make it unsearchable.
 Landing a driver is not one change. All of these belong in it:
 
 - **Register the driver** in `FORM_DRIVERS`. Writing one does not enable it.
-- **Cap the vendor to one lane** if its site keeps the search in session state.
-  National demonstrably does, and Avis is suspected of it. `Vendor` has no
-  `maxLanes` today and `runQuote` reads one run-wide number, so this is real
-  work rather than a flag.
+- **Cap the vendor to one lane** if its site keeps the search in session state —
+  now just `maxLanes: 1` in `vendors.ts`. Already set for National and
+  Enterprise. Done, for those two.
+- **Make the builder return the driver's `startUrl`** instead of throwing.
+  `unsearchable()` is what `makeQuote` catches today, and a caught throw settles
+  the quote at plan time so it never reaches a lane at all — which is why a
+  driver alone changes nothing.
 - **Raise `PROBE_TIMEOUT_MS`.** Enterprise's widget took ~40s of the current 45s
   budget to hydrate on one measured load. `KEEPALIVE_CEILING_MS` is derived from
   this constant, so it is a deliberate change, not a nudge. `DRIVE_SHARE` in

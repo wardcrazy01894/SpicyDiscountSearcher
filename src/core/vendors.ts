@@ -50,6 +50,10 @@ export const VENDORS: Vendor[] = [
     // though both ends are unsearchable today, because it is a fact about the
     // data rather than about whether we can search it.
     alsoTryAs: ['national'],
+    // Enterprise keeps its search in session state the same way National does,
+    // so the same cap applies for the same reason — set now, while the evidence
+    // is written down, rather than discovered again when its driver lands.
+    maxLanes: 1,
   },
   {
     id: 'national',
@@ -57,6 +61,13 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Contract ID',
     host: 'www.nationalcar.com',
+    // Measured, not assumed. Reloading National's form showed the previous
+    // search's location, dates *and* account number still in place, and tabs in
+    // one profile share that state — so two lanes racing two codes can settle
+    // on one, and the popup would report one company's price under another's
+    // code. The results page's own `ACCOUNT NAME` cannot catch it either: both
+    // tabs would render the same name.
+    maxLanes: 1,
     // Not searchable: the site ignores the query string entirely, so no deep
     // link can express a search. Same treatment as starwood — the codes stay in
     // the database, but the vendor gets no chip, no candidates and no host
