@@ -35,14 +35,38 @@ export function searchCompanies(query: string): Company[] {
   });
 }
 
+/**
+ * How many codes this vendor would actually race.
+ *
+ * Must agree with `buildCandidates`, because the number goes on the vendor's
+ * chip and the candidates are what the run does. It disagreed in two ways, and
+ * both made the chip a promise the race did not keep:
+ *
+ * - **`alsoTryAs` was ignored.** The workbook files every Enterprise/National
+ *   contract id under Enterprise and contains no `vendor: 'national'` record at
+ *   all, so National's chip read **0** while a run really did price 19 codes at
+ *   it. Reported from a loaded extension: "National still has a 0 next to it
+ *   even though it is searching codes."
+ * - **Records were counted, not codes.** Two companies often share one code —
+ *   the workbook lists B406790 under both Accenture and PwC — and
+ *   `buildCandidates` collapses those into a single candidate crediting both.
+ *   Counting the rows overstated every vendor: Avis showed 27 against 23 raced,
+ *   Hilton 287 against 279. Pre-existing and much smaller than the National
+ *   case, but the same fault, so it is fixed by the same set.
+ */
 export function countCodesFor(vendor: VendorId): number {
-  let total = 0;
+  const codes = new Set<string>();
   for (const company of DB.companies) {
     for (const record of company.codes) {
-      if (record.vendor === vendor && record.code) total += 1;
+      if (!record.code) continue;
+      // Same reachability rule `buildCandidates` applies, and deliberately not
+      // a second copy of it in spirit only: a code filed under one brand counts
+      // for every brand that honours it.
+      const targets = [record.vendor, ...(getVendor(record.vendor).alsoTryAs ?? [])];
+      if (targets.includes(vendor)) codes.add(record.code);
     }
   }
-  return total;
+  return codes.size;
 }
 
 export interface CandidateQuery {

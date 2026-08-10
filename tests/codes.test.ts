@@ -114,11 +114,36 @@ describe('searchCompanies', () => {
 });
 
 describe('countCodesFor', () => {
-  it('agrees with a manual count', () => {
-    const manual = allCompanies()
+  it('counts what the vendor would actually race, for every searchable vendor', () => {
+    // The chip's number and the run's candidates have to be the same number.
+    // They were not, in two ways, and both made the chip a promise the race did
+    // not keep — so this is asserted against `buildCandidates` itself rather
+    // than against a hand-rolled count that could drift the same way.
+    for (const vendor of VENDORS.filter((v) => v.searchable)) {
+      const raced = buildCandidates({ vendors: [vendor.id] }).filter((c) => c.vendor === vendor.id);
+      expect(countCodesFor(vendor.id), vendor.id).toBe(raced.length);
+    }
+  });
+
+  it('counts codes a vendor only reaches through alsoTryAs', () => {
+    // The reported bug: National's chip read 0 in a loaded extension while the
+    // run priced 19 codes at it. Every National code is filed under Enterprise
+    // — there is no `vendor: 'national'` record in the workbook at all.
+    const filed = allCompanies()
       .flatMap((c) => c.codes)
-      .filter((c) => c.vendor === 'marriott' && c.code).length;
-    expect(countCodesFor('marriott')).toBe(manual);
+      .filter((c) => c.vendor === 'national' && c.code);
+    expect(filed).toHaveLength(0);
+    expect(countCodesFor('national')).toBe(19);
+  });
+
+  it('counts a code shared by two companies once', () => {
+    // B406790 is filed under both Accenture and PwC; `buildCandidates` collapses
+    // them into one candidate crediting both, so counting the rows overstated
+    // every vendor — Avis read 27 against 23 raced.
+    const rows = allCompanies()
+      .flatMap((c) => c.codes)
+      .filter((c) => c.vendor === 'avis' && c.code).length;
+    expect(countCodesFor('avis')).toBeLessThan(rows);
   });
 });
 
