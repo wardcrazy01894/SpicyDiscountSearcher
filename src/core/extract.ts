@@ -152,7 +152,29 @@ export const VENDOR_SELECTORS: Partial<Record<VendorId, VendorSelectors>> = {
   avis: { container: '[data-testid="vehicle-results"], .car-results, main' },
   budget: { container: '[data-testid="vehicle-results"], .car-results, main' },
   enterprise: { container: '.car-class-list, [data-testid="vehicle-list"], main' },
-  national: { container: '.car-class-list, [data-testid="vehicle-list"], main' },
+  /**
+   * Measured against the live results page, unlike the guess it replaces.
+   *
+   * `.car-class-list` and `[data-testid="vehicle-list"]` match nothing on
+   * National — they were copied from Enterprise's entry when this vendor could
+   * not be searched at all — so every scope fell through to `main`, which is
+   * 78.6k of the page's 79.4k characters. That is a whole-page sweep wearing a
+   * container's clothes, and National puts its rental terms on the results
+   * page: the cheapest numbers it offered were "$1 million per accident" and a
+   * Tollpass charge of "$7.00 per day", against real rates starting at $70.30.
+   * A `$7.00` per-day offer beats every genuine rate in the race.
+   *
+   * `.vehicle-list` holds all 34 cars in 12.5k characters and none of the
+   * terms.
+   *
+   * Deliberately **no `offer` selector**, though `.vehicle` is exactly one card
+   * and would give real labels. Each card carries two prices — "$ 70.30 / day"
+   * and "$ 185.05 Est. Total" — and the offer branch calls `classifyBasis` once
+   * per node, so both would be tagged the same and one of them would be a lie.
+   * The sweep classifies each price against the text around it, which is the
+   * behaviour this page needs.
+   */
+  national: { container: '.vehicle-list, .vehicle-list-container, main' },
   sixt: { container: '[data-testid="offer-list"], .offer-list, main' },
   hilton: { container: '[data-testid="hotel-card-list"], .hotel-results, main' },
   marriott: { container: '[data-testid="property-card-list"], .property-records, main' },
@@ -316,13 +338,41 @@ function textOf(node: Element | null): string {
   return (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * The first *selector* that matches, not the first element that matches any.
+ *
+ * Every `container` in `VENDOR_SELECTORS` is written as a preference list —
+ * specific results container first, `main` last as a fallback — and
+ * `querySelector` does not honour that. Given `'.vehicle-list, main'` it returns
+ * whichever element comes first **in document order**, and `<main>` wraps the
+ * results, so `main` won every time. The narrow selectors at the front were
+ * decoration: nine vendors' worth of scoping that never scoped anything, while
+ * CLAUDE.md recorded that those containers "do run — they scope the sweep away
+ * from nav and footer".
+ *
+ * Found by measuring National: `.vehicle-list` is real and present on its
+ * results page, and adding it to the front of the list changed nothing at all.
+ *
+ * Splitting on the comma is what makes the list mean what it reads as. It is
+ * a plain split rather than a CSS-aware one because these selectors are ours,
+ * and none of them contains a comma inside `:is()`, `:not()` or an attribute
+ * value — a fact worth keeping true when editing them.
+ */
 function firstMatch(root: ParentNode, selector: string | undefined): Element | null {
   if (!selector) return null;
-  try {
-    return root.querySelector(selector);
-  } catch {
-    return null; // A selector typo shouldn't take the whole extraction down.
+  for (const one of selector.split(',')) {
+    const trimmed = one.trim();
+    if (!trimmed) continue;
+    try {
+      const found = root.querySelector(trimmed);
+      if (found) return found;
+    } catch {
+      // A selector typo shouldn't take the whole extraction down — skip it and
+      // let a later alternative, or the caller's fallback, answer.
+      continue;
+    }
   }
+  return null;
 }
 
 function allMatches(root: ParentNode, selector: string | undefined): Element[] {

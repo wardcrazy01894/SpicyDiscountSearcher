@@ -151,8 +151,15 @@ encode other people's websites. They will break. Both are deliberately isolated:
   per-vendor concurrency of one, or a longer stagger for this vendor.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
-  All nine vendors define a `container` selector, and those do run — they scope
-  the sweep away from nav and footer. **No vendor defines an `offer` selector**,
+  All nine vendors define a `container` selector — and until 2026-08-10 **none
+  of them scoped anything**, which is the opposite of what this paragraph used
+  to claim. Each container is written as a preference list ending in `main`, and
+  `querySelector('.vehicle-list, main')` returns whichever element comes first
+  in _document order_, not the first selector that matches. `<main>` wraps the
+  results, so `main` won on every vendor and every page; the narrow selectors in
+  front of it were decoration. `firstMatch` now tries each alternative in turn.
+  Found by measuring National, where `.vehicle-list` is real, present, and made
+  no difference whatsoever when added. **No vendor defines an `offer` selector**,
   though, so the per-offer branch never fires and every `ProbeReport` says
   `generic-sweep`. The selector path is kept — and tested with an injected
   config — so it works the day someone fills one in.
