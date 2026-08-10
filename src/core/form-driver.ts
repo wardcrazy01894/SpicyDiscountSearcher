@@ -162,13 +162,10 @@ export function hasToken(haystack: string, token: string): boolean {
 }
 
 /**
- * Vendors whose form we can drive.
+ * The registry lives in `drivers/index.ts`, not here.
  *
- * Empty of anything reachable today, and deliberately so: a driver only earns
- * its place here once its every step is measured against the live site, and
- * every vendor that would use one is still `searchable: false`. Registering a
- * driver does not make a vendor searchable — that is a separate, deliberate
- * change, and it is the one that has to answer for the `LinkConfidence`
- * question in `FormDriver.startUrl` above.
+ * A driver imports this module for `DriverError` and the helpers, so a registry
+ * in this file that imported the drivers back would be a cycle. Splitting it out
+ * is the whole reason `drivers/index.ts` exists.
  */
-export const FORM_DRIVERS: Partial<Record<VendorId, FormDriver>> = {};
+export type FormDriverRegistry = Partial<Record<VendorId, FormDriver>>;

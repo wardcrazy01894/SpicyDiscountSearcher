@@ -817,35 +817,59 @@ describe('a probe reporting something unexpected', () => {
     expect(quote?.message).toContain('PHL');
   });
 
-  it('does not trust `form-fill` from a page while nothing can emit it', async () => {
-    // A different case from the unknown-code test below: `form-fill` is a
-    // *known* QuoteFailure, and the invariant is that it stays off
-    // PROBE_FAILURES until a driver exists to send it. Until then every
-    // instance can only be forged, and the popup would render "could not fill
-    // the search form" for a build with no form-filling code in it.
-    //
-    // Unpinned until now — the set could be extended and the suite stayed
-    // green, which is the shape this repo pins deliberately elsewhere. The
-    // driver PR deletes this test on purpose rather than by accident.
-    await bootWorker();
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
-    await settle();
+  it.each(['form-fill', 'form-submit', 'code-rejected'] as const)(
+    'now trusts `%s` from a page, because a reachable driver emits it',
+    async (failure) => {
+      // The inverse of the test this replaces, which pinned these *off*
+      // PROBE_FAILURES while nothing could emit them — a code admitted before
+      // its emitter exists can only ever arrive forged. National is
+      // `searchable: true` with a registered driver now, so all three have a
+      // reachable emitter and each is something only the page can witness.
+      await bootWorker();
+      await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+      await settle();
 
-    const tabId = [...chromeMock.tabs.keys()][0]!;
-    await chromeMock.fromTab(tabId, {
-      type: 'PROBE_FAILED',
-      failure: 'form-fill',
-      message: 'claiming a driver that does not exist',
-      report: REPORT,
-    });
-    await settle(1_000);
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure,
+        message: 'the driver said so',
+        report: REPORT,
+      });
+      await settle(1_000);
 
-    const quote = (await getState())?.quotes.find((q) => q.finishedAt);
-    expect(quote?.failure).toBeUndefined();
-    // The page's own message still survives, which is the point of downgrading
-    // rather than dropping.
-    expect(quote?.message).toContain('claiming a driver');
-  });
+      const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+      expect(quote?.failure).toBe(failure);
+    },
+  );
+
+  it.each(['cancelled', 'tab-closed', 'probe-timeout', 'interrupted'] as const)(
+    'still refuses `%s` from a page, which is the background’s to know',
+    async (failure) => {
+      // The rule the allowlist encodes, restated as a test rather than as a
+      // second copy of the list: a page may claim only what it is the sole
+      // witness to. These are the background's own knowledge, and `cancelled`
+      // is the dangerous shape — it reads as plausible and misattributes the
+      // failure to the user.
+      await bootWorker();
+      await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+      await settle();
+
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure,
+        message: 'forging the background',
+        report: REPORT,
+      });
+      await settle(1_000);
+
+      const quote = (await getState())?.quotes.find((q) => q.finishedAt);
+      expect(quote?.failure).toBeUndefined();
+      // Downgraded, not dropped — the page's own message still survives.
+      expect(quote?.message).toContain('forging the background');
+    },
+  );
 
   it('does not trust an unknown failure code from the page', async () => {
     // The content script runs in a page we do not control. An unrecognised code

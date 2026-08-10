@@ -41,7 +41,7 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget, Enterprise and National throw instead of building.** They were
+  **Budget and Enterprise throw instead of building.** They were
   observed ignoring the query string entirely, and returning a URL for them was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
@@ -58,8 +58,17 @@ encode other people's websites. They will break. Both are deliberately isolated:
   default cap of twelve, and the plan line promised codes the popup already knew
   would fail. `starwood` had the same shape and the same answer for years: the
   codes stay in the database, the vendor gets no chip, no candidate, and no host
-  permission. Dropping those three hosts from the manifest is a real reduction
+  permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
+
+  **National left this group.** It has a driver now
+  (`src/core/drivers/national.ts`), so its builder returns the page the form
+  lives on rather than throwing, and it is `searchable: true` with its host back
+  in the manifest. Its confidence is `'driven'` — a third value meaning the URL
+  is not carrying the search at all, so it is not graded on the
+  reverse-engineering scale and is not counted among the popup's "unverified"
+  links. See `docs/driving-a-vendor-form.md`; the checklist there is now a
+  worked example rather than a guess.
 
   `'verified'` is a claim about the **URL shape**, not about every itinerary,
   and the difference is load-bearing. Both were proved on a US airport round
@@ -296,13 +305,18 @@ renders a short phrase per code and keeps the raw message in a tooltip. Assert
 the **code** in tests; rewording a message must not change what the system
 believes happened.
 
-The three form codes have an emitter now — `core/drivers/enterprise.ts` — but no
-_reachable_ one, and they are still off `PROBE_FAILURES` for exactly that reason
-(see below). They exist for Budget, Enterprise and National, whose sites ignore
-the query string entirely: Enterprise's results page is a bare `#car_select`,
-Budget's a bare `#/vehicles`. All three refuse to build a URL and are
-`searchable: false`, so nothing routes a run to them at all; the codes stay in
-the database waiting for a driver that can run.
+The three form codes are **on** `PROBE_FAILURES` now, because National ships a
+registered driver at a `searchable: true` vendor — a reachable emitter, which is
+the whole test that list applies. They were held out while no reachable emitter
+existed, since a code admitted early can only ever arrive forged.
+
+They exist for the vendors whose sites ignore the query string entirely:
+Enterprise's results page is a bare `#car_select`, Budget's a bare `#/vehicles`.
+Those two still refuse to build a URL and are `searchable: false`, so nothing
+routes a run to them; their codes stay in the database waiting for a driver that
+can run. `code-rejected` is the newest of the three and is the vendor's verdict
+on the code rather than a fault in the run — National raises it when its results
+page names no account, which is exactly what a retail-priced page looks like.
 
 Driving the form is the answer for Enterprise, and the shape of it is now
 measured rather than guessed. **The three sentences that used to sit here were
@@ -479,9 +493,11 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites for every vendor
-  except Avis and Hertz (see README). Budget, Enterprise and National are worse
-  than unverified: all three keep the search in session state, so no query
+  except Avis and Hertz (see README). Budget and Enterprise are worse
+  than unverified: both keep the search in session state, so no query
   string can express it and the builders they have today cannot ever work.
+  National keeps its search there too but is no longer in that group — it is
+  driven rather than deep-linked.
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
   settle or its 45s deadline passes, which is longer than Chrome's ~30s idle
@@ -537,15 +553,25 @@ close). Never pass it a URL or a code.
   running is dead state rather than stale, because `startKeepAlive` overwrites
   it unconditionally before creating one.
 
-- Marking Budget, Enterprise and National unsearchable removes **27 codes and
+- Marking Budget, Enterprise and National unsearchable removed **27 codes and
   six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
   `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and
-  `University of Maryland` have no code at any reachable vendor, so they vanish
-  from the company list rather than appearing greyed out. Six more drop out of
-  the car list and survive under hotels. There is precedent — twelve
+  `University of Maryland` had no code at any reachable vendor, so they vanished
+  from the company list rather than appearing greyed out. Six more dropped out of
+  the car list and survived under hotels. There is precedent — twelve
   starwood-only companies have been invisible for as long as that flag has
   existed — and the alternative is listing codes that cannot be raced, but it
-  is a real loss and the only explanation lives in the README.
+  was a real loss and the only explanation lives in the README.
+
+  **National reaching `searchable: true` gives 19 of those codes back**, and
+  every one of them arrives through `alsoTryAs`: the workbook files them all
+  under Enterprise and contains no `vendor: 'national'` record at all. Asking
+  `buildCandidates` for Enterprise therefore returns National candidates, which
+  reads oddly and is correct — `wanted` is widened by `alsoTryAs` before the
+  search, the codes are the same codes, and nothing is routed to the vendor that
+  cannot run them. The README's tally needs revisiting against what is still
+  missing.
+
 - Two Avis questions are open and cannot be answered while the test browser is
   rate-limited. Deferred deliberately rather than guessed at.
 

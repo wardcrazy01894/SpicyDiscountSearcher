@@ -31,7 +31,10 @@ import {
   submitSearch,
   timeIndex,
 } from '../src/core/drivers/national.js';
-import { DriverError, type DriveContext, FORM_DRIVERS } from '../src/core/form-driver.js';
+import { buildDeepLink } from '../src/core/deeplinks.js';
+import { FORM_DRIVERS } from '../src/core/drivers/index.js';
+import { DriverError, type DriveContext } from '../src/core/form-driver.js';
+import { getVendor } from '../src/core/vendors.js';
 import type { CarTrip } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -218,12 +221,18 @@ afterEach(() => {
 });
 
 describe('registration', () => {
-  it('is not registered yet, because National needs a single lane', () => {
-    // National carries the account number in session state, so two concurrent
-    // tabs in one profile can settle on one code. Registering before the worker
-    // can cap a vendor to one lane would ship exactly the cross-contamination
-    // this driver's own docstring describes.
-    expect(FORM_DRIVERS.national).toBeUndefined();
+  it('is registered, and the vendor it drives is reachable', () => {
+    // All three have to be true for a run to reach this driver, and each was a
+    // separate gate: registered here, `searchable` in vendors.ts, and a builder
+    // that returns a URL rather than throwing — `makeQuote` catches a throw and
+    // settles the quote before any lane sees it.
+    expect(FORM_DRIVERS.national).toBe(nationalDriver);
+    expect(getVendor('national').searchable).toBe(true);
+    expect(buildDeepLink('national', '5666666', TRIP).url).toBe(nationalDriver.startUrl());
+  });
+
+  it('is held to one tab at a time, because its session state is shared', () => {
+    expect(getVendor('national').maxLanes).toBe(1);
   });
 });
 

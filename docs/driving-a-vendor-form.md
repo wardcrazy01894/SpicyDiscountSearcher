@@ -5,10 +5,11 @@ For the vendors whose URL cannot express a search. README's
 this is what to do when there is no link to fix.
 
 Budget, Enterprise and National keep the itinerary in session state. No query
-string carries it, `deeplinks.ts` refuses to build one, and all three are
-`searchable: false`. The only route to a price is to open their form and fill it
-in — `src/core/form-driver.ts` is the framework and
-`src/core/drivers/enterprise.ts` is the worked example.
+string carries it, so the only route to a price is to open their form and fill
+it in. `src/core/form-driver.ts` is the framework, `src/core/drivers/index.ts`
+the registry, and **`src/core/drivers/national.ts` is the worked example** — the
+first driven vendor to ship, proved against the live site. Budget and Enterprise
+are still `searchable: false`.
 
 ## The rule that matters
 
@@ -83,7 +84,7 @@ and what "nothing happened" looks like.
 | Sixt                      | **yes**    | Builder measured to 302 to the site root. Enabled but useless — see below                                                                      |
 | Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
 | Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
-| National                  | no         | **Driver written, tested, and proved against the live site**; capped at one lane. Remaining: register it, and the shared go-live checklist     |
+| National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                       |
 | Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                             |
 | Starwood                  | no         | Correctly so; folded into Marriott in 2018, no site to search                                                                                  |
 
@@ -248,7 +249,9 @@ URL or make it unsearchable.
 
 ## Before flipping `searchable: true`
 
-Landing a driver is not one change. All of these belong in it:
+Landing a driver is not one change. All of these belong in it — National went
+through every one of them, so this list is now a worked example rather than a
+guess:
 
 - **Register the driver** in `FORM_DRIVERS`. Writing one does not enable it.
 - **Cap the vendor to one lane** if its site keeps the search in session state —
@@ -258,20 +261,29 @@ Landing a driver is not one change. All of these belong in it:
   `unsearchable()` is what `makeQuote` catches today, and a caught throw settles
   the quote at plan time so it never reaches a lane at all — which is why a
   driver alone changes nothing.
-- **Raise `PROBE_TIMEOUT_MS`.** Enterprise's widget took ~40s of the current 45s
-  budget to hydrate on one measured load. `KEEPALIVE_CEILING_MS` is derived from
-  this constant, so it is a deliberate change, not a nudge. `DRIVE_SHARE` in
-  `probe.ts` splits the budget between driving and pricing and is currently a
-  guess.
-- **Admit `form-fill`, `form-submit` and `code-rejected`** to `PROBE_FAILURES`
-  in the service worker. They are held out precisely because no _reachable_
-  emitter exists yet; the moment one does, they should be admitted in the same
-  change.
-- **Decide what `LinkConfidence` means for a driven vendor.** Neither `verified`
-  nor `best-effort` says anything true about a URL whose correctness is
-  irrelevant — the driver's own verification is what earns trust. The popup
-  counts `best-effort` quotes to decide its caveat.
+- **Check `PROBE_TIMEOUT_MS` against the vendor's hydration.** Deliberately
+  _not_ raised for National: its widget mounted in about 8s, and `DRIVE_SHARE`
+  of 0.6 leaves the driver ~27s of the 45s budget, which its measured runs fit
+  inside comfortably. Enterprise is the one that will force the question — ~40s
+  on one measured load leaves nothing for filling, submitting or pricing.
+  `KEEPALIVE_CEILING_MS` is derived from this constant, so raising it is a
+  deliberate change rather than a nudge, and `DRIVE_SHARE` is still a guess.
+- **Admit `form-fill`, `form-submit` and `code-rejected`** to `PROBE_FAILURES`.
+  Done — National's driver is a reachable emitter for all three, and each is
+  something only the page can witness. They were held out while no reachable
+  emitter existed, because a code admitted early can only ever arrive forged.
+- **Decide what `LinkConfidence` means for a driven vendor.** Settled:
+  `'driven'`, a third value that says the URL is not carrying the search at all.
+  It is deliberately not counted among the popup's "reverse-engineered and
+  unverified" links — there is no reverse engineering in it, and a driven vendor
+  checks more than a verified deep link does.
 - **Add the host** to `public/manifest.json`. `tests/manifest.test.ts` pins it
   against `vendors.ts` and will fail if you forget.
-- **Check what comes back into the popup.** Marking these three unsearchable
-  removed 27 codes and six companies; re-enabling one returns some of them.
+- **Check what comes back into the popup.** Marking the three unsearchable
+  removed 27 codes and six companies; National returns 19 of those codes, and it
+  gets them entirely through `alsoTryAs` — the workbook files every one under
+  Enterprise and has no `vendor: 'national'` record at all.
+- **Watch for a duplicate key.** Adding `searchable: true` above an existing
+  `searchable: false` in `vendors.ts` silently kept the old value; the later one
+  wins and TypeScript said nothing. Caught by reading the file back, not by the
+  compiler.

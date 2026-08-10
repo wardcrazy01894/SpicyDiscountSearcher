@@ -138,21 +138,29 @@ describe('buildCandidates', () => {
   });
 
   it('proposes nothing for Enterprise, whose search cannot be reached', () => {
-    // Enterprise and National are `searchable: false` — their sites ignore the
-    // query string, so no deep link can express a search for them. Their codes
-    // stay in the database and are still listed under their companies; they
-    // simply cannot be raced.
+    // Enterprise is still `searchable: false` — its site ignores the query
+    // string and its driver cannot set the trip's dates yet.
     //
-    // This replaces a test asserting an Enterprise contract id also produced a
-    // National candidate. That fan-out (`alsoTryAs`) is intact and still
-    // filters on `searchable`, but with both ends unsearchable it is dormant,
-    // so there is nothing left to assert about it here. It wakes up if either
-    // vendor becomes reachable again.
-    expect(buildCandidates({ vendors: ['enterprise'] })).toEqual([]);
-    expect(buildCandidates({ vendors: ['national'] })).toEqual([]);
-    // The fan-out itself is dormant, not deleted, and deleting it currently
-    // fails nothing — so pin the registry fact it depends on. Whoever makes
-    // either brand reachable again needs this edge to still exist.
+    // "Nothing" means no *Enterprise* candidate, not an empty list. Asking for
+    // Enterprise now returns National ones, because `wanted` is widened by
+    // `alsoTryAs` before the search: a contract id filed under Enterprise is
+    // worth trying at National, and National can be reached. That is the
+    // intended behaviour rather than a leak — the codes are the same codes, and
+    // nothing is routed to the vendor that cannot run them.
+    const candidates = buildCandidates({ vendors: ['enterprise'] });
+    expect(candidates.some((c) => c.vendor === 'enterprise')).toBe(false);
+  });
+
+  it('races an Enterprise contract id at National, which can be reached', () => {
+    // The `alsoTryAs` fan-out, awake again now that National has a driver. This
+    // is the only route by which National gets any codes at all: the workbook
+    // files every one of them under Enterprise, and there is not a single
+    // record with `vendor: 'national'`.
+    const candidates = buildCandidates({ vendors: ['national'] });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((c) => c.vendor === 'national')).toBe(true);
+    // IBM's, the one the driver was proved against on the live site.
+    expect(candidates.map((c) => c.code)).toContain('5666666');
     expect(getVendor('enterprise').alsoTryAs).toEqual(['national']);
   });
 

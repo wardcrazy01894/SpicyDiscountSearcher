@@ -27,7 +27,8 @@ import {
   fillLocation,
   submitSearch,
 } from '../src/core/drivers/enterprise.js';
-import { DriverError, type DriveContext, FORM_DRIVERS } from '../src/core/form-driver.js';
+import { FORM_DRIVERS } from '../src/core/drivers/index.js';
+import { DriverError, type DriveContext } from '../src/core/form-driver.js';
 import type { CarTrip } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -154,8 +155,11 @@ describe('registration', () => {
     // The gate. `applyDates` is unimplemented, so wiring this into
     // `FORM_DRIVERS` would let a run reach a driver that cannot set the trip's
     // dates. Registering it is part of the change that finishes it.
+    //
+    // Asserted against the registry that National now lives in, so this is
+    // "Enterprise specifically is absent" rather than "nothing is registered" —
+    // the latter stopped being the point the moment a driver shipped.
     expect(FORM_DRIVERS.enterprise).toBeUndefined();
-    expect(Object.keys(FORM_DRIVERS)).toHaveLength(0);
   });
 });
 

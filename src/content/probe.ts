@@ -1,5 +1,6 @@
 import { extract } from '../core/extract.js';
-import { DriverError, FORM_DRIVERS } from '../core/form-driver.js';
+import { FORM_DRIVERS } from '../core/drivers/index.js';
+import { DriverError } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';

@@ -54,9 +54,21 @@ code and the whole itinerary and the sites ignore all of it — Enterprise's
 results page is a bare `#car_select`, Budget's a bare `#/vehicles`. No query
 string can express a search for them; they need the form filled in the page.
 
-Those three are **hidden from the popup entirely** — no vendor chip, no
-candidates, no host permission — the same treatment Starwood has always had.
-Their builders also refuse to produce a URL, but that is a backstop; in an
+**National is the first one where that happens.** It is `driven` rather than
+deep-linked: the extension opens the page the form lives on and fills it in,
+checking every field against what the form renders back — the location chip, both
+dates, the account number, and finally that the results page names the account
+the code belongs to. If it does not, the quote fails rather than reporting the
+retail price as a company rate. Proved against the live site with a controlled
+differential: the same Tampa round trip came back at $70.30/day with an IBM
+contract id and $74.00/day without, same vehicle, same result count. Because
+National keeps the previous search — including the account number — in state
+shared across tabs, it is capped at **one tab at a time** however wide the rest
+of the race runs.
+
+Budget and Enterprise are still **hidden from the popup entirely** — no vendor
+chip, no candidates, no host permission — the same treatment Starwood has always
+had. Their builders also refuse to produce a URL, but that is a backstop; in an
 ordinary run nothing reaches them.
 
 Returning a URL was the worse option: the landing page shows a marketing
@@ -66,12 +78,16 @@ head-to-head with the verified vendors and win on being cheapest. Leaving them
 merely _selectable_ was nearly as bad: they took half the default cap of twelve
 codes while the plan line promised twelve that would run.
 
-The cost is real and worth stating: **27 codes and six companies disappear from
-the popup** (`Government of Canada`, `Imaginus`, `Michigan State University`,
-`Purdue / Big TEN`, `UNION Bank/MUFG`, `University of Maryland` have no code at
-any reachable vendor), and six more lose their car listing but survive under
-hotels. The codes remain in the database for whenever a form driver reaches
-those sites.
+The cost was real and worth stating: **27 codes and six companies disappeared
+from the popup** (`Government of Canada`, `Imaginus`, `Michigan State
+University`, `Purdue / Big TEN`, `UNION Bank/MUFG`, `University of Maryland` had
+no code at any reachable vendor), and six more lost their car listing but
+survived under hotels.
+
+National coming back recovers **19 of those codes**, and all of them arrive by
+the Enterprise-to-National fan-out described below — the workbook files every one
+under Enterprise and has no National record at all. The rest stay in the database
+for whenever a driver reaches Budget and Enterprise.
 
 Because both verified builders address a branch by IATA code, **pick-up must be
 an airport code** (`TPA`), and **one-way rentals are refused** — leave drop-off

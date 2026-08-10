@@ -34,6 +34,14 @@ import type { CarTrip } from '../types.js';
  * location lookup goes to `prd.location.enterprise.com`). Nothing ports; the
  * selectors below are National's.
  *
+ * What this driver does *not* claim, stated rather than discovered later:
+ * `#age-selector` is left at the form's own default of 25+, because the popup
+ * collects no driver age. That matches the hard-coded `age=25` in Avis's and
+ * Hertz's deep links and carries the same cost — it dodges the under-25
+ * surcharge, so the price can understate what a younger renter would pay. The
+ * trip was proved on a US airport round trip only; nothing here has been
+ * exercised outside the US.
+ *
  * ## The thing that makes this vendor dangerous
  *
  * **National carries the previous search in session state — location, dates and
