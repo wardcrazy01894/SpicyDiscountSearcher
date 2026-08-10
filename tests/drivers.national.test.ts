@@ -513,13 +513,40 @@ describe('verifyResults', () => {
     await expect(promise).resolves.toBeUndefined();
   });
 
-  it('does not accept the words "account name" with nothing after them', async () => {
+  it('does not accept the words "account name" with nothing beside them', async () => {
     // The label alone is ordinary sign-in furniture and could sit in a profile
-    // menu on a page showing retail rates. Requiring a value after it is what
+    // menu on a page showing retail rates. Requiring a value beside it is what
     // makes this a reading of the header rather than a match on boilerplate.
     renderForm();
     window.location.hash = '#/car_select';
     document.body.prepend(textNode('Account Name'));
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('code-rejected');
+  });
+
+  it('accepts a label and value marked up as separate elements', async () => {
+    // The shape this nearly shipped unable to see. An earlier version required
+    // the label's own element to carry the value *and* to be under a guessed
+    // 120-character bound — so `<span>ACCOUNT NAME</span><span>I B M CORP</span>`,
+    // an entirely ordinary label/value pair, would have failed every National
+    // quote as `code-rejected` on a page where the discount had applied.
+    renderForm();
+    window.location.hash = '#/car_select';
+    const row = document.createElement('div');
+    row.append(textNode('ACCOUNT NAME'), textNode('I B M CORP (USA)'));
+    document.body.prepend(row);
+    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+  });
+
+  it('is not satisfied by the label sitting anywhere on a long page', async () => {
+    // Asked of `document.body`, "is anything after the label" is answered by the
+    // rest of the page — which is how this check degrades back into matching the
+    // label alone and passing a retail page off as discounted.
+    renderForm();
+    window.location.hash = '#/car_select';
+    const menu = document.createElement('div');
+    menu.append(textNode('Account Name'));
+    document.body.prepend(menu, textNode('34 Results $ 74.00 / day Est. Total $ 193.80'));
     const error = await failureOf(verifyResults(makeContext()));
     expect(error.failure).toBe('code-rejected');
   });

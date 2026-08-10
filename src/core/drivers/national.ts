@@ -85,17 +85,17 @@ const RESULTS_HASH = 'car_select';
  * and reporting that as a company's discounted rate is the failure this whole
  * codebase is built to refuse.
  */
-const ACCOUNT_NAME_RE = /^ACCOUNT\s+NAME\s+(\S.*)$/i;
+const ACCOUNT_LABEL_RE = /ACCOUNT\s+NAME/i;
 
 /**
- * How much text an element may hold and still be read as the account header.
+ * The longest a *value* rendered beside the label may be.
  *
- * The whole point of the bound. Matched against `document.body` the rule
- * "something follows the label" is satisfied by the rest of the page, so it
- * degrades to matching the label alone — which is the weak check it was meant
- * to replace.
+ * Deliberately a bound on the value rather than on the element holding the
+ * header, which is what an earlier version guessed at and could not justify.
+ * `I B M CORP (USA)` is sixteen characters; the thing this excludes is a page
+ * region that merely happens to follow a stray label.
  */
-const ACCOUNT_TEXT_MAX = 120;
+const ACCOUNT_VALUE_MAX = 60;
 
 /**
  * Did the results page name an account, rather than merely say the words?
@@ -103,19 +103,45 @@ const ACCOUNT_TEXT_MAX = 120;
  * The label alone is too weak to carry this much weight: "account name" is
  * ordinary sign-in furniture and could sit in a profile menu or a hidden modal
  * on a page showing retail rates, which would pass a retail quote off as a
- * company's. This looks for an element whose *own* text is the label followed
- * by a value — `ACCOUNT NAME I B M CORP (USA)` — and ignores anything long
- * enough to be a region rather than a header.
+ * company's. So this asks for a *value* beside the label.
+ *
+ * Finding the label's own element first is what makes that question answerable.
+ * Asked of `document.body`, "is anything after the label" is satisfied by the
+ * rest of the page and the check collapses back into matching the label alone.
+ * An earlier version bounded the element's text length instead, which worked
+ * only if National's header happened to sit inside a small enough element —
+ * a number nobody had measured, and every quote would have failed
+ * `code-rejected` if it were wrong.
+ *
+ * So: take the smallest element that still contains the phrase, and accept if
+ * the value is inside it (`ACCOUNT NAME I B M CORP (USA)`) or in the element
+ * next to it (`<span>ACCOUNT NAME</span><span>I B M CORP (USA)</span>`). Both
+ * are ordinary ways to mark up a label and a value, and neither depends on a
+ * guess about how the page is nested.
  *
  * Still a heuristic on somebody else's markup, and it fails in the safe
  * direction: a header that stops matching fails the quote loudly rather than
  * letting a retail price through quietly.
  */
 export function accountNamed(doc: Document): boolean {
-  for (const el of doc.querySelectorAll<HTMLElement>('*')) {
-    const text = textOf(el);
-    if (!text || text.length > ACCOUNT_TEXT_MAX) continue;
-    if (ACCOUNT_NAME_RE.exec(text)?.[1]?.trim()) return true;
+  const holders = [...doc.querySelectorAll<HTMLElement>('*')].filter((el) => {
+    if (!ACCOUNT_LABEL_RE.test(textOf(el))) return false;
+    // Smallest: no child of it also carries the phrase.
+    return ![...el.children].some((child) => ACCOUNT_LABEL_RE.test(textOf(child)));
+  });
+
+  for (const holder of holders) {
+    const beside = textOf(holder).replace(ACCOUNT_LABEL_RE, ' ').replace(/\s+/g, ' ').trim();
+    // Inside the label's own element, no length rule is needed: "the smallest
+    // element still carrying the phrase" has already scoped it to a header.
+    if (beside) return true;
+    // Next to it, one is. A bare label is a sibling of whatever follows it in
+    // the document, so without this a sign-in label sitting anywhere on a
+    // retail page is "followed by something" and passes — the exact collapse
+    // this function exists to avoid, arriving by a different door. A rendered
+    // account name is short; a page region is not.
+    const sibling = textOf(holder.nextElementSibling);
+    if (sibling && sibling.length <= ACCOUNT_VALUE_MAX) return true;
   }
   return false;
 }
