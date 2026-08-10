@@ -220,6 +220,29 @@ export function timeIndex(hhmm: string): string {
 /** The control that removes a selected location, one per chip. */
 const CHIP_REMOVE = 'button.input-pseudo__close-btn';
 
+/**
+ * Proof that the booking widget has mounted — and deliberately not the location
+ * field.
+ *
+ * **The location input is in the served HTML.** Fetching `/en/home.html` and
+ * grepping it: `search-autocomplete__input-PICKUP` is present, while
+ * `date-time__pickup-toggle`, `contract__input` and `booking-widget__go-cta`
+ * are all absent. The field is static markup; the widget builds everything else
+ * around it.
+ *
+ * So waiting for that input — which is what this driver did — is not a
+ * hydration check at all. It returns on the first poll of a cold page, the
+ * driver types into a component that is not listening yet, the keystroke goes
+ * nowhere, and the run dies with "timed out waiting for the autocomplete to
+ * offer PHL". Measured on the live site: DOMContentLoaded at 249ms and load at
+ * 698ms, which is about when a `document_idle` content script runs, with the
+ * widget's own elements appearing later.
+ *
+ * The submit button is the marker because the widget creates it, so its
+ * presence means the component tree the driver is about to touch exists.
+ */
+const HYDRATED_MARKER = '.booking-widget__go-cta';
+
 export async function clearStaleLocation(ctx: DriveContext): Promise<void> {
   // Bounded rather than `while`, so a chip whose remove button does not remove
   // it is a timeout with a message instead of a spin.
@@ -269,6 +292,20 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     const results = [
       ...ctx.doc.querySelectorAll<HTMLElement>('button.search-autocomplete__result'),
     ];
+    // Nothing offered at all means the keystroke was very likely lost — the
+    // field is static markup, so it can be typed into before its component is
+    // listening, and one event into a dead component leaves no trace to wait
+    // for. `HYDRATED_MARKER` makes that unlikely rather than impossible, so
+    // this re-types instead of trusting it. Cleared first: re-setting the same
+    // value is not a change, and a change is the whole point.
+    if (results.length === 0) {
+      field.focus();
+      setNativeValue(field, '');
+      setNativeValue(field, iata);
+      return null;
+    }
+    // Offered something, just not ours — retyping would only thrash, and the
+    // timeout message already names the code that was never offered.
     return results.find((el) => hasToken(textOf(el), iata)) ?? null;
   });
   option.click();
@@ -499,7 +536,7 @@ export const nationalDriver: FormDriver = {
   startPath: new URL(START_URL).pathname,
   async drive(ctx) {
     await waitFor(ctx, "National's booking widget to hydrate", () =>
-      ctx.doc.querySelector('#search-autocomplete__input-PICKUP'),
+      ctx.doc.querySelector(HYDRATED_MARKER),
     );
     await fillLocation(ctx);
     await applyDates(ctx);

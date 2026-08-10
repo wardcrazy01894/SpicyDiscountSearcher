@@ -61,6 +61,33 @@ rendered. It dumps the facts a driver needs and nothing else.
 })();
 ```
 
+**Pick the hydration marker from the widget, not from the server.** Before
+anything else, fetch the page and grep the raw HTML for the selectors you plan
+to wait on:
+
+```js
+const html = await fetch(location.pathname, { credentials: 'include' }).then((r) => r.text());
+['#the-field', '.the-submit-button'].map((s) => [s, html.includes(s.slice(1))]);
+```
+
+Anything already in that HTML is **static markup and proves nothing** — it is
+present before a single line of the vendor's JavaScript has run. National's
+location input is served this way while its submit button is not, so waiting for
+the input returned instantly on a cold page; the driver typed into a component
+that was not listening, the keystroke vanished, and the run died at the _next_
+step with "timed out waiting for the autocomplete". Wait for something the widget
+itself creates.
+
+Then type defensively anyway. A marker narrows the race, it does not close it,
+and one event into a component that is not listening leaves nothing to wait for
+— so re-apply the value while the thing you expect has not appeared.
+
+**Test in a hidden tab.** Probe tabs live in a minimised window, so
+`setTimeout` is throttled to roughly once a second: a 250 ms poll costs 1 s of
+budget. Open the page, switch to another tab, and drive it from there. National's
+whole fill takes about 5 s that way — comfortably inside its share of the probe
+deadline, but only because it was measured rather than assumed.
+
 Then, for each field the trip needs, answer three questions:
 
 1. **How is it set?** Try `setNativeValue` first — it works on anything backed

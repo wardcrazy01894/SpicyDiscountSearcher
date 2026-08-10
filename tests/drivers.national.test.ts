@@ -64,6 +64,11 @@ interface FormOptions {
   chipWrapsRemove?: boolean;
   /** The site restores a drop-off alongside the pick-up we choose. */
   selectionAddsReturn?: boolean;
+  /**
+   * Serve the page the way National really does: the location input is static
+   * markup, and the widget — its listener included — mounts later.
+   */
+  widgetMountsAfterMs?: number;
   /** Days the calendar refuses. */
   disabledDays?: string[];
   /** Which months the calendar renders. */
@@ -86,6 +91,7 @@ function renderForm(options: FormOptions = {}): void {
     selectionDoesNothing = false,
     chipWrapsRemove = false,
     selectionAddsReturn = false,
+    widgetMountsAfterMs = 0,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
     onSubmit = 'results-with-account',
@@ -155,7 +161,18 @@ function renderForm(options: FormOptions = {}): void {
       .addEventListener('click', () => ret.remove());
   }
 
-  input.addEventListener('input', () => {
+  const goCta = form.querySelector<HTMLElement>('.booking-widget__go-cta')!;
+  if (widgetMountsAfterMs > 0) {
+    // Before the widget mounts: the field is there, the submit button is not,
+    // and typing into the field does nothing at all.
+    goCta.remove();
+    setTimeout(() => {
+      form.append(goCta);
+      input.addEventListener('input', suggest);
+    }, widgetMountsAfterMs);
+  }
+
+  function suggest(): void {
     widget.querySelectorAll('.search-autocomplete__results').forEach((e) => e.remove());
     // The measured behaviour: a chip suppresses suggestions entirely.
     if (chips.querySelector('.input-pseudo__close-btn') || !input.value) return;
@@ -186,7 +203,8 @@ function renderForm(options: FormOptions = {}): void {
     });
     menu.append(dead, real);
     widget.append(menu);
-  });
+  }
+  if (widgetMountsAfterMs === 0) input.addEventListener('input', suggest);
 
   const host = form.querySelector<HTMLElement>('#calendar-host')!;
   for (const toggleId of ['date-time__pickup-toggle', 'date-time__return-toggle']) {
@@ -239,7 +257,7 @@ function renderForm(options: FormOptions = {}): void {
     );
   };
 
-  form.querySelector<HTMLElement>('.booking-widget__go-cta')!.addEventListener('click', () => {
+  goCta.addEventListener('click', () => {
     if (onSubmit === 'nothing') return;
     // A signed-in Emerald Club profile goes straight through — no interstitial.
     if (onSubmit === 'results-no-interstitial') {
@@ -268,6 +286,25 @@ function makeContext(overrides: Partial<DriveContext> = {}): DriveContext {
       clock += ms;
       return Promise.resolve();
     },
+    ...overrides,
+  };
+}
+
+/**
+ * A context on the real clock, for the one test whose page changes on a timer.
+ *
+ * Every other test uses the fake clock in `makeContext`, which only advances
+ * when the driver sleeps — perfect for asserting logic, and useless when the
+ * thing under test is a `setTimeout` the *page* owns.
+ */
+function realTimerContext(overrides: Partial<DriveContext> = {}): DriveContext {
+  return {
+    doc: document,
+    trip: TRIP,
+    code: '5666666',
+    deadline: Date.now() + 20_000,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...overrides,
   };
 }
@@ -390,6 +427,25 @@ describe('fillLocation', () => {
     const error = await failureOf(fillLocation(makeContext()));
     expect(error.failure).toBe('form-fill');
     expect(document.querySelector('.chip')).toBeNull();
+  });
+
+  it('survives a page whose location field exists before its widget does', async () => {
+    // The failure that took three rounds of live testing to find, and that the
+    // fixture could not previously express because it rendered the whole form
+    // at once.
+    //
+    // National serves `search-autocomplete__input-PICKUP` in the HTML —
+    // fetching `/en/home.html` and grepping proves it, while
+    // `booking-widget__go-cta` and `contract__input` are absent. So on a cold
+    // page the field is there before anything is listening, a single keystroke
+    // into it is lost, and the driver dies with "timed out waiting for the
+    // autocomplete to offer PHL".
+    renderForm({ widgetMountsAfterMs: 1_500 });
+    expect(document.querySelector('#search-autocomplete__input-PICKUP')).not.toBeNull();
+    expect(document.querySelector('.booking-widget__go-cta')).toBeNull();
+
+    await expect(nationalDriver.drive(realTimerContext())).resolves.toBeUndefined();
+    expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
   });
 
   it('reads the chip back whatever shape the markup gives it', async () => {
