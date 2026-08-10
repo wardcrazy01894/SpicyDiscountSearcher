@@ -170,6 +170,40 @@ describe('the popup half of the double-run guard', () => {
     });
   }
 
+  it('offers a codes cap high enough to race every car code, and enforces it', async () => {
+    // 100 covers all 66 car candidates, so a car run can be exhaustive. The
+    // number matters because nothing ranks the codes — `interleaveByVendor`
+    // makes truncation *fair*, not *good*, so whatever the cap cuts is cut
+    // arbitrarily.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
+    expect(maxCodes.max).toBe('100');
+
+    // And the attribute is not the enforcement. The browser checks `max` only
+    // on submit and `.value` still reports whatever was typed, so the clamp has
+    // to live in the code that builds the plan.
+    //
+    // Asserted on **hotels**, deliberately. There are only 66 car candidates,
+    // so a 5000 cap slices nothing and the test passes with the clamp deleted —
+    // which is exactly what happened to the first version of this. Hotels have
+    // 401, so the clamp is the only thing standing between the typed number and
+    // 401 tabs.
+    document.querySelector<HTMLButtonElement>('.tab[data-category="hotel"]')?.click();
+    maxCodes.value = '5000';
+    maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/\d/);
+    });
+    const summary = document.querySelector('#plan-summary')?.textContent ?? '';
+    // The *racing* number, not the first one in the sentence — that one is how
+    // many matched (401), which is true with or without a clamp.
+    const raced = Number(/racing (\d+) of them/.exec(summary)?.[1] ?? '0');
+    // Well past the car total, so this can only be satisfied by the clamp.
+    expect(raced).toBe(100);
+  });
+
   it('labels a company with a vendor it only reaches through alsoTryAs', async () => {
     // Reported from a loaded extension: "the codes-to-race list doesn't have
     // any that say National. It has ones that say avis or hertz or sixt and

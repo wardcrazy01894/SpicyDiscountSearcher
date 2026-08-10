@@ -102,6 +102,26 @@ const ui: UiState = {
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
 
+/**
+ * The most codes one run may race.
+ *
+ * Every code is a real tab on a real vendor site, so this is the run's size
+ * rather than a display limit — and there is no priority ordering underneath
+ * it. `interleaveByVendor` spreads the candidates across vendors and companies
+ * so that *truncating* is fair, not so that the best codes come first; nothing
+ * here knows which code will win. Whatever this number cuts off is cut off
+ * arbitrarily, which is the argument for it being generous.
+ *
+ * 100 covers every car code there is — 66 across Hertz, Avis, Sixt and National
+ * with all four selected — so a car run can now be exhaustive. Hotels still
+ * cannot: there are 401, and Hilton alone has 279. Raising it far enough for
+ * those is a different conversation, because it is also 401 tabs.
+ *
+ * The previous ceiling was 60, which bound even a full car run, and it carried
+ * no recorded reason anywhere in the repo.
+ */
+const MAX_CODES = 100;
+
 function money(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, {
@@ -277,7 +297,10 @@ function renderCompanyList(): void {
 }
 
 function plannedCandidates(): { all: Candidate[]; capped: Candidate[] } {
-  const max = Math.max(1, Number(maxCodesInput.value) || 1);
+  // Clamped both ends. The `max` attribute is a hint the browser enforces only
+  // on submit, and `.value` still reports whatever was typed — so without this
+  // a hand-edited 5000 would race every candidate there is.
+  const max = Math.min(MAX_CODES, Math.max(1, Number(maxCodesInput.value) || 1));
   // Interleaved before the cap, so the codes we actually race are spread across
   // the selected vendors instead of being one vendor's alphabetical prefix.
   const all = interleaveByVendor(
@@ -1129,6 +1152,9 @@ async function main(): Promise<void> {
   // trusted to stay in step. A `max` that disagrees with the worker's clamp
   // offers the user a concurrency the background silently refuses.
   concurrencyInput.max = String(MAX_CONCURRENCY);
+  // Same reason, and the same failure if they drift: the attribute is what the
+  // user is offered, `plannedCandidates` is what actually runs.
+  maxCodesInput.max = String(MAX_CODES);
 
   await restoreForm();
   setCategory(ui.category);
