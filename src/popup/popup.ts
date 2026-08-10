@@ -1,6 +1,7 @@
 import {
   allCompanies,
   buildCandidates,
+  codeReaches,
   countCodesFor,
   interleaveByVendor,
   searchCompanies,
@@ -189,8 +190,16 @@ function syncSelectionSummary(): void {
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
+  // `codeReaches`, not `vendors.includes(code.vendor)`. The inline version was
+  // the same mistake the vendor chip's count made: a code filed under one brand
+  // can be raced at another, and every National code is filed under Enterprise.
+  // Selecting National alone therefore hid the eight companies whose only car
+  // code is an Enterprise contract id — `Michigan State University`,
+  // `Purdue / Big TEN`, `UNION Bank/MUFG` and `University of Maryland` among
+  // them, which are precisely the companies README says disappeared when these
+  // vendors went unsearchable.
   const matches = searchCompanies(query).filter((company) =>
-    company.codes.some((code) => code.code && vendors.includes(code.vendor)),
+    company.codes.some((code) => code.code && vendors.some((v) => codeReaches(code.vendor, v))),
   );
   const selected = selectionSummary();
 
@@ -710,26 +719,41 @@ function renderRun(state: RunState | null): void {
   // `link-build` quotes are excluded: the worker stamps them `best-effort` on
   // the catch path, so counting them said "N of these search links are
   // unverified" about links that were never built, let alone followed.
-  const unverified = state.quotes.filter(
-    (q) => q.confidence === 'best-effort' && q.failure !== 'link-build',
+  // Driven vendors are excluded from *both* counts, not just from `unverified`.
+  // They have no search link to grade — the code and the itinerary are typed
+  // into the vendor's own form — so counting them among the links made the
+  // sentence claim something untrue in whichever branch it landed in: a
+  // National-only run read "these search links are checked against the live
+  // site" about a link that carries no search at all.
+  const linked = state.quotes.filter(
+    (q) => q.failure !== 'link-build' && q.confidence !== 'driven',
+  );
+  const unverified = linked.filter((q) => q.confidence === 'best-effort').length;
+  const driven = state.quotes.filter(
+    (q) => q.confidence === 'driven' && q.failure !== 'link-build',
   ).length;
-  const buildable = state.quotes.filter((q) => q.failure !== 'link-build').length;
   const note = document.createElement('li');
   note.className = 'hint';
-  if (buildable === 0) {
+  const drivenNote = driven
+    ? `${driven} ${driven === 1 ? 'code was' : 'codes were'} searched by filling the vendor's own ` +
+      'form, and dropped unless its results named the account. '
+    : '';
+  if (linked.length === 0 && driven === 0) {
     note.textContent = 'None of these codes could be turned into a search — nothing was looked up.';
-  } else if (unverified === buildable) {
-    note.textContent =
-      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+  } else if (linked.length === 0) {
+    note.textContent = `${drivenNote}Confirm the rate before booking.`;
+  } else if (unverified === linked.length) {
+    note.textContent = `${drivenNote}Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.`;
   } else if (unverified > 0) {
     note.textContent =
-      `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} reverse-engineered ` +
-      'and unverified — a result that looks wrong probably is. The rest are checked against the ' +
-      'live site for US airport round-trips only, and assume a driver aged 25 or over.';
+      `${drivenNote}${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} ` +
+      'reverse-engineered and unverified — a result that looks wrong probably is. The rest are ' +
+      'checked against the live site for US airport round-trips only, and assume a driver aged 25 ' +
+      'or over.';
   } else {
     note.textContent =
-      'These search links are checked against the live site for US airport round-trips only, and ' +
-      'assume a driver aged 25 or over. Confirm the rate before booking.';
+      `${drivenNote}These search links are checked against the live site for US airport ` +
+      'round-trips only, and assume a driver aged 25 or over. Confirm the rate before booking.';
   }
   quotesList.append(note);
 
@@ -1044,9 +1068,14 @@ const BUDGET_BOT_CHECK_URL = 'https://www.budget.com/en/home';
 
 budgetCaptchaBtn.addEventListener('click', () => {
   // Same contract as the Avis button above: one ordinary focused tab, and it
-  // answers nothing. Passing the check is the user's to do — this only puts
-  // them in front of it, and the clearance it leaves in the profile is what any
-  // later probe tab rides on.
+  // answers nothing. Passing the check is the user's to do.
+  //
+  // Unlike the Avis one, this is **preparatory rather than load-bearing**, and
+  // saying so matters. Budget is `searchable: false`, has no host permission and
+  // no content-script match, so no probe tab visits budget.com and there is no
+  // later tab to ride the clearance. It exists so the open question — whether a
+  // human pass survives an automated submit — can be answered at all, which is
+  // what decides whether a Budget driver is worth writing.
   void chrome.tabs.create({ url: BUDGET_BOT_CHECK_URL, active: true }).catch(() => {
     // Visible, for the reason the Avis one is: the user's next move is to go and
     // do something in a tab, so a silent failure sends them to wait at a page

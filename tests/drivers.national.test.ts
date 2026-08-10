@@ -30,6 +30,7 @@ import {
   setDate,
   submitSearch,
   timeIndex,
+  verifyResults,
 } from '../src/core/drivers/national.js';
 import { buildDeepLink } from '../src/core/deeplinks.js';
 import { FORM_DRIVERS } from '../src/core/drivers/index.js';
@@ -55,17 +56,30 @@ interface FormOptions {
   staleLocation?: boolean;
   /** Start with another code in the account field — the contamination case. */
   staleCode?: string;
+  /** Start in the one-way mode a previous search left behind. */
+  staleOneWay?: boolean;
+  /** Model a site change where picking a suggestion no longer selects it. */
+  selectionDoesNothing?: boolean;
   /** Days the calendar refuses. */
   disabledDays?: string[];
   /** Which months the calendar renders. */
   months?: string[];
-  onSubmit?: 'results-with-account' | 'results-no-account' | 'no-interstitial';
+  onSubmit?: 'results-with-account' | 'results-no-account' | 'results-no-interstitial' | 'nothing';
+}
+
+/** A leaf element carrying text, the shape the readbacks look for. */
+function textNode(text: string): HTMLElement {
+  const el = document.createElement('div');
+  el.textContent = text;
+  return el;
 }
 
 function renderForm(options: FormOptions = {}): void {
   const {
     staleLocation = false,
     staleCode = '',
+    staleOneWay = false,
+    selectionDoesNothing = false,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
     onSubmit = 'results-with-account',
@@ -79,6 +93,7 @@ function renderForm(options: FormOptions = {}): void {
   ).join('');
   form.innerHTML = `
     <div class="search-autocomplete">
+      <div class="location-chips"></div>
       <input id="search-autocomplete__input-PICKUP" />
       <button class="input-container__btn search-autocomplete__one-way-toggle">DIFFERENT RETURN</button>
     </div>
@@ -95,6 +110,7 @@ function renderForm(options: FormOptions = {}): void {
   document.body.append(form);
 
   const widget = form.querySelector<HTMLElement>('.search-autocomplete')!;
+  const chips = form.querySelector<HTMLElement>('.location-chips')!;
   const input = form.querySelector<HTMLInputElement>('#search-autocomplete__input-PICKUP')!;
 
   const addChip = (): void => {
@@ -109,22 +125,37 @@ function renderForm(options: FormOptions = {}): void {
       remove.remove();
       input.value = '';
     });
-    widget.append(chip, remove);
+    chips.append(chip, remove);
   };
   if (staleLocation) addChip();
 
+  // A previous one-way search leaves the return panel open and a second field
+  // (and, in the worst case, a second chip) behind.
+  if (staleOneWay) {
+    const ret = document.createElement('input');
+    ret.id = 'search-autocomplete__input-RETURN';
+    widget.append(ret);
+    if (staleLocation) addChip();
+    form
+      .querySelector<HTMLElement>('.search-autocomplete__one-way-toggle')!
+      .addEventListener('click', () => ret.remove());
+  }
+
   input.addEventListener('input', () => {
-    widget.querySelectorAll('.results-menu').forEach((e) => e.remove());
+    widget.querySelectorAll('.search-autocomplete__results').forEach((e) => e.remove());
     // The measured behaviour: a chip suppresses suggestions entirely.
-    if (widget.querySelector('.input-pseudo__close-btn') || !input.value) return;
+    if (chips.querySelector('.input-pseudo__close-btn') || !input.value) return;
     const menu = document.createElement('ul');
-    menu.className = 'results-menu';
+    // The real class, and a BEM element *inside* the block — which is what made
+    // a block-wide text readback pass on an open menu alone.
+    menu.className = 'search-autocomplete__results';
     const dead = document.createElement('li');
     dead.textContent = SUGGESTION; // renders the same text, swallows clicks
     const real = document.createElement('button');
     real.className = 'search-autocomplete__result';
     real.textContent = SUGGESTION;
     real.addEventListener('click', () => {
+      if (selectionDoesNothing) return;
       menu.remove();
       addChip();
     });
@@ -172,19 +203,29 @@ function renderForm(options: FormOptions = {}): void {
   form.querySelector<HTMLElement>('.contract-promo__tog')!.addEventListener('click', openPanel);
   if (staleCode) openPanel();
 
+  const showResults = (): void => {
+    window.location.hash = '#/car_select';
+    document.body.prepend(
+      textNode(
+        onSubmit === 'results-no-account'
+          ? '34 Results $ 74.00 / day'
+          : 'ACCOUNT NAME I B M CORP (USA) 34 Results Custom Rate $ 70.30 / day',
+      ),
+    );
+  };
+
   form.querySelector<HTMLElement>('.booking-widget__go-cta')!.addEventListener('click', () => {
-    if (onSubmit === 'no-interstitial') return;
+    if (onSubmit === 'nothing') return;
+    // A signed-in Emerald Club profile goes straight through — no interstitial.
+    if (onSubmit === 'results-no-interstitial') {
+      showResults();
+      return;
+    }
     const guest = document.createElement('button');
     guest.textContent = 'Continue as Guest';
     guest.addEventListener('click', () => {
       guest.remove();
-      window.location.hash = '#/car_select';
-      const summary = document.createElement('div');
-      summary.textContent =
-        onSubmit === 'results-with-account'
-          ? 'ACCOUNT NAME I B M CORP (USA) 34 Results Custom Rate $ 70.30 / day'
-          : '34 Results $ 74.00 / day';
-      document.body.prepend(summary);
+      showResults();
     });
     document.body.prepend(guest);
   });
@@ -311,6 +352,35 @@ describe('fillLocation', () => {
     expect(liClicks).toBe(0);
   });
 
+  it('fails when the branch name only ever appears in the dropdown', async () => {
+    // The bug this shipped with, and the same one `enterprise.ts` had already
+    // been fixed for. `search-autocomplete__results` is a BEM element *inside*
+    // `.search-autocomplete`, and every option spells out
+    // `Tampa International Airport (TPA)` — so a readback that searched the
+    // block passed whenever the menu was merely open, whether or not the click
+    // selected anything. A National change moving the click handler would then
+    // have submitted whatever location session state had restored.
+    renderForm({ selectionDoesNothing: true });
+
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(document.querySelector('.chip')).toBeNull();
+  });
+
+  it('leaves the one-way mode a previous search left behind', async () => {
+    // National restores the whole previous search. A profile whose last search
+    // was one-way comes back with a second location field, and this driver
+    // refuses one-way trips — so filling only the pick-up and submitting would
+    // price a one-way rental as the answer to a round-trip question.
+    renderForm({ staleLocation: true, staleOneWay: true });
+    expect(document.querySelectorAll('[id^="search-autocomplete__input-"]')).toHaveLength(2);
+
+    await fillLocation(makeContext());
+
+    expect(document.querySelectorAll('[id^="search-autocomplete__input-"]')).toHaveLength(1);
+    expect(document.querySelector('.location-chips')!.textContent).toContain('(TPA)');
+  });
+
   it('refuses a one-way trip', async () => {
     renderForm();
     const error = await failureOf(
@@ -382,26 +452,76 @@ describe('fillAccountNumber', () => {
 });
 
 describe('submitSearch', () => {
-  it('clears the guest interstitial and accepts a discounted results page', async () => {
+  it('clears the guest interstitial', async () => {
     renderForm({ onSubmit: 'results-with-account' });
     await expect(submitSearch(makeContext())).resolves.toBeUndefined();
     expect(window.location.hash).toBe('#/car_select');
   });
 
-  it('reports code-rejected when the results page names no account', async () => {
-    // The control run, exactly: a real results page, real prices, no discount.
-    // Those are retail rates, and letting them through would report them as the
-    // company's — a real page, a real number, the wrong answer.
-    renderForm({ onSubmit: 'results-no-account' });
-    const error = await failureOf(submitSearch(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+  it('accepts a search that skipped the interstitial entirely', async () => {
+    // The probe tabs run in the user's own profile, so a user signed in to
+    // Emerald Club never sees the guest prompt. Requiring it meant burning the
+    // budget and reporting `form-submit` on a search that ran perfectly.
+    renderForm({ onSubmit: 'results-no-interstitial' });
+    await expect(submitSearch(makeContext())).resolves.toBeUndefined();
     expect(window.location.hash).toBe('#/car_select');
   });
 
-  it('reports form-submit when the interstitial never appears', async () => {
-    renderForm({ onSubmit: 'no-interstitial' });
+  it('reports form-submit when nothing at all happens', async () => {
+    renderForm({ onSubmit: 'nothing' });
     const error = await failureOf(submitSearch(makeContext()));
     expect(error.failure).toBe('form-submit');
+  });
+});
+
+describe('verifyResults', () => {
+  it('accepts a results page that names the account', async () => {
+    renderForm();
+    window.location.hash = '#/car_select';
+    document.body.prepend(textNode('ACCOUNT NAME I B M CORP (USA) Custom Rate'));
+    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+  });
+
+  it('reports code-rejected when results carry no account', async () => {
+    // The control run, exactly: a real results page, real prices, no discount.
+    // Those are retail rates, and letting them through would report them as the
+    // company's — a real page, a real number, the wrong answer.
+    renderForm();
+    window.location.hash = '#/car_select';
+    document.body.prepend(textNode('34 Results $ 74.00 / day'));
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('code-rejected');
+    expect(error.message).toMatch(/retail rates/);
+  });
+
+  it('reports form-submit, not code-rejected, when results never arrive', async () => {
+    // The distinction the first version lost. It reported a plain timeout as
+    // `code-rejected`, so a slow page told the user their employer's code had
+    // been refused — a confident, specific, wrong claim about the one thing
+    // this tool exists to answer.
+    renderForm();
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('form-submit');
+  });
+
+  it('waits for a header that paints late rather than calling it a refusal', async () => {
+    renderForm();
+    window.location.hash = '#/car_select';
+    const context = makeContext();
+    const promise = verifyResults(context);
+    document.body.prepend(textNode('ACCOUNT NAME I B M CORP (USA)'));
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('does not accept the words "account name" with nothing after them', async () => {
+    // The label alone is ordinary sign-in furniture and could sit in a profile
+    // menu on a page showing retail rates. Requiring a value after it is what
+    // makes this a reading of the header rather than a match on boilerplate.
+    renderForm();
+    window.location.hash = '#/car_select';
+    document.body.prepend(textNode('Account Name'));
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('code-rejected');
   });
 });
 

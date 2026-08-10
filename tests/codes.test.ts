@@ -4,6 +4,7 @@ import {
   allCompanies,
   buildCandidates,
   codeDatabase,
+  codeReaches,
   companyBySlug,
   countCodesFor,
   interleaveByVendor,
@@ -134,6 +135,33 @@ describe('countCodesFor', () => {
       .filter((c) => c.vendor === 'national' && c.code);
     expect(filed).toHaveLength(0);
     expect(countCodesFor('national')).toBe(19);
+  });
+
+  it('lists a company whose only car code reaches a vendor through alsoTryAs', () => {
+    // The popup filters its company list by the same rule, and got it wrong the
+    // same way. Selecting National alone hid these eight — the very companies
+    // README says vanished when these vendors went unsearchable.
+    for (const name of [
+      'Michigan State University',
+      'Purdue / Big TEN',
+      'UNION Bank/MUFG',
+      'University of Maryland',
+    ]) {
+      const company = allCompanies().find((c) => c.name === name);
+      expect(company, name).toBeDefined();
+      const reachable = company!.codes.some(
+        (code) => code.code && codeReaches(code.vendor, 'national'),
+      );
+      expect(reachable, name).toBe(true);
+      // And they have nothing at any other car vendor, which is what made the
+      // omission total rather than cosmetic.
+      const elsewhere = company!.codes.some(
+        (code) =>
+          code.code &&
+          (['hertz', 'avis', 'sixt'] as const).some((v) => codeReaches(code.vendor, v)),
+      );
+      expect(elsewhere, name).toBe(false);
+    }
   });
 
   it('counts a code shared by two companies once', () => {

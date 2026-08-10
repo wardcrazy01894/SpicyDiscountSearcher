@@ -4,6 +4,7 @@ import {
   type DriveContext,
   type FormDriver,
   hasToken,
+  POLL_MS,
   setNativeValue,
   textOf,
   waitFor,
@@ -55,12 +56,19 @@ import type { CarTrip } from '../types.js';
  * - A stale location chip suppresses the autocomplete entirely — typing into a
  *   field that already holds a selection offers no suggestions, which is a
  *   measured failure and not a theory. `clearStaleLocation` removes it first.
+ * - A one-way search left in that state reopens the "DIFFERENT RETURN" panel,
+ *   which would have this driver — which refuses one-way trips — fill only the
+ *   pick-up and price a one-way rental. `clearStaleLocation` collapses it and
+ *   verifies the collapse.
  * - Concurrent National tabs in one profile share that state, so two lanes
- *   racing two codes can settle on one. **This is why National is not
- *   registered in `FORM_DRIVERS` yet**: it needs a per-vendor concurrency of
- *   one, which the worker cannot express today. The `ACCOUNT NAME` check below
- *   does not save us — both tabs would render the same name, and nothing here
- *   maps a code to the name it should produce.
+ *   racing two codes could settle on one. `Vendor.maxLanes` is why they cannot:
+ *   National runs one tab at a time however wide the rest of the race is. The
+ *   `ACCOUNT NAME` check would not have saved us — both tabs would render the
+ *   same name, and nothing here maps a code to the name it should produce.
+ *
+ * Its submit ends in a real navigation, so `drive` cannot see its own results:
+ * the checks live in `verifyResults`, which runs in whichever document holds
+ * the results page. See `FormDriver.startPath`.
  */
 
 const START_URL = 'https://www.nationalcar.com/en/home.html';
@@ -77,7 +85,40 @@ const RESULTS_HASH = 'car_select';
  * and reporting that as a company's discounted rate is the failure this whole
  * codebase is built to refuse.
  */
-const ACCOUNT_NAME_RE = /ACCOUNT\s+NAME/i;
+const ACCOUNT_NAME_RE = /^ACCOUNT\s+NAME\s+(\S.*)$/i;
+
+/**
+ * How much text an element may hold and still be read as the account header.
+ *
+ * The whole point of the bound. Matched against `document.body` the rule
+ * "something follows the label" is satisfied by the rest of the page, so it
+ * degrades to matching the label alone — which is the weak check it was meant
+ * to replace.
+ */
+const ACCOUNT_TEXT_MAX = 120;
+
+/**
+ * Did the results page name an account, rather than merely say the words?
+ *
+ * The label alone is too weak to carry this much weight: "account name" is
+ * ordinary sign-in furniture and could sit in a profile menu or a hidden modal
+ * on a page showing retail rates, which would pass a retail quote off as a
+ * company's. This looks for an element whose *own* text is the label followed
+ * by a value — `ACCOUNT NAME I B M CORP (USA)` — and ignores anything long
+ * enough to be a region rather than a header.
+ *
+ * Still a heuristic on somebody else's markup, and it fails in the safe
+ * direction: a header that stops matching fails the quote loudly rather than
+ * letting a retail price through quietly.
+ */
+export function accountNamed(doc: Document): boolean {
+  for (const el of doc.querySelectorAll<HTMLElement>('*')) {
+    const text = textOf(el);
+    if (!text || text.length > ACCOUNT_TEXT_MAX) continue;
+    if (ACCOUNT_NAME_RE.exec(text)?.[1]?.trim()) return true;
+  }
+  return false;
+}
 
 const MONTHS = [
   'January',
@@ -130,20 +171,50 @@ export function timeIndex(hhmm: string): string {
 }
 
 /**
- * Drop a location left over from an earlier search.
+ * Drop locations left over from an earlier search, and leave one-way mode.
  *
  * Not defensive tidying. With a chip present the autocomplete offers nothing at
  * all, so the next step times out — that is how this was found. Silent when
  * there is nothing to clear, which is the ordinary case on a cold profile.
+ *
+ * Both halves exist because National restores the *whole* previous search. A
+ * profile whose last National search was one-way comes back with the "DIFFERENT
+ * RETURN" panel open and two location fields, and that is the dangerous shape:
+ * this driver refuses one-way trips outright, so filling only the pick-up and
+ * submitting would price a one-way rental as the answer to a round-trip
+ * question. Every chip is cleared rather than the first, for the same reason.
+ *
+ * Collapsing the panel is unmeasured — the toggle was never exercised — so it
+ * is attempted and then *verified*, and a failure to collapse fails the quote.
+ * That is the framework's rule doing its job on a step nobody has watched.
  */
+const LOCATION_FIELDS = '[id^="search-autocomplete__input-"]';
+
 export async function clearStaleLocation(ctx: DriveContext): Promise<void> {
-  const remove = ctx.doc.querySelector<HTMLElement>('button.input-pseudo__close-btn');
-  if (!remove) return;
-  remove.click();
+  // Bounded rather than `while`, so a chip whose remove button does not remove
+  // it is a timeout with a message instead of a spin.
+  for (let i = 0; i < 4; i += 1) {
+    const remove = ctx.doc.querySelector<HTMLElement>('button.input-pseudo__close-btn');
+    if (!remove) break;
+    remove.click();
+    await waitFor(ctx, 'the stale location chip to clear', () => !remove.isConnected);
+  }
+  if (ctx.doc.querySelector('button.input-pseudo__close-btn')) {
+    throw new DriverError('form-fill', 'could not clear the previous search from the form');
+  }
+
+  if (ctx.doc.querySelectorAll(LOCATION_FIELDS).length <= 1) return;
+  const toggle = [...ctx.doc.querySelectorAll<HTMLElement>('button')].find((el) =>
+    /different return/i.test(textOf(el)),
+  );
+  if (!toggle) {
+    throw new DriverError('form-fill', 'form is in one-way mode with no way back to round trip');
+  }
+  toggle.click();
   await waitFor(
     ctx,
-    'the stale location chip to clear',
-    () => !ctx.doc.querySelector('button.input-pseudo__close-btn'),
+    'the form to leave the one-way mode a previous search left it in',
+    () => ctx.doc.querySelectorAll(LOCATION_FIELDS).length <= 1,
   );
 }
 
@@ -190,9 +261,22 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   // parenthesised code is the readback — and unlike Enterprise's chip it carries
   // the code itself, which is what we actually asked for rather than a name we
   // inferred.
+  //
+  // Deliberately *not* a text search of `.search-autocomplete`, which is what
+  // this first shipped as and which was wrong in the way this repo has already
+  // been burned by once. The suggestion menu is a BEM element of that same
+  // block — `search-autocomplete__results` lives inside it — and every option
+  // spells out `Tampa International Airport (TPA)`. So the check passed
+  // whenever the dropdown was merely *open*, whether or not the click selected
+  // anything, and a National change that moved the click handler would have
+  // left the driver submitting whatever location session state had restored.
+  // `drivers/enterprise.ts` carries the same exclusion for the same reason.
   await waitFor(ctx, `the form to show the ${iata} branch`, () => {
-    const widget = ctx.doc.querySelector('.search-autocomplete');
-    return textOf(widget).includes(`(${iata})`) || null;
+    const menu = ctx.doc.querySelector('.search-autocomplete__results');
+    const leaves = [...ctx.doc.querySelectorAll<HTMLElement>('*')].filter(
+      (el) => el.children.length === 0 && textOf(el).includes(`(${iata})`),
+    );
+    return leaves.some((el) => !menu?.contains(el)) || null;
   });
 }
 
@@ -311,17 +395,44 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
   if (!button) throw new DriverError('form-fill', 'no "Check Availability" button on the form');
   button.click();
 
-  const guest = await waitFor(
+  // Either, not the interstitial only. It is an Emerald Club sign-in prompt, and
+  // the probe tabs run in the user's own profile — a signed-in user never sees
+  // it. Requiring it meant burning the rest of the budget and reporting
+  // `form-submit` on a search that had run perfectly.
+  const landed = await waitFor(
     ctx,
-    'the sign-in or guest interstitial',
-    () =>
-      [...ctx.doc.querySelectorAll<HTMLElement>('button, a')].find((el) =>
+    'the guest interstitial or the results page',
+    () => {
+      if (ctx.doc.location?.hash.includes(RESULTS_HASH)) return 'results' as const;
+      const guest = [...ctx.doc.querySelectorAll<HTMLElement>('button, a')].find((el) =>
         /continue as guest/i.test(textOf(el)),
-      ) ?? null,
+      );
+      return guest ?? null;
+    },
     'form-submit',
   );
-  guest.click();
 
+  // Clicking through is declining to authenticate, not authenticating. It also
+  // navigates, so this document may not survive the click — which is exactly
+  // why the results checks live in `verifyResults` rather than here.
+  if (landed !== 'results') landed.click();
+}
+
+/**
+ * How long to keep looking for the account header once results are on screen.
+ *
+ * Bounded separately from the drive so that "no account" is a finding rather
+ * than a stopwatch. The first version reported a plain `waitFor` timeout as
+ * `code-rejected`, so a results page that painted its header a moment late told
+ * the user their employer's code had been refused — a confident, specific,
+ * wrong claim about the thing the tool exists to answer.
+ */
+const ACCOUNT_GRACE_MS = 4_000;
+
+export async function verifyResults(ctx: DriveContext): Promise<void> {
+  // First that a search happened at all. On this path the document may be a
+  // fresh one that never drove anything, having been re-injected after
+  // National's own navigation.
   await waitFor(
     ctx,
     'National to answer the search',
@@ -329,16 +440,25 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
     'form-submit',
   );
 
-  await waitFor(
-    ctx,
-    'the results page to name the account the code belongs to',
-    () => ACCOUNT_NAME_RE.test(textOf(ctx.doc.body)) || null,
-    'code-rejected',
-  );
+  // Then that the discount applied. Absence here is not a missing price — it is
+  // the retail rate, which is exactly what the control run returned, and
+  // reporting it as a company's rate is the failure this codebase refuses.
+  const graceEnds = Math.min(ctx.deadline, ctx.now() + ACCOUNT_GRACE_MS);
+  for (;;) {
+    if (accountNamed(ctx.doc)) return;
+    if (ctx.now() >= graceEnds) {
+      throw new DriverError(
+        'code-rejected',
+        'results came back with no corporate account applied, so these are retail rates',
+      );
+    }
+    await ctx.sleep(POLL_MS);
+  }
 }
 
 export const nationalDriver: FormDriver = {
   startUrl: () => START_URL,
+  startPath: new URL(START_URL).pathname,
   async drive(ctx) {
     await waitFor(ctx, "National's booking widget to hydrate", () =>
       ctx.doc.querySelector('#search-autocomplete__input-PICKUP'),
@@ -348,4 +468,5 @@ export const nationalDriver: FormDriver = {
     await fillAccountNumber(ctx);
     await submitSearch(ctx);
   },
+  verifyResults,
 };

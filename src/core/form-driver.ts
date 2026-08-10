@@ -17,10 +17,8 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * worked, and a step that cannot be verified fails the quote instead of
  * continuing. `form-fill` is visible in the popup; a wrong price is not.
  *
- * Nothing here is wired to a live vendor yet — every driver-backed vendor is
- * still `searchable: false`, so `FORM_DRIVERS` is consulted and comes back
- * empty on every real run today. See `drivers/enterprise.ts` for what is
- * measured and what is still missing.
+ * National is live on this path (`drivers/national.ts`); Budget and Enterprise
+ * are not, and `drivers/enterprise.ts` records what is still missing for it.
  */
 
 /**
@@ -74,15 +72,34 @@ export interface FormDriver {
    * Where to open the tab for this vendor.
    *
    * A driver's URL is not a deep link and carries no itinerary — it is just the
-   * page the form lives on. That is exactly why a driven vendor cannot reuse
-   * `LinkConfidence` as it stands: neither `verified` nor `best-effort` says
-   * anything true about a URL whose correctness is irrelevant. Deciding what it
-   * should say is part of making the first driven vendor searchable, not part
-   * of this framework.
+   * page the form lives on, which is why `LinkConfidence` has `driven` rather
+   * than grading it as a deep link.
    */
   startUrl(): string;
-  /** Fill and submit, or throw `DriverError`. Resolves once results are up. */
+  /**
+   * The pathname the form lives on, and the only page `drive` may run against.
+   *
+   * Load-bearing, because **a content script re-runs from the top on every
+   * document**. `main()` sends `PROBE_READY` on each load and the background
+   * answers with the same quote for the same tab id, which is right for
+   * extraction — it is idempotent — and wrong for a driver, which is not.
+   * National's submit ends in a real navigation to its results page, so without
+   * this gate the re-injected probe drives again against a document with no
+   * search form and fails a quote whose search had already succeeded.
+   */
+  startPath: string;
+  /** Fill and submit, or throw `DriverError`. May not survive its own navigation. */
   drive(ctx: DriveContext): Promise<void>;
+  /**
+   * Check the page the search landed on, whether or not this document drove it.
+   *
+   * Separate from `drive` for the same reason `startPath` exists: after a
+   * navigation the driving document is gone, and the checks that make a driven
+   * quote trustworthy — did the search run, did the discount apply — have to
+   * happen in whichever document is holding the results. Running them only
+   * inside `drive` would mean a navigating vendor is never verified at all.
+   */
+  verifyResults(ctx: DriveContext): Promise<void>;
 }
 
 /** How often to re-check a page that is still catching up. */

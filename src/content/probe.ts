@@ -103,25 +103,32 @@ const VERIFY_TRIP = new Set<string>(['avis']);
 /**
  * How much of a quote's budget a form driver may spend before pricing starts.
  *
- * A guess, and flagged as one because it is the number most likely to be wrong.
- * Enterprise's widget alone took ~40s of a 45s `PROBE_TIMEOUT_MS` to hydrate on
- * one measured load, so this split does not currently leave a driven vendor
- * enough of either half — raising the timeout is part of making the first one
- * searchable, and `KEEPALIVE_CEILING_MS` is derived from it, so that is a
- * deliberate change rather than a nudge. Nothing is registered in
- * `FORM_DRIVERS` today, so no run is affected yet.
+ * **A guess, and the number here most likely to be wrong.** It is live for
+ * National, which mounts its widget in about 8s and fits inside the ~27s this
+ * leaves of a 45s `PROBE_TIMEOUT_MS`. Enterprise is what will break it: its
+ * widget alone took ~40s on one measured load, leaving nothing for filling,
+ * submitting or pricing. Raising the timeout is the answer there, and
+ * `KEEPALIVE_CEILING_MS` derives from it, so that is a deliberate change rather
+ * than a nudge.
  */
 const DRIVE_SHARE = 0.6;
 
 /**
  * Fill and submit the vendor's own search form, for vendors that need it.
  *
- * A no-op for every vendor today: `FORM_DRIVERS` is empty of anything
- * reachable, because the vendors that would use one are all `searchable: false`.
+ * Live for National; `FORM_DRIVERS` decides. Returns the failure to report, or
+ * null when there is nothing to drive and nothing went wrong. Reporting rather
+ * than sending, so the caller keeps the one place that decides what a
+ * `ProbeReport` looks like.
  *
- * Returns the failure to report, or null when there is nothing to drive or the
- * drive succeeded. Reporting rather than sending, so the caller keeps the one
- * place that decides what a `ProbeReport` looks like.
+ * **The path gate is not an optimisation.** A content script runs from the top
+ * in every document, and the background answers a re-injected tab's
+ * `PROBE_READY` with the same quote — right for extraction, which is
+ * idempotent, and wrong for a driver, which is not. National's submit ends in a
+ * real navigation to its results page, so without this the re-injected probe
+ * drives again against a document with no search form and fails a quote whose
+ * search had already succeeded. `verifyResults` still runs there, which is the
+ * half that has to happen in whichever document holds the results.
  */
 async function driveForm(
   assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>,
@@ -129,15 +136,17 @@ async function driveForm(
 ): Promise<{ failure: DriverError['failure']; message: string } | null> {
   const driver = FORM_DRIVERS[assignment.vendor];
   if (!driver) return null;
+  const context = {
+    doc: document,
+    trip: assignment.trip,
+    code: assignment.code,
+    deadline: start + assignment.timeoutMs * DRIVE_SHARE,
+    now: () => Date.now(),
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  };
   try {
-    await driver.drive({
-      doc: document,
-      trip: assignment.trip,
-      code: assignment.code,
-      deadline: start + assignment.timeoutMs * DRIVE_SHARE,
-      now: () => Date.now(),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    });
+    if (location.pathname === driver.startPath) await driver.drive(context);
+    await driver.verifyResults(context);
     return null;
   } catch (error) {
     if (error instanceof DriverError) return { failure: error.failure, message: error.message };

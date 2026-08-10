@@ -281,8 +281,33 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
   );
 }
 
+/**
+ * Confirm a search actually ran, without re-running one.
+ *
+ * Enterprise submits in place — its results are a `#car_select` fragment on the
+ * same document — so unlike National there is no navigation to survive and
+ * `submitSearch` already sees its own outcome. This exists so the contract is
+ * one shape for every driver, and it deliberately does **not** reuse
+ * `submitSearch`: that clicks the button, and a verification step that submits
+ * the form again is a second search per quote.
+ *
+ * No account check here. Enterprise's results page names the account holder too
+ * (`I B M CORP (USA)` for IBM's code), which is the check worth adding when
+ * this driver becomes reachable — see the note in `submitSearch`.
+ */
+export async function verifyResults(ctx: DriveContext): Promise<void> {
+  await waitFor(
+    ctx,
+    'Enterprise to be showing a results page',
+    () => ctx.doc.location?.hash.includes(RESULTS_HASH) || null,
+    'form-submit',
+  );
+}
+
 export const enterpriseDriver: FormDriver = {
   startUrl: () => START_URL,
+  startPath: new URL(START_URL).pathname,
+  verifyResults,
   async drive(ctx) {
     await awaitHydration(ctx);
     await fillLocation(ctx);

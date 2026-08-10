@@ -712,6 +712,12 @@ async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
       // a slot frees rather than spin — and rather than return, which would
       // quietly drop those quotes on the floor with the run reported complete.
       await new Promise<void>((resolve) => run.laneWaiters.add(resolve));
+      // The stagger lives at the tail of this loop, which a `continue` skips.
+      // Without this the capped vendors — the ones whose sites keep session
+      // state, and so the ones most likely to rate-limit — are exactly the
+      // vendors whose consecutive tabs open with no gap at all, since each one
+      // starts the instant the previous releases its slot.
+      await new Promise((resolve) => setTimeout(resolve, STAGGER_MS));
       continue;
     }
     try {
