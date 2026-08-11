@@ -153,12 +153,17 @@ describe('countCodesFor', () => {
         (code) => code.code && codeReaches(code.vendor, 'national'),
       );
       expect(reachable, name).toBe(true);
-      // And they have nothing at any other car vendor, which is what made the
-      // omission total rather than cosmetic.
+      // And they have nothing at any other *reachable* car vendor, which is what
+      // made the omission total rather than cosmetic. Derived from the registry
+      // rather than listed: it named sixt until that vendor was disabled, and a
+      // hard-coded list quietly asserts something about vendors nothing routes
+      // to — passing today, and failing on a workbook edit with a message
+      // claiming a code is reachable when it is not.
+      const otherCarVendors = VENDORS.filter(
+        (v) => v.category === 'car' && v.searchable && v.id !== 'national',
+      ).map((v) => v.id);
       const elsewhere = company!.codes.some(
-        (code) =>
-          code.code &&
-          (['hertz', 'avis', 'sixt'] as const).some((v) => codeReaches(code.vendor, v)),
+        (code) => code.code && otherCarVendors.some((v) => codeReaches(code.vendor, v)),
       );
       expect(elsewhere, name).toBe(false);
     }

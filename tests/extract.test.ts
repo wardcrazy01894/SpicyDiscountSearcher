@@ -726,7 +726,10 @@ describe('labels', () => {
     // This is the shape where the bound is the only thing standing: a page with
     // no <main> at all, whose container selector matches a plain <div>. Sixt's
     // selector list includes `.offer-list`, so that div becomes the root while
-    // matching none of `body, html, main`. Without the bound the walk reaches it
+    // matching none of `body, html, main`. Named deliberately: this is the one
+    // place a disabled vendor's `VENDOR_SELECTORS` entry is load-bearing, so
+    // deleting sixt's entry as dead config would drop the root back to <body> —
+    // inside the bound — and this test would go green while testing nothing. Without the bound the walk reaches it
     // and headingText() querySelectors the whole results list, handing the promo
     // banner the first card's class — the exact mislabel the test above is about.
     document.body.innerHTML = `

@@ -80,12 +80,13 @@ reaches a real search and it comes straight back. That costs **3 codes**, and no
 company disappears — every company with a Sixt code has one at another car
 vendor.
 
-Returning a URL was the worse option: the landing page shows a marketing
-"from $19/day", the probe reads it as a real price, and nothing downstream can
+For Budget, Enterprise and National, returning a URL was the worse option: the
+landing page shows a marketing "from $19/day", the probe reads it as a real price, and nothing downstream can
 tell — ranking never looks at `confidence`, so it would be compared
 head-to-head with the verified vendors and win on being cheapest. Leaving them
 merely _selectable_ was nearly as bad: they took half the default cap of twelve
-codes while the plan line promised twelve that would run.
+codes while the plan line promised twelve that would run. (Sixt was in neither
+of those episodes — its page shows `$35`, and it was searchable throughout.)
 
 The cost was real and worth stating: **27 codes and six companies disappeared
 from the popup** (`Government of Canada`, `Imaginus`, `Michigan State

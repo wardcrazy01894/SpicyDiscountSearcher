@@ -41,10 +41,8 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget, Enterprise and Sixt throw instead of building** — the first two
-  because they were
-  observed ignoring the query string entirely, Sixt because its URL 302s to the
-  site root. Returning a URL for them was
+  **Budget and Enterprise throw instead of building.** They were
+  observed ignoring the query string entirely, and returning a URL for them was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
   can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
@@ -54,11 +52,22 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `link-build` is visible; that is not. Same trade as the malformed date and
   the one-way trip.
 
+  **Sixt throws too, and deliberately not for these reasons.** Its landing page
+  shows `$35` rather than `from $19/day`, and — the part that matters —
+  `landedElsewhere` _did_ catch it: the 302 goes to the bare root, which is the
+  one shape that flag recognises, so its quotes were flagged `suspect` and kept
+  out of the ranking. It was disabled anyway, because that containment is a
+  measurement rather than a property (a locale split to `/en/` would end it) and
+  because a vendor that cannot answer still spends a lane and a real tab on
+  every run. Reading this bullet as covering Sixt would say the flag never
+  fired, when the point is that it did and was still not enough.
+
   They are also `searchable: false`, which is the half that matters to the user.
   Throwing alone left them selectable, and `interleaveByVendor` round-robins one
   candidate per vendor — so three vendors that could not run took **half** the
   default cap of twelve, and the plan line promised codes the popup already knew
-  would fail. `starwood` had the same shape and the same answer for years: the
+  would fail. (That episode was budget, enterprise and national; Sixt was
+  searchable throughout it and left later, on its own evidence.) `starwood` had the same shape and the same answer for years: the
   codes stay in the database, the vendor gets no chip, no candidate, and no host
   permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
