@@ -2,7 +2,12 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
-import { WRITE_TIMEOUT_MS, clearRejected, recordRejected } from '../core/rejected-codes.js';
+import {
+  WRITE_TIMEOUT_MS,
+  clearRejected,
+  pendingWrites,
+  recordRejected,
+} from '../core/rejected-codes.js';
 import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
@@ -128,10 +133,18 @@ const WRITE_WAIT_CEILING_MS = 30_000;
 async function settleWrites(
   writes: Iterable<Promise<void>>,
   what = 'a run announcement',
+  links = -1,
 ): Promise<void> {
   const pending = [...writes];
   if (pending.length === 0) return;
-  const waitMs = Math.min(WRITE_TIMEOUT_MS * pending.length, WRITE_WAIT_CEILING_MS);
+  // `links` when the caller knows better than its own promise count does.
+  // Every function in `rejected-codes.ts` returns the *tail* of the shared
+  // chain, so one promise can stand for any number of queued writes: the clear
+  // budgeted for a single write while sitting fourth in the queue behind a
+  // run's refusals, which is the same too-short bound this scaling exists to
+  // prevent, one level up.
+  const depth = links >= 0 ? links : pending.length;
+  const waitMs = Math.min(WRITE_TIMEOUT_MS * Math.max(1, depth), WRITE_WAIT_CEILING_MS);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
@@ -1163,7 +1176,11 @@ chrome.runtime.onMessage.addListener(
           // that never returns would leave `sendResponse` uncalled, and the
           // popup's own failed-send branch cannot fire on a reply that never
           // comes — the button would just look dead.
-          await settleWrites([clearRejected(chrome.storage.local)], 'a clear');
+          // Counted before enqueuing, plus this one: the promise below is the
+          // chain's tail and resolves only after everything already in front of
+          // it, each of which has its own per-write bound.
+          const depth = pendingWrites() + 1;
+          await settleWrites([clearRejected(chrome.storage.local)], 'a clear', depth);
           sendResponse({ type: 'RUN_STATE', state: active?.state ?? null } satisfies StateMessage);
           return;
         }

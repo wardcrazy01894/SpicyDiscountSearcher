@@ -122,7 +122,23 @@ export const WRITE_TIMEOUT_MS = 5_000;
 
 let writes: Promise<void> = Promise.resolve();
 
+/** Links queued and not yet settled, so a waiter can size its own bound. */
+let queued = 0;
+
+/**
+ * How many writes are outstanding.
+ *
+ * The service worker bounds its wait by how long the chain can honestly take,
+ * and every function here returns the *tail* of that chain — so a caller
+ * counting its own promises sees one and budgets for one write, however many
+ * are queued in front of it.
+ */
+export function pendingWrites(): number {
+  return queued;
+}
+
 function serialise(write: () => Promise<void>): Promise<void> {
+  queued += 1;
   const bounded = async (): Promise<void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -135,6 +151,7 @@ function serialise(write: () => Promise<void>): Promise<void> {
     } finally {
       // Or a healthy write leaves a live timer behind on every call.
       if (timer !== undefined) clearTimeout(timer);
+      queued -= 1;
     }
   };
   writes = writes.then(bounded, bounded);

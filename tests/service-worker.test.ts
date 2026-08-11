@@ -993,6 +993,53 @@ describe('remembering a code the vendor refused', () => {
     expect(chromeMock.local.get('rejectedCodes')).toEqual([]);
   });
 
+  it('waits for a clear that is queued behind a run’s refusals', async () => {
+    // Every function in `rejected-codes.ts` returns the *tail* of one shared
+    // chain, so the clear hands `settleWrites` a single promise and it budgeted
+    // for a single write — while sitting behind however many refusals the run
+    // had recorded, each with its own bound. Slow storage plus a couple of
+    // refusals therefore ran the clock out on the clear, the worker replied
+    // normally, and the popup re-read a list that had not been cleared yet.
+    chromeMock = installChromeMock();
+    // Three writes at 4s each: the clear lands at ~12s, well past a one-write
+    // bound of 5s and inside the depth-scaled one.
+    chromeMock.delayLocalWrites(4_000);
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    for (let i = 0; i < 2; i += 1) {
+      const tabId = [...chromeMock.tabs.keys()][0];
+      if (tabId === undefined) break;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      await settle(100);
+    }
+
+    // Pressed while both refusal writes are still in flight.
+    const clearing = chromeMock.fromPopup({ type: 'CLEAR_REJECTED' });
+    // What storage held *when the reply went out* — the only moment that
+    // discriminates. Asserted after the fact it reads as cleared either way,
+    // because the clear does land eventually; the bug is that the popup is told
+    // so before it has.
+    let atReply: unknown;
+    void clearing.then(() => {
+      atReply = chromeMock.local.get('rejectedCodes');
+    });
+    await settle(60_000);
+    await clearing;
+
+    // The reply waited for the clear to actually land, rather than for as long
+    // as one write would have taken.
+    expect(atReply).toEqual([]);
+  });
+
   it('refuses to clear for a content script', async () => {
     // The first destructive popup-only message, and this extension runs content
     // scripts on six vendor hosts. A page there could otherwise wipe the one

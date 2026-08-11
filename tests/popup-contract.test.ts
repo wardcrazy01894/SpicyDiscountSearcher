@@ -671,6 +671,61 @@ describe('the popup half of the double-run guard', () => {
     }
   });
 
+  it('keeps saying a clear failed when the recheck finds it still has', async () => {
+    // `reloadRejected` sets `ui.clearFailed = false` unconditionally, on the
+    // stated understanding that its caller sets it again from what it read.
+    // `recheckClear` was the one caller that did not — so six seconds after
+    // correctly reporting a failure it read the same unchanged list and erased
+    // the message, and a user who looked away saw no sign the button had done
+    // nothing. The opposite of what the recheck is for.
+    vi.useFakeTimers();
+    try {
+      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+      installChrome();
+      sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+      await import('../src/popup/popup.js');
+      await vi.advanceTimersByTimeAsync(50);
+
+      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+
+      // Past the recheck. The clear still has not happened, so the message must
+      // still be there.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retires the unreachable-background state on a clear the worker answered', async () => {
+    // The clear path deliberately never calls `applyReply` — `renderRun(null)`
+    // would hide a finished run's results — and in not doing so it never
+    // retired `ui.sendFailed` either. So after a clear that demonstrably
+    // reached the worker, the plan line still read "Could not reach the
+    // extension background" with Run disabled, beside chips that had already
+    // redrawn with the restored counts. A direct reply is stronger proof of
+    // reachability than the broadcast that flag's own docstring accepts.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.reject(new Error('worker is asleep'));
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
+    });
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/codes match|Racing/);
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+  });
+
   it('retires a failed-clear message when the list is read again', async () => {
     // The flag had no reset but a *successful* clear, and "none needed" held
     // only while nothing could refill the list. The worker's bounded wait can

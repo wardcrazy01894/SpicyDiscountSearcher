@@ -615,12 +615,32 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
  */
 const RECHECK_CLEAR_MS = 6_000;
 
-/** Re-read after a clear reported failure, in case it landed late. */
-async function recheckClear(): Promise<void> {
+/**
+ * Re-read after a clear reported failure, in case it landed late.
+ *
+ * Takes the same `before` the click handler judged against and re-judges, which
+ * it has to: `reloadRejected` sets `ui.clearFailed = false` unconditionally, on
+ * the stated understanding that its caller sets it again from what it read.
+ * This was the one caller that did not, so a recheck that found the codes still
+ * refused *erased the message saying so* — a user who looked away saw no
+ * indication the button had done nothing, which is the opposite of what
+ * `RECHECK_CLEAR_MS` is for.
+ */
+async function recheckClear(before: ReadonlySet<string>): Promise<void> {
+  const prior = rejectionSet(ui.rejected);
   const entries = await reloadRejected();
   if (!entries) return;
-  renderVendorChips();
-  renderCompanyList();
+  ui.clearFailed = entries.some((entry) => before.has(rejectionKey(entry.vendor, entry.code)));
+  // Only when the list actually moved. Both renders are a full
+  // `replaceChildren`, and this one fires six seconds after the fact with no
+  // action of the user's — the same reason the RUN_STATE listener gates its
+  // renders rather than rebuilding under whatever they are doing.
+  const after = rejectionSet(entries);
+  const changed = prior.size !== after.size || [...after].some((key) => !prior.has(key));
+  if (changed) {
+    renderVendorChips();
+    renderCompanyList();
+  }
   refreshPlan();
 }
 
@@ -1476,7 +1496,18 @@ rejectedClear.addEventListener('click', () => {
   // in the meantime does not read as a failed clear.
   const before = rejectionSet(ui.rejected);
   void send({ type: 'CLEAR_REJECTED' })
-    .then(() => reloadRejected())
+    .then(async (reply) => {
+      // A reply is proof the background is reachable — stronger proof than the
+      // RUN_STATE broadcast `sendFailed`'s own docstring accepts. This path
+      // deliberately never calls `applyReply`, since `renderRun(null)` would
+      // hide a finished run's results, and in not doing so it also never
+      // retired this flag: after a clear that demonstrably reached the worker,
+      // `refreshPlan` still took its early return and the plan line went on
+      // saying "Could not reach the extension background", with Run disabled,
+      // beside chips that had already redrawn with the restored counts.
+      if (reply) ui.sendFailed = false;
+      return reloadRejected();
+    })
     .then((entries) => {
       // Null means a later read is already authoritative — it has stored its own
       // answer, and judging the clear against a list this one never saw would
@@ -1496,7 +1527,7 @@ rejectedClear.addEventListener('click', () => {
       // codes the store no longer refuses". The timeout path reached that same
       // outcome by a different road, with nothing to correct it but the user
       // pressing the button again.
-      if (ui.clearFailed) setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
+      if (ui.clearFailed) setTimeout(() => void recheckClear(before), RECHECK_CLEAR_MS);
     });
 });
 
