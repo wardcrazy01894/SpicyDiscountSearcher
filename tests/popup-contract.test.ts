@@ -767,6 +767,47 @@ describe('the popup half of the double-run guard', () => {
     );
   });
 
+  it('brings the next stranded rows in when one is unticked', async () => {
+    // The cap on stranded rows is justified by "the next render brings the next
+    // ten" — and nothing rendered on untick, so unticking all ten left them on
+    // screen unchecked while the rest of the selection stayed invisible and
+    // untickable. That is the trap stranded rows exist to avoid, moved from
+    // "more than 60 matches" to "more than 10 stranded".
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 15);
+    expect(marriottOnly.length).toBeGreaterThan(11);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const strandedRows = () =>
+      [...document.querySelectorAll('#company-list label.company')].filter(
+        (row) => row.querySelector('.vendors')?.textContent === 'no code at these vendors',
+      );
+    await vi.waitFor(() => expect(strandedRows().length).toBe(10));
+    const before = strandedRows()
+      .map((row) => row.querySelector('span')?.textContent ?? '')
+      .join('|');
+
+    strandedRows()[0]?.querySelector<HTMLInputElement>('input')?.click();
+
+    // Still ten, and not the same ten: the eleventh has taken the free slot.
+    expect(strandedRows().length).toBe(10);
+    expect(
+      strandedRows()
+        .map((row) => row.querySelector('span')?.textContent ?? '')
+        .join('|'),
+    ).not.toBe(before);
+  });
+
   it('disables "try them again" while the clear is in flight', async () => {
     // The worker's wait on the write chain can hold this reply for the length
     // of its ceiling, and nothing else here says anything is happening — half a
@@ -790,15 +831,20 @@ describe('the popup half of the double-run guard', () => {
 
     const button = () => document.querySelector<HTMLButtonElement>('#rejected-clear')!;
     expect(button().disabled).toBe(false);
+    const label = button().textContent;
     button().click();
     // Synchronously, not when the reply lands — that is the whole window.
     expect(button().disabled).toBe(true);
+    // And says something, because disabling removes the second click but not
+    // the silence that invites it.
+    expect(button().textContent).not.toBe(label);
 
     answer?.();
     await vi.waitFor(() => {
       expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
     });
     expect(sentMessages.filter((m) => m.type === 'CLEAR_REJECTED')).toHaveLength(1);
+    expect(button().textContent).toBe(label);
   });
 
   it('corrects a late clear when the popup is next opened', async () => {

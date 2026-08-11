@@ -993,6 +993,49 @@ describe('remembering a code the vendor refused', () => {
     expect(chromeMock.local.get('rejectedCodes')).toEqual([]);
   });
 
+  it('waits for the previous run’s refusals when a new run starts', async () => {
+    // `beginRun` awaits `cancelRun`, and that wait was hard-coded to one
+    // write's worth — justified by "the user has said they are done with this
+    // run", which is true when they press Cancel and false when they press Run.
+    // With slow storage the previous run's `finishedAt` then published ahead of
+    // its own refusal writes, and the popup's re-read missed them: the race
+    // `pendingWrites` exists to close, on the one path that rationale does not
+    // describe.
+    chromeMock = installChromeMock();
+    chromeMock.delayLocalWrites(4_000);
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    for (let i = 0; i < 2; i += 1) {
+      const tabId = [...chromeMock.tabs.keys()][0];
+      if (tabId === undefined) break;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      // Past the stagger, or the second tab never opens and there is only one
+      // refusal in the test — which is not the state it means to construct.
+      await settle(1_000);
+    }
+
+    // A second Run while both refusal writes are still in flight.
+    const starting = chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    let atReply: unknown;
+    void starting.then(() => {
+      atReply = chromeMock.local.get('rejectedCodes');
+    });
+    await settle(60_000);
+    await starting;
+
+    // Both refusals had landed before the new run was answered.
+    expect(atReply).toHaveLength(2);
+  });
+
   it('waits for a clear that is queued behind a run’s refusals', async () => {
     // Every function in `rejected-codes.ts` returns the *tail* of one shared
     // chain, so the clear hands `settleWrites` a single promise and it budgeted

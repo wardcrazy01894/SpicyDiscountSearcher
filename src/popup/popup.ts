@@ -423,6 +423,9 @@ function renderCompanyList(): void {
     ...shown.map((company) => {
       const row = document.createElement('label');
       row.className = 'company';
+      // Whether this row is only here because it is ticked. Unticking one of
+      // those changes what the list *contains*, not just what is checked.
+      const isStranded = !raceableSlugs.has(company.slug);
 
       const box = document.createElement('input');
       box.type = 'checkbox';
@@ -433,6 +436,16 @@ function renderCompanyList(): void {
         syncSelectionSummary();
         refreshPlan();
         void saveForm();
+        // Only for a stranded row being unticked, and only then. The cap on
+        // those rows is justified by "the next render brings the next ten" —
+        // and nothing here rendered, so unticking all ten left them on screen
+        // unchecked while the rest of the selection stayed invisible and
+        // untickable. That is the trap the stranded rows exist to avoid, moved
+        // from "more than 60 matches" to "more than 10 stranded".
+        //
+        // Every other tick keeps `syncSelectionSummary`, which exists precisely
+        // so the list is not rebuilt under the click that caused it.
+        if (isStranded && !box.checked) renderCompanyList();
       });
 
       const name = document.createElement('span');
@@ -1517,8 +1530,16 @@ rejectedClear.addEventListener('click', () => {
   // every later waiter sizes its own bound from) and overwrites `clearAttempt`,
   // so the first press's answer would be judged against the last press's list.
   rejectedClear.disabled = true;
+  // And say so. Disabling removes the second click but not the silence that
+  // invites it — the worker can hold this reply for the length of its ceiling
+  // while the note beside the button still reads "N codes have been refused",
+  // which is a dead-looking control and no explanation. Same answer Run gives
+  // with "Racing codes…".
+  const label = rejectedClear.textContent;
+  rejectedClear.textContent = 'clearing…';
   const finish = (): void => {
     rejectedClear.disabled = false;
+    rejectedClear.textContent = label;
   };
   void send({ type: 'CLEAR_REJECTED' })
     .then(async (reply) => {

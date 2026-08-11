@@ -1092,7 +1092,12 @@ async function currentState(): Promise<RunState | null> {
   return state;
 }
 
-async function cancelRun(): Promise<void> {
+/**
+ * @param writeLinks how many queued writes the wait below should budget for.
+ *   Defaults to the queue's real depth, which is the safe answer; the user's
+ *   own Cancel passes 1 deliberately (see the wait itself).
+ */
+async function cancelRun(writeLinks = pendingWrites()): Promise<void> {
   const run = active;
   if (!run) return;
   run.cancelled = true;
@@ -1130,15 +1135,18 @@ async function cancelRun(): Promise<void> {
   // `cancelled` and records nothing itself, but a refusal from earlier in the
   // run can still be in flight.
   //
-  // Held to one write's worth rather than scaled by how many, unlike teardown.
-  // The window and tabs are already closed by here, so every second of this is
-  // a second the popup sits on "Racing codes…" after a cancel with nothing
-  // visibly happening — and `beginRun` awaits `cancelRun`, so it is also a
-  // second the next START_RUN goes unanswered with Run disabled. At five
-  // outstanding refusals the scaled bound is 25s of that. The user has said
-  // they are done with this run; ordering the note they may never look at is
-  // worth much less here than it is on the path that announces a result.
-  await settleWrites(run.pendingWrites, 'a cancel', 1);
+  // One write's worth when the *user* cancelled, the queue's real depth
+  // otherwise. The window and tabs are already closed by here, so every second
+  // is a second the popup sits on "Racing codes…" with nothing visibly
+  // happening, and at five outstanding refusals the scaled bound is 25s of it —
+  // worth trading away when the user has said they are done with this run.
+  //
+  // But `beginRun` calls this too, and there the user has cancelled nothing:
+  // they pressed Run. Hard-coding 1 published the previous run's `finishedAt`
+  // ahead of its own refusal writes whenever storage was slow, so the popup's
+  // re-read missed them — the race `pendingWrites` exists to close,
+  // reintroduced on the one path the rationale above does not describe.
+  await settleWrites(run.pendingWrites, 'a cancel', writeLinks);
   await publish();
   // Last, after the closes and the final publish, so teardown itself is still
   // covered by a resident worker.
@@ -1178,7 +1186,9 @@ chrome.runtime.onMessage.addListener(
           return;
         }
         case 'CANCEL_RUN': {
-          await cancelRun();
+          // The user is waiting on this reply and has said they are done, so
+          // the short bound applies here and nowhere else.
+          await cancelRun(1);
           sendResponse({
             type: 'RUN_STATE',
             state: active?.state ?? null,
