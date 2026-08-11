@@ -133,6 +133,18 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  */
 export const WRITE_TIMEOUT_MS = 5_000;
 
+/**
+ * The longest anything will wait for this queue, however deep it is.
+ *
+ * Lives here rather than in the service worker because both sides of the clear
+ * need it: the worker sizes its wait as `WRITE_TIMEOUT_MS x depth` capped by
+ * this, and the popup's single recheck has to outlast whatever the worker
+ * actually waited. With it defined next to the per-write bound, "how long could
+ * the worker have waited" is answerable from one place instead of being guessed
+ * at across a module boundary.
+ */
+export const WRITE_WAIT_CEILING_MS = 30_000;
+
 let writes: Promise<void> = Promise.resolve();
 
 /** Links queued and not yet settled, so a waiter can size its own bound. */

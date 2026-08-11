@@ -663,8 +663,11 @@ describe('the popup half of the double-run guard', () => {
       // Reported failed, correctly — storage really did still hold the code.
       expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
 
-      // The clear lands, and the popup looks again of its own accord.
-      await vi.advanceTimersByTimeAsync(10_000);
+      // The clear lands, and the popup looks again of its own accord. Past the
+      // recheck, which is derived from the worker's *ceiling* rather than its
+      // per-write bound — the worker can legitimately have waited that long
+      // with a run's refusals queued ahead of the clear.
+      await vi.advanceTimersByTimeAsync(40_000);
       expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -751,6 +754,56 @@ describe('the popup half of the double-run guard', () => {
     const note = document.querySelector('#rejected-note')?.textContent ?? '';
     expect(note).toMatch(/1 code has been refused/);
     expect(note).toMatch(/not been cleared yet/);
+  });
+
+  it('does not call a re-refused code a failed clear', async () => {
+    // Re-asking the vendor is the whole point of the button, and the vendor
+    // refusing the same code again is the expected outcome. `clearAttempt` was
+    // never retired, so the next finished run saw that key back in the list and
+    // printed "those codes have not been cleared yet" — about a clear that
+    // demonstrably worked and a refusal that postdates it.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+
+    // A later run asks again and gets the same answer — the same code.
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [{ vendor: 'national', code: '5666666', at: 2 }],
+    });
+    await broadcastFinishedRun();
+
+    const note = document.querySelector('#rejected-note')?.textContent ?? '';
+    expect(note).toMatch(/1 code has been refused/);
+    expect(note).not.toMatch(/not been cleared yet/);
+  });
+
+  it('fixes the Run caption when a clear proves the background is reachable', async () => {
+    // `runBtn.textContent` is written in exactly two places, and this path calls
+    // neither — so clearing `ui.sendFailed` re-enabled the button while it still
+    // read "Reopen the popup to retry", which actually starts a race.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.reject(new Error('worker is asleep'));
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
+    });
+
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+    });
+    expect(document.querySelector('#run-btn')?.textContent).toBe('Find the cheapest code');
   });
 
   it('retires a failed-clear message when the list is read again', async () => {

@@ -4,6 +4,7 @@ import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/m
 import { MAX_CONCURRENCY } from '../core/types.js';
 import {
   WRITE_TIMEOUT_MS,
+  WRITE_WAIT_CEILING_MS,
   clearRejected,
   pendingWrites,
   recordRejected,
@@ -91,16 +92,6 @@ const KEEPALIVE_MS = 20_000;
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
-/**
- * A ceiling on the wait below, however many writes are outstanding.
- *
- * Teardown holds the finished broadcast for the length of this wait, so it is
- * also how long the popup can sit on "Racing codes…" after the last tab has
- * closed. Reached only if storage is pathologically slow *and* the run refused
- * a lot of codes.
- */
-const WRITE_WAIT_CEILING_MS = 30_000;
-
 /**
  * Wait for a settling quote's storage writes, but not forever.
  *
@@ -1172,10 +1163,13 @@ chrome.runtime.onMessage.addListener(
           // this branch's change to make — naming it beats leaving the
           // asymmetry to look like an oversight.
           if (sender.tab) {
-            sendResponse({
-              type: 'RUN_STATE',
-              state: active?.state ?? null,
-            } satisfies StateMessage);
+            // `state: null`, not the run. `RunState.plan.candidates` carries
+            // every discount code in the race and the trip, and a branch added
+            // to deny a page something should not hand it those as the denial.
+            // CANCEL_RUN and GET_STATE leak the same thing and are named above
+            // as equally unguarded; that is an argument for fixing them, not
+            // for repeating it here.
+            sendResponse({ type: 'RUN_STATE', state: null } satisfies StateMessage);
             return;
           }
           // Done here rather than in the popup so it goes through the same

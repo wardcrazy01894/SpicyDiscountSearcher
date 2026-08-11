@@ -1050,9 +1050,15 @@ describe('remembering a code the vendor refused', () => {
     expect(chromeMock.local.get('rejectedCodes')).toHaveLength(1);
 
     // A tab sender is what marks a content script; the popup has none.
-    await chromeMock.fromTab(999, { type: 'CLEAR_REJECTED' });
+    const denied = (await chromeMock.fromTab(999, { type: 'CLEAR_REJECTED' })) as {
+      state: RunState | null;
+    };
     await settle(1_000);
     expect(chromeMock.local.get('rejectedCodes')).toHaveLength(1);
+    // And the refusal does not hand over the run either: `plan.candidates`
+    // carries every discount code in the race and the trip, which a branch that
+    // exists to deny a page something has no business returning as the denial.
+    expect(denied.state).toBeNull();
 
     // The popup's own identical message still works, so this is a check on who
     // is asking rather than the handler being broken.

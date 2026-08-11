@@ -17,7 +17,7 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
-  WRITE_TIMEOUT_MS,
+  WRITE_WAIT_CEILING_MS,
   loadRejected,
   rejectionKey,
   rejectionSet,
@@ -614,44 +614,52 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   ui.clearFailed =
     attempted !== null &&
     entries.some((entry) => attempted.has(rejectionKey(entry.vendor, entry.code)));
+  // Retired the moment a read finds none of them, or the derivation outlives the
+  // question it answers: re-asking a vendor is the whole point of the button,
+  // and a vendor refusing the same code again is the *expected* outcome. Kept,
+  // the next finished run would see that key back in the list and print "those
+  // codes have not been cleared yet" about a clear that demonstrably worked and
+  // a refusal that postdates it.
+  if (attempted !== null && !ui.clearFailed) clearAttempt = null;
   return entries;
 }
 
 /**
  * How long after a clear reports failure to look once more.
  *
- * Derived, not written as its own number: it has to outlast the worker's
- * per-write bound, and there is exactly one recheck — so if that constant grew
- * past this one the single look would happen before a merely-slow write landed,
- * `ui.clearFailed` would stay true with nothing left to correct it, and the
- * popup would go on claiming codes were not cleared when they had been. A bare
- * `6_000` in another module made that invariant unenforceable and the margin
- * invisible.
+ * Derived from the **ceiling**, not from the per-write bound. The first version
+ * of this used `WRITE_TIMEOUT_MS + 1s` and cited "the worker's per-write bound"
+ * — but the worker waits `WRITE_TIMEOUT_MS x depth` capped by the ceiling, so
+ * with a run's refusals queued ahead of the clear it can reply having waited
+ * far longer than one write. The single recheck then fired while the clear was
+ * still queued, `ui.clearFailed` stayed true with nothing left to correct it,
+ * and the popup went on claiming codes were not cleared when they had been —
+ * the exact outcome that comment said could not happen, reached through the
+ * depth scaling instead of through the constant it named.
  *
- * One retry, not a poll: if the clear really did not happen the message is on
- * screen and the button is right there.
+ * Still not a guarantee, and the message is written for that: a chain longer
+ * than the ceiling outlives this too, and "try again in a moment" is what the
+ * user is told. One retry, not a poll — if the clear really did not happen the
+ * message is on screen and the button is right there.
  */
-const RECHECK_CLEAR_MS = WRITE_TIMEOUT_MS + 1_000;
+const RECHECK_CLEAR_MS = WRITE_WAIT_CEILING_MS + 1_000;
 
 /**
  * Re-read after a clear reported failure, in case it landed late.
  *
- * Takes the same `before` the click handler judged against and re-judges, which
- * it has to: `reloadRejected` sets `ui.clearFailed = false` unconditionally, on
- * the stated understanding that its caller sets it again from what it read.
- * This was the one caller that did not, so a recheck that found the codes still
- * refused *erased the message saying so* — a user who looked away saw no
- * indication the button had done nothing, which is the opposite of what
- * `RECHECK_CLEAR_MS` is for.
+ * Judging the flag is `reloadRejected`'s job, not this one's — it derives it
+ * from `clearAttempt` on every read, which is what stopped this function, and
+ * then the RUN_STATE listener, from erasing a warning while every code it named
+ * was still refused. This one only decides how much to redraw.
  */
 async function recheckClear(): Promise<void> {
   const prior = rejectionSet(ui.rejected);
   const entries = await reloadRejected();
   if (!entries) return;
   // Only when the list actually moved. Both renders are a full
-  // `replaceChildren`, and this one fires six seconds after the fact with no
-  // action of the user's — the same reason the RUN_STATE listener gates its
-  // renders rather than rebuilding under whatever they are doing.
+  // `replaceChildren`, and this one fires long after the fact with no action of
+  // the user's — the same reason the RUN_STATE listener gates its renders
+  // rather than rebuilding under whatever they are doing.
   const after = rejectionSet(entries);
   const changed = prior.size !== after.size || [...after].some((key) => !prior.has(key));
   if (changed) {
@@ -1522,7 +1530,14 @@ rejectedClear.addEventListener('click', () => {
       // `refreshPlan` still took its early return and the plan line went on
       // saying "Could not reach the extension background", with Run disabled,
       // beside chips that had already redrawn with the restored counts.
-      if (reply) ui.sendFailed = false;
+      if (reply) {
+        ui.sendFailed = false;
+        // The caption too. It is written in exactly two places — `applyReply`'s
+        // failure branch and `renderRun` — and this path calls neither, so
+        // re-enabling the button left it reading "Reopen the popup to retry"
+        // while being perfectly able to start a race.
+        runBtn.textContent = ui.running ? 'Racing codes…' : 'Find the cheapest code';
+      }
       return reloadRejected();
     })
     .then((entries) => {
