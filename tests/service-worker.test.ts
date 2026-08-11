@@ -822,6 +822,20 @@ describe('remembering a code the vendor refused', () => {
   // a real vendor site and can only ever fail. National refuses several of the
   // contract ids in the workbook.
 
+  /** Run one code at a vendor that refuses it, leaving one entry in storage. */
+  async function recordARefusal(): Promise<void> {
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'code-rejected',
+      message: 'this account number cannot be used online',
+      report: REPORT,
+    });
+    await settle(1_000);
+  }
+
   async function settleWith(failure: string): Promise<void> {
     await bootWorker();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
@@ -885,6 +899,27 @@ describe('remembering a code the vendor refused', () => {
     await clearing;
 
     // Empty, not "empty plus the refusal that was mid-flight".
+    expect(chromeMock.local.get('rejectedCodes')).toEqual([]);
+  });
+
+  it('refuses to clear for a content script', async () => {
+    // The first destructive popup-only message, and this extension runs content
+    // scripts on six vendor hosts. A page there could otherwise wipe the one
+    // piece of state this extension deliberately remembers, and the cost of
+    // losing it is real tabs on real vendor sites re-asking answered questions.
+    await bootWorker();
+    await recordARefusal();
+    expect(chromeMock.local.get('rejectedCodes')).toHaveLength(1);
+
+    // A tab sender is what marks a content script; the popup has none.
+    await chromeMock.fromTab(999, { type: 'CLEAR_REJECTED' });
+    await settle(1_000);
+    expect(chromeMock.local.get('rejectedCodes')).toHaveLength(1);
+
+    // The popup's own identical message still works, so this is a check on who
+    // is asking rather than the handler being broken.
+    await chromeMock.fromPopup({ type: 'CLEAR_REJECTED' });
+    await settle(1_000);
     expect(chromeMock.local.get('rejectedCodes')).toEqual([]);
   });
 

@@ -98,6 +98,14 @@ interface UiState {
    */
   sendFailed: boolean;
   /**
+   * A CLEAR_REJECTED whose send failed, so the reason survives a refreshPlan.
+   *
+   * Not latched like `sendFailed`: a failed clear leaves the run perfectly
+   * runnable, it just means the refused codes are still refused. It clears on
+   * the next successful clear.
+   */
+  clearFailed: boolean;
+  /**
    * Codes a vendor has refused, loaded once at boot.
    *
    * Held in UI state rather than read per keystroke: `refreshPlan` runs on every
@@ -114,6 +122,7 @@ const ui: UiState = {
   running: false,
   pendingStart: false,
   sendFailed: false,
+  clearFailed: false,
   rejected: [],
 };
 
@@ -127,6 +136,8 @@ let booted = false;
 
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
+/** Same reason, for the clear: written once and restored by every refreshPlan. */
+const CLEAR_FAILED_MESSAGE = 'Could not reach the extension background to clear those codes.';
 
 /**
  * The most codes one run may race.
@@ -429,7 +440,30 @@ function vendorBreakdown(candidates: Candidate[]): string {
     .join(' · ');
 }
 
+/**
+ * Describe the plan, then let a failed clear have the last word.
+ *
+ * The message for one used to live only in `planSummary.textContent`, which
+ * every refreshPlan overwrites — so a keystroke in the codes box wiped the only
+ * evidence that "try them again" had not worked, while the refusals went on
+ * being skipped. That is the same bug `ui.sendFailed` exists to close for
+ * START_RUN, one step down in severity: the run is unaffected and Run stays
+ * enabled, so this clears the moment a clear succeeds rather than latching.
+ *
+ * After rather than before, because the plan line is written on several exits
+ * below and a message set first would simply be overwritten by them.
+ */
 function refreshPlan(): void {
+  describePlan();
+  // `sendFailed` outranks it: that one is the state the popup cannot get itself
+  // out of, and it has already disabled Run and said why.
+  if (ui.clearFailed && !ui.sendFailed) {
+    planSummary.textContent = CLEAR_FAILED_MESSAGE;
+    planSummary.classList.add('is-warning');
+  }
+}
+
+function describePlan(): void {
   // Before anything else: this is the state the popup cannot get itself out of,
   // so nothing below should be allowed to describe a plan the user cannot run.
   if (ui.sendFailed) {
@@ -1277,11 +1311,13 @@ rejectedClear.addEventListener('click', () => {
     if (!reply) {
       // A null reply is a failed send, not a completed clear. Saying nothing
       // would leave the note on screen with no explanation for why pressing it
-      // did nothing.
-      planSummary.textContent = 'Could not reach the extension background to clear those codes.';
-      planSummary.classList.add('is-warning');
+      // did nothing — and the message has to be a flag rather than a one-off
+      // write, because every refreshPlan overwrites that line.
+      ui.clearFailed = true;
+      refreshPlan();
       return;
     }
+    ui.clearFailed = false;
     // Re-read rather than assuming empty: the worker is the writer now, so its
     // storage is the answer, and a run settling a refusal in the same moment
     // should not be papered over with a guess.

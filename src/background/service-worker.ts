@@ -110,16 +110,16 @@ const WRITE_WAIT_MS = 5_000;
  * The writes cannot reject — every link in `rejected-codes.ts` swallows its own
  * failure — so only the hanging case needs handling.
  */
-async function settleWrites(writes: Iterable<Promise<void>>): Promise<void> {
+async function settleWrites(
+  writes: Iterable<Promise<void>>,
+  what = 'a run announcement',
+): Promise<void> {
   const pending = [...writes];
   if (pending.length === 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
-      warn(
-        'gave up waiting for a storage write before announcing the run',
-        `still pending after ${WRITE_WAIT_MS}ms`,
-      );
+      warn(`gave up waiting for a storage write before ${what}`, `pending past ${WRITE_WAIT_MS}ms`);
       resolve();
     }, WRITE_WAIT_MS);
   });
@@ -1100,11 +1100,32 @@ chrome.runtime.onMessage.addListener(
           return;
         }
         case 'CLEAR_REJECTED': {
+          // A popup message, and the first destructive one, so it checks who is
+          // asking. `sender.tab` is set only for a content script, and this
+          // extension runs content scripts on six vendor hosts — a page there
+          // could otherwise wipe the one piece of state this extension
+          // deliberately remembers, and the cost of losing it is real tabs on
+          // real vendor sites re-asking questions already answered.
+          //
+          // Deliberately only here. START_RUN and CANCEL_RUN are equally
+          // unguarded and equally reachable, which is worth fixing and is not
+          // this branch's change to make — naming it beats leaving the
+          // asymmetry to look like an oversight.
+          if (sender.tab) {
+            sendResponse({
+              type: 'RUN_STATE',
+              state: active?.state ?? null,
+            } satisfies StateMessage);
+            return;
+          }
           // Done here rather than in the popup so it goes through the same
           // write queue as `recordRejected` — see the message's own comment.
-          // The reply carries the run state like every other reply, so the
-          // popup's `applyReply` needs no special case.
-          await clearRejected(chrome.storage.local);
+          // Bounded for the same reason teardown's wait is: this now queues
+          // behind every in-flight refusal write, so a `chrome.storage` call
+          // that never returns would leave `sendResponse` uncalled, and the
+          // popup's own failed-send branch cannot fire on a reply that never
+          // comes — the button would just look dead.
+          await settleWrites([clearRejected(chrome.storage.local)], 'a clear');
           sendResponse({ type: 'RUN_STATE', state: active?.state ?? null } satisfies StateMessage);
           return;
         }

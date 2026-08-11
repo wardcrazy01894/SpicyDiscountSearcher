@@ -407,6 +407,24 @@ describe('the popup half of the double-run guard', () => {
     });
     // And the note stays, because the codes really are still refused.
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+
+    // The half that matters, and the half a one-off `textContent` write misses:
+    // every refreshPlan trigger overwrites that line, so a single keystroke in
+    // the codes box wiped the only evidence the clear had failed while the
+    // refusals went on being skipped. Same gap `ui.sendFailed` closes for
+    // START_RUN.
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
+    maxCodes.value = '30';
+    maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+
+    // And it goes away when a clear actually works, rather than latching.
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
+    });
   });
 
   it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
