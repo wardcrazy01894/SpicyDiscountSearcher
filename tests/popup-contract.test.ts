@@ -52,9 +52,28 @@ const SELECTORS = [
 let sentMessages: Array<{ type: string }> = [];
 /** The popup's RUN_STATE listener, so the background can push to it. */
 let broadcastListeners: Array<(message: unknown) => void> = [];
+/**
+ * A background that answers the way the real one does.
+ *
+ * `CLEAR_REJECTED` has to actually clear, because the popup no longer writes
+ * that key itself — it asks the worker to, so both writers share one realm and
+ * one write queue. A stub that only replied would leave the popup re-reading a
+ * list nothing had emptied.
+ */
+function fakeBackground(message: { type: string }): Promise<unknown> {
+  if (message.type === 'CLEAR_REJECTED') {
+    const { local } = (
+      globalThis as {
+        chrome: { storage: { local: { set: (items: Record<string, unknown>) => Promise<void> } } };
+      }
+    ).chrome.storage;
+    return local.set({ rejectedCodes: [] }).then(() => ({ type: 'RUN_STATE', state: null }));
+  }
+  return Promise.resolve({ type: 'RUN_STATE', state: null });
+}
+
 /** Swapped by a test to make START_RUN reject the way a dead worker does. */
-let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
-  Promise.resolve({ type: 'RUN_STATE', state: null });
+let sendMessageImpl: (message: { type: string }) => Promise<unknown> = fakeBackground;
 
 /** Seeded into chrome.storage.local before the popup boots. */
 let savedForm: Record<string, unknown> | null = null;
@@ -118,7 +137,7 @@ beforeEach(() => {
   savedRejected = null;
   getDelayMs = 0;
   slowReadsLeft = 0;
-  sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+  sendMessageImpl = fakeBackground;
   installChrome();
   document.body.innerHTML = BODY;
 });
@@ -233,7 +252,7 @@ describe('the popup half of the double-run guard', () => {
     // number matters because nothing ranks the codes — `interleaveByVendor`
     // makes truncation *fair*, not *good*, so whatever the cap cuts is cut
     // arbitrarily.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
@@ -277,7 +296,7 @@ describe('the popup half of the double-run guard', () => {
     }));
     savedForm = { category: 'car', vendors: ['national'], companies: [] };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const chip = [...document.querySelectorAll('#vendor-chips .chip')].find((el) =>
@@ -302,7 +321,7 @@ describe('the popup half of the double-run guard', () => {
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     savedForm = { category: 'car', vendors: ['national'], companies: [] };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const count = () =>
@@ -323,7 +342,7 @@ describe('the popup half of the double-run guard', () => {
       { vendor: 'national', code: 'XZ15J55', at: 1 },
     ];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const summary = () => document.querySelector('#plan-summary')?.textContent ?? '';
@@ -340,7 +359,7 @@ describe('the popup half of the double-run guard', () => {
     // a permanent, invisible edit to the user's own code list.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     await vi.waitFor(() =>
       expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/),
@@ -354,12 +373,48 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
   });
 
+  it('asks the background to clear rather than writing storage itself', async () => {
+    // The popup and the service worker are different realms with their own
+    // module state, so the write queue in `rejected-codes.ts` cannot order a
+    // clear written from this side against a `recordRejected` the worker
+    // already has in flight: the clear lands between that record's read and its
+    // write and is undone by it, and every refusal the user asked to forget
+    // comes back. Invisibly, because this side has already emptied its own copy
+    // — it only shows on the next open.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(sentMessages.map((message) => message.type)).toContain('CLEAR_REJECTED');
+    });
+  });
+
+  it('says so when the background cannot be reached to clear', async () => {
+    // A failed send is not a completed clear. Silently emptying the list here
+    // would show the codes restored while storage still holds every one of
+    // them, and the next open would put them back with no explanation.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+    // And the note stays, because the codes really are still refused.
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+  });
+
   it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
     // The popup usually stays open across a run. Loaded once at boot,
     // `ui.rejected` would still be empty afterwards and pressing Run again
     // would re-race codes the vendor refused a moment ago — a real tab spent
     // rediscovering a refusal, which is the one thing this feature avoids.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
 
@@ -389,7 +444,7 @@ describe('the popup half of the double-run guard', () => {
       companies: ['ibm'],
     };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     await vi.waitFor(() => {
@@ -412,7 +467,7 @@ describe('the popup half of the double-run guard', () => {
     expect(savedRejected.length).toBeGreaterThan(0);
     savedForm = { category: 'car', vendors: ['national'], companies: [] };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const empty = () => document.querySelector('#company-list .empty:not(.selection)')?.textContent;
@@ -429,7 +484,7 @@ describe('the popup half of the double-run guard', () => {
     // message that names the control it is about.
     savedForm = { category: 'car', vendors: [], companies: [] };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     // Nothing selected in storage means the popup fills it in, so untick by
@@ -456,7 +511,7 @@ describe('the popup half of the double-run guard', () => {
     // just made and leaving `ui.vendors` disagreeing with the saved form.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const boxes = () => [...document.querySelectorAll<HTMLInputElement>('#vendor-chips input')];
@@ -478,7 +533,7 @@ describe('the popup half of the double-run guard', () => {
     // asynchronously with whatever the user is doing: rebuilding the list under
     // someone mid-click resets their scroll and drops their focus. Most runs
     // refuse nothing, so the rebuild is gated on the news actually changing.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const row = () => document.querySelector('#company-list label');
@@ -508,7 +563,7 @@ describe('the popup half of the double-run guard', () => {
     // applies — and the chip handler never redrew it. Unticking Avis and Hertz
     // to leave only National is this PR's own motivating scenario, and it left
     // every Avis and Hertz row on screen with its old labels.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const labels = () =>
@@ -537,7 +592,7 @@ describe('the popup half of the double-run guard', () => {
       { vendor: 'national', code: 'XZ15J55', at: 1 },
     ];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const count = () =>
@@ -579,7 +634,7 @@ describe('the popup half of the double-run guard', () => {
     getDelayMs = 600;
     slowReadsLeft = 1;
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
 
     const started = import('../src/popup/popup.js');
     await vi.waitFor(() => expect(broadcastListeners.length).toBeGreaterThan(0));
@@ -615,7 +670,7 @@ describe('the popup half of the double-run guard', () => {
     // were the previous half-fix's own fault: correcting the *filter* let those
     // companies into the list while this line still asked the old question, so
     // they matched and had nothing to show. The ids were raw, too.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const rows = [...document.querySelectorAll('#company-list .company')];
@@ -650,7 +705,7 @@ describe('the popup half of the double-run guard', () => {
     // Re-installed: beforeEach built the fake storage before this test could
     // seed it, so the popup would have booted against an empty store.
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     // Read the `.vendors` span rather than the whole row: company *names*
@@ -677,7 +732,7 @@ describe('the popup half of the double-run guard', () => {
     // cannot reach a search, whose home pages answer with a "from $19/day" that
     // wins. Rejecting here is the difference between no answer and a
     // confidently wrong one, so it has to happen before START_RUN is sent.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     const set = (name: string, value: string): void => {
       const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
@@ -705,7 +760,7 @@ describe('the popup half of the double-run guard', () => {
         return Promise.resolve({ id: 1 });
       },
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
 
@@ -734,7 +789,7 @@ describe('the popup half of the double-run guard', () => {
     (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
       create: () => Promise.reject(new Error('no window')),
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
     await Promise.resolve();
@@ -751,7 +806,7 @@ describe('the popup half of the double-run guard', () => {
         return Promise.resolve({ id: 1 });
       },
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
 
@@ -772,7 +827,7 @@ describe('the popup half of the double-run guard', () => {
     (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
       create: () => Promise.reject(new Error('no window')),
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
     await Promise.resolve();
@@ -786,7 +841,7 @@ describe('the popup half of the double-run guard', () => {
     // Chrome emits hh:mm — but adding one makes Chrome emit hh:mm:ss, which
     // both verified builders reject. Without this the failure is two
     // `link-build`s and a race decided by a vendor that reaches no search.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const time = document.querySelector<HTMLInputElement>('[name="pickupTime"]');
@@ -801,7 +856,7 @@ describe('the popup half of the double-run guard', () => {
     // One-way is refused in the builders because Avis's return-location
     // parameter proved unreliable; catching it here means the user is told,
     // rather than every car quote failing as link-build.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
@@ -815,7 +870,7 @@ describe('the popup half of the double-run guard', () => {
   it('accepts a lowercase code and a drop-off equal to the pick-up', async () => {
     // The guard must not be so strict that it rejects the same airport spelled
     // differently — that would refuse a perfectly ordinary round trip.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const pickup = document.querySelector<HTMLInputElement>('[name="pickupLocation"]');
@@ -829,7 +884,7 @@ describe('the popup half of the double-run guard', () => {
 
   /** Push a finished run into the popup and return the caveat line's text. */
   async function caveatFor(quotes: unknown[]): Promise<string> {
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     expect(broadcastListeners.length).toBeGreaterThan(0);
     for (const listen of broadcastListeners) {

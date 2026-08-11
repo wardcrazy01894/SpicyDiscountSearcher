@@ -386,19 +386,26 @@ describe('surviving MV3 suspension', () => {
     // value can ever be inherited.
   });
 
-  it('stays resident while teardown waits on storage', async () => {
-    // Teardown stamps `finishedAt` in memory, then awaits — closing the window,
-    // waiting on a refusal write, and only then persisting and broadcasting. It
-    // used to stop the keepalive before all of that. A reclaim in the gap loses
-    // the finished snapshot and the popup falls back to `reapInterrupted`,
-    // reporting a completed race as interrupted. `cancelRun` has always stopped
-    // last for this reason; the two paths simply disagreed, and awaiting a
-    // storage write between them is what made the gap wide enough to matter.
+  it('gives up on a storage write rather than leaving the run unannounced', async () => {
+    // Teardown waits for a settling quote's refusal write so the finished
+    // broadcast cannot outrun it. Waiting *unboundedly* buys a worse failure
+    // than it fixes: nothing else settles that promise, so a `chrome.storage`
+    // call that never returns leaves the run unannounced with its window
+    // already closed — the popup on "Racing codes…" — and, because `beginRun`
+    // awaits `cancelRun`, the next START_RUN never replies either, latching
+    // `pendingStart` and killing the Run button until the popup is reopened.
+    //
+    // Scope note, because the obvious stronger assertion is not available.
+    // `stopKeepAlive` moved below `publish` in the same change, so the worker
+    // stays resident across this wait — but the wait is now bounded at 5s,
+    // which is under one KEEPALIVE_MS period, so no poke can fall inside it and
+    // poke-counting cannot see the difference. An earlier version of this test
+    // asserted exactly that and only passed because the bound did not exist
+    // yet. The ordering is left pinned by `cancelRun`'s own tests and by
+    // review, not claimed here.
     await bootWorker();
-    // Longer than a keepalive period, so a poke inside the wait is observable
-    // at all — at 2s the worker could be stopped throughout and nothing would
-    // show, which is how this test would have measured nothing.
-    chromeMock.delayLocalWrites(MAX_GAP_MS + 20_000);
+    // Far longer than the bound, so the run can only be announced by giving up.
+    chromeMock.delayLocalWrites(10 * 60_000);
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
     await settle();
 
@@ -418,18 +425,24 @@ describe('surviving MV3 suspension', () => {
         (message) => (message as { state?: { finishedAt?: number } }).state?.finishedAt,
       ).length;
 
-    // Inside the wait: nothing announced yet, and the worker is still poked.
-    const duringWait = chromeMock.keepAlivePings();
-    await settle(MAX_GAP_MS + 5_000);
+    // Still inside the bound: the ordering is still being honoured.
+    await settle(3_000);
     expect(announced()).toBe(0);
-    expect(chromeMock.keepAlivePings()).toBeGreaterThan(duringWait);
 
-    // Then the write lands, the run publishes, and the poking stops.
-    await settle(60_000);
+    // Past it: announced anyway, with the write still outstanding.
+    await settle(5_000);
     expect(announced()).toBeGreaterThan(0);
-    const afterFinish = chromeMock.keepAlivePings();
-    await settle(MAX_GAP_MS + 5_000);
-    expect(chromeMock.keepAlivePings()).toBe(afterFinish);
+    expect(chromeMock.local.get('rejectedCodes')).toBeUndefined();
+
+    // And the next run can still start, which is the half a user would notice:
+    // `beginRun` awaits `cancelRun`, which waits on the same hung write, so an
+    // unbounded wait leaves this reply outstanding and the Run button dead.
+    // Not awaited directly — the bound is a timer, and on a fake clock nothing
+    // fires it unless the test advances time while the reply is in flight.
+    const starting = chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle(10_000);
+    const reply = (await starting) as { state: RunState | null };
+    expect(reply.state).not.toBeNull();
   });
 
   it('stops poking after cancelling a run that never tore itself down', async () => {
@@ -842,6 +855,37 @@ describe('remembering a code the vendor refused', () => {
   it('does not record an ordinary failure', async () => {
     await settleWith('probe-empty');
     expect(chromeMock.local.get('rejectedCodes')).toBeUndefined();
+  });
+
+  it('clears on the popup’s behalf, on the same queue as its own writes', async () => {
+    // Why the popup does not just write the key itself. It is a different realm
+    // with its own copy of `rejected-codes.ts`, so its `writes` chain is not
+    // this one and nothing can order a clear against a `recordRejected` already
+    // holding a read. Here they are the same queue, so the clear lands after the
+    // record rather than under it — and a clear asked for while a run is
+    // settling refusals is exactly when a user presses it.
+    chromeMock = installChromeMock();
+    chromeMock.delayLocalWrites(50);
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    // The refusal write starts here and is still in flight.
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'code-rejected',
+      message: 'this account number cannot be used online',
+      report: REPORT,
+    });
+    const clearing = chromeMock.fromPopup({ type: 'CLEAR_REJECTED' });
+    await settle(1_000);
+    await clearing;
+
+    // Empty, not "empty plus the refusal that was mid-flight".
+    expect(chromeMock.local.get('rejectedCodes')).toEqual([]);
   });
 
   it('lands the write before it announces the run finished', async () => {

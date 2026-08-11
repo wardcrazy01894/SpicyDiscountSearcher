@@ -90,10 +90,21 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  * to prevent — a refused code silently kept in the plan and raced again next
  * run, now with a chip counting it.
  *
- * Module-level rather than per-store because there is one
- * `chrome.storage.local` behind every caller; a per-store queue would serialise
- * against the wrong thing. The chain never rejects — every link swallows its own
- * failure — so it cannot wedge.
+ * Module-level rather than per-store: the store argument exists so tests can
+ * pass a fake, but production has one `chrome.storage.local`, and a per-store
+ * queue would serialise against the wrong thing.
+ *
+ * **It orders one realm, and that is the whole reason `CLEAR_REJECTED` is a
+ * message.** The popup and the service worker each get their own instance of
+ * this module, so `writes` would be two independent chains and nothing here
+ * could order a popup's clear against a worker's in-flight record — the clear
+ * lands between that record's read and its write, the write puts every cleared
+ * refusal back, and the popup looks correct until it is next opened. Routing the
+ * clear through the worker makes both writers the same realm, which is what
+ * makes this queue the whole story rather than half of it.
+ *
+ * The chain never rejects — every link swallows its own failure — so it cannot
+ * wedge.
  */
 let writes: Promise<void> = Promise.resolve();
 

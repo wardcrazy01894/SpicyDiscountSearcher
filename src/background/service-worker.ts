@@ -2,7 +2,7 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
-import { recordRejected } from '../core/rejected-codes.js';
+import { clearRejected, recordRejected } from '../core/rejected-codes.js';
 import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
@@ -86,6 +86,52 @@ const KEEPALIVE_MS = 20_000;
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
+/**
+ * How long teardown will wait for a settling quote's storage write.
+ *
+ * The wait exists so the finished broadcast cannot outrun a refusal the popup
+ * is about to re-read. Waiting *unboundedly* for it buys a worse failure than
+ * the one it fixes: nothing else settles that promise, so a `chrome.storage`
+ * call that never returns leaves the run unannounced with its window already
+ * closed — the popup stuck on "Racing codes…" — and, because `beginRun` awaits
+ * `cancelRun`, the next START_RUN never replies either, latching `pendingStart`
+ * and killing the Run button until the popup is reopened.
+ *
+ * Comfortably longer than a storage round trip and far shorter than the
+ * keepalive's inactivity ceiling, which is not extended while teardown waits.
+ * Timing out only loses the ordering, which costs a redraw the user can force
+ * by reopening the popup — the write itself is still queued and still lands.
+ */
+const WRITE_WAIT_MS = 5_000;
+
+/**
+ * Wait for `writes`, but never longer than `WRITE_WAIT_MS`.
+ *
+ * The writes cannot reject — every link in `rejected-codes.ts` swallows its own
+ * failure — so only the hanging case needs handling.
+ */
+async function settleWrites(writes: Iterable<Promise<void>>): Promise<void> {
+  const pending = [...writes];
+  if (pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      warn(
+        'gave up waiting for a storage write before announcing the run',
+        `still pending after ${WRITE_WAIT_MS}ms`,
+      );
+      resolve();
+    }, WRITE_WAIT_MS);
+  });
+  try {
+    await Promise.race([Promise.all(pending).then(() => undefined), bound]);
+  } finally {
+    // Or the worker is held up for the length of the bound on every healthy
+    // run, which is the sort of thing that makes a timeout worse than no
+    // timeout.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 interface ActiveRun {
   state: RunState;
@@ -936,8 +982,9 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
         run.state.finishedAt = Date.now();
         await closeWindow(run);
         // Before the broadcast, because the broadcast is what tells the popup
-        // to re-read the refusal list. These cannot reject.
-        await Promise.all([...run.pendingWrites]);
+        // to re-read the refusal list. Bounded, so a storage call that never
+        // returns cannot hold the run unannounced.
+        await settleWrites(run.pendingWrites);
         await publish();
         // Last, after the closes and the final publish, so teardown itself is
         // still covered by a resident worker — the same ordering `cancelRun`
@@ -1005,7 +1052,7 @@ async function cancelRun(): Promise<void> {
   // what sends the popup back to storage. A cancel settles every quote as
   // `cancelled` and records nothing itself, but a refusal from earlier in the
   // run can still be in flight.
-  await Promise.all([...run.pendingWrites]);
+  await settleWrites(run.pendingWrites);
   await publish();
   // Last, after the closes and the final publish, so teardown itself is still
   // covered by a resident worker.
@@ -1050,6 +1097,15 @@ chrome.runtime.onMessage.addListener(
             type: 'RUN_STATE',
             state: active?.state ?? null,
           } satisfies StateMessage);
+          return;
+        }
+        case 'CLEAR_REJECTED': {
+          // Done here rather than in the popup so it goes through the same
+          // write queue as `recordRejected` — see the message's own comment.
+          // The reply carries the run state like every other reply, so the
+          // popup's `applyReply` needs no special case.
+          await clearRejected(chrome.storage.local);
+          sendResponse({ type: 'RUN_STATE', state: active?.state ?? null } satisfies StateMessage);
           return;
         }
         case 'GET_STATE': {

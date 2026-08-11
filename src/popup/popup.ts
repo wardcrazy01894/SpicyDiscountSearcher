@@ -17,7 +17,6 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
-  clearRejected,
   loadRejected,
   rejectionKey,
   rejectionSet,
@@ -1269,13 +1268,31 @@ rejectedClear.addEventListener('click', () => {
   // Forgets every refusal rather than offering a per-code list. The whole point
   // is to re-ask the vendor, and the vendors are the authority — a picker over
   // remembered answers would be a UI for second-guessing a cache.
-  void clearRejected(chrome.storage.local).then(() => {
-    ui.rejected = [];
-    // Chips and the company list carry the count too, so `refreshPlan` alone
-    // would leave them showing the reduced numbers after putting the codes back.
-    renderVendorChips();
-    renderCompanyList();
-    refreshPlan();
+  //
+  // Asked of the background rather than written here, because the popup and the
+  // worker are separate realms: a clear written from this side can land between
+  // an in-flight `recordRejected`'s read and its write, and be undone by it.
+  // See CLEAR_REJECTED in `messages.ts`.
+  void send({ type: 'CLEAR_REJECTED' }).then((reply) => {
+    if (!reply) {
+      // A null reply is a failed send, not a completed clear. Saying nothing
+      // would leave the note on screen with no explanation for why pressing it
+      // did nothing.
+      planSummary.textContent = 'Could not reach the extension background to clear those codes.';
+      planSummary.classList.add('is-warning');
+      return;
+    }
+    // Re-read rather than assuming empty: the worker is the writer now, so its
+    // storage is the answer, and a run settling a refusal in the same moment
+    // should not be papered over with a guess.
+    void loadRejected(chrome.storage.local).then((entries) => {
+      ui.rejected = entries;
+      // Chips and the company list carry the count too, so `refreshPlan` alone
+      // would leave them showing the reduced numbers after putting the codes back.
+      renderVendorChips();
+      renderCompanyList();
+      refreshPlan();
+    });
   });
 });
 
@@ -1348,7 +1365,13 @@ async function main(): Promise<void> {
   maxCodesInput.max = String(MAX_CODES);
 
   // Before restoreForm, so the first refreshPlan already knows what to skip.
-  ui.rejected = await loadRejected(chrome.storage.local);
+  const atBoot = await loadRejected(chrome.storage.local);
+  // Not unconditional. The RUN_STATE listener is live before this resolves and
+  // does its own read — one issued *after* a refusal write landed, where this
+  // one was issued before — so assigning over it would replace the fresher list
+  // with the staler one and boot counting a code the vendor had just refused.
+  // Nothing would correct it, since that broadcast has already been and gone.
+  if (ui.rejected.length === 0) ui.rejected = atBoot;
   await restoreForm();
   setCategory(ui.category);
   booted = true;
