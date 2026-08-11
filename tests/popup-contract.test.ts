@@ -43,6 +43,9 @@ const SELECTORS = [
   '#quotes',
   '#avis-captcha-btn',
   '#budget-captcha-btn',
+  '#rejected-note',
+  '#rejected-count',
+  '#rejected-clear',
 ];
 
 /** Every message the popup sent, so a double submit is countable. */
@@ -55,11 +58,14 @@ let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
 
 /** Seeded into chrome.storage.local before the popup boots. */
 let savedForm: Record<string, unknown> | null = null;
+/** Codes a vendor has already refused, as the background would have stored them. */
+let savedRejected: Array<{ vendor: string; code: string; at: number }> | null = null;
 
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
   if (savedForm) local.set('popupForm', savedForm);
+  if (savedRejected) local.set('rejectedCodes', savedRejected);
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
@@ -88,6 +94,7 @@ beforeEach(() => {
   sentMessages = [];
   broadcastListeners = [];
   savedForm = null;
+  savedRejected = null;
   sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
@@ -202,6 +209,45 @@ describe('the popup half of the double-run guard', () => {
     const raced = Number(/racing (\d+) of them/.exec(summary)?.[1] ?? '0');
     // Well past the car total, so this can only be satisfied by the clamp.
     expect(raced).toBe(100);
+  });
+
+  it('stops racing a code the vendor has refused, and says it is doing so', async () => {
+    // Racing a refused code costs a real tab on a real vendor site and can only
+    // fail. National refuses several of the contract ids in the workbook.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: 'XZ15J55', at: 1 },
+    ];
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const summary = () => document.querySelector('#plan-summary')?.textContent ?? '';
+    await vi.waitFor(() => expect(summary()).toMatch(/Racing|codes match/));
+    // Named, not silent: a code that vanishes with no explanation is
+    // indistinguishable from one the database never had.
+    expect(summary()).toMatch(/2 refused codes are being skipped/);
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/2 codes have been/);
+  });
+
+  it('puts refused codes back when asked to try them again', async () => {
+    // The undo half. A cache of somebody else's answer that cannot be dropped is
+    // a permanent, invisible edit to the user's own code list.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    await vi.waitFor(() =>
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/),
+    );
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/refused/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
   });
 
   it('labels a company with a vendor it only reaches through alsoTryAs', async () => {

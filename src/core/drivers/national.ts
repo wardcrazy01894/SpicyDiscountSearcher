@@ -775,7 +775,11 @@ export async function verifyResults(ctx: DriveContext): Promise<void> {
     if (accountNamed(ctx.doc)) return;
     if (ctx.now() >= graceEnds) {
       throw new DriverError(
-        'code-rejected',
+        // Not `code-rejected`: the vendor said nothing: we simply found no
+        // evidence the discount landed. That is equally consistent with the
+        // code being silently ignored and with this check having rotted, and
+        // only the vendor's own refusal is durable enough to remember.
+        'discount-missing',
         'results came back with no corporate account applied, so these are retail rates',
       );
     }

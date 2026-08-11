@@ -28,7 +28,10 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * one of these there is a compile error here instead of a drift the tests would
  * not catch.
  */
-export type DriverFailure = Extract<QuoteFailure, 'form-fill' | 'form-submit' | 'code-rejected'>;
+export type DriverFailure = Extract<
+  QuoteFailure,
+  'form-fill' | 'form-submit' | 'code-rejected' | 'discount-missing'
+>;
 
 /**
  * A failure with a code attached, so the probe can report *which* end broke.

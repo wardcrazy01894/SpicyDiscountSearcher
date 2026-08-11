@@ -154,6 +154,15 @@
           </button>
           — run one search there; complete the verification if it appears.
         </p>
+
+        <!-- A refused code is remembered so it stops taking a lane, but the
+             list is a cache of somebody else's answer and has to be visible and
+             undoable — a code that silently stops appearing is
+             indistinguishable from one the database never had. -->
+        <p class="hint" id="rejected-note" hidden>
+          <span id="rejected-count"></span>
+          <button type="button" class="linklike" id="rejected-clear">try them again</button>
+        </p>
       </form>
 
       <section class="results" id="results" hidden>

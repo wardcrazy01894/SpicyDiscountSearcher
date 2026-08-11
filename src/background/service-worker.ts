@@ -2,6 +2,7 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
+import { recordRejected } from '../core/rejected-codes.js';
 import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
@@ -228,6 +229,16 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // Remember only what the vendor itself said. `discount-missing` is our own
+  // inference and is deliberately not recorded — see `rejected-codes.ts`.
+  if (quote.failure === 'code-rejected') {
+    void recordRejected(
+      chrome.storage.local,
+      quote.candidate.vendor,
+      quote.candidate.code,
+      Date.now(),
+    ).catch((error: unknown) => warn('could not remember a refused code', error));
+  }
   // A settled quote is progress, and the keepalive ceiling measures the absence
   // of it rather than elapsed time. Without this, a race longer than the
   // ceiling loses its keepalive part-way through and its remaining quotes come
@@ -364,6 +375,7 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
   'form-fill',
   'form-submit',
   'code-rejected',
+  'discount-missing',
 ]);
 
 /**

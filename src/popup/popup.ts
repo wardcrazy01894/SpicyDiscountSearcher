@@ -16,6 +16,13 @@ import {
   unrankedQuotes,
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
+import {
+  clearRejected,
+  loadRejected,
+  rejectionKey,
+  rejectionSet,
+  type RejectedCode,
+} from '../core/rejected-codes.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
@@ -57,6 +64,9 @@ const savingsBox = el<HTMLElement>('#savings');
 const quotesList = el<HTMLOListElement>('#quotes');
 const avisCaptchaBtn = el<HTMLButtonElement>('#avis-captcha-btn');
 const budgetCaptchaBtn = el<HTMLButtonElement>('#budget-captcha-btn');
+const rejectedNote = el<HTMLElement>('#rejected-note');
+const rejectedCount = el<HTMLElement>('#rejected-count');
+const rejectedClear = el<HTMLButtonElement>('#rejected-clear');
 
 interface UiState {
   category: Category;
@@ -88,6 +98,14 @@ interface UiState {
    * Sticky, so refreshPlan can put the message back instead of over it.
    */
   sendFailed: boolean;
+  /**
+   * Codes a vendor has refused, loaded once at boot.
+   *
+   * Held in UI state rather than read per keystroke: `refreshPlan` runs on every
+   * chip, checkbox and keypress, and a storage read on each would be a lot of
+   * async for a list that only changes when a run settles.
+   */
+  rejected: RejectedCode[];
 }
 
 const ui: UiState = {
@@ -97,6 +115,7 @@ const ui: UiState = {
   running: false,
   pendingStart: false,
   sendFailed: false,
+  rejected: [],
 };
 
 /** Kept in one place because refreshPlan and applyReply both write it. */
@@ -296,20 +315,24 @@ function renderCompanyList(): void {
   }
 }
 
-function plannedCandidates(): { all: Candidate[]; capped: Candidate[] } {
+function plannedCandidates(): { all: Candidate[]; capped: Candidate[]; skipped: number } {
   // Clamped both ends. The `max` attribute is a hint the browser enforces only
   // on submit, and `.value` still reports whatever was typed — so without this
   // a hand-edited 5000 would race every candidate there is.
   const max = Math.min(MAX_CODES, Math.max(1, Number(maxCodesInput.value) || 1));
   // Interleaved before the cap, so the codes we actually race are spread across
   // the selected vendors instead of being one vendor's alphabetical prefix.
-  const all = interleaveByVendor(
-    buildCandidates({
-      vendors: [...ui.vendors],
-      companySlugs: [...ui.companies],
-    }),
-  );
-  return { all, capped: all.slice(0, max) };
+  const refused = rejectionSet(ui.rejected);
+  const proposed = buildCandidates({
+    vendors: [...ui.vendors],
+    companySlugs: [...ui.companies],
+  });
+  // Dropped before the interleave and the cap, so a refused code does not take
+  // a slot from one that could be priced. Racing it can only ever fail, and it
+  // costs a real tab on a real vendor site to find that out again.
+  const usable = proposed.filter((c) => !refused.has(rejectionKey(c.vendor, c.code)));
+  const all = interleaveByVendor(usable);
+  return { all, capped: all.slice(0, max), skipped: proposed.length - usable.length };
 }
 
 /** "Hertz 4 · Avis 4 · Budget 4" — what the cap actually chose. */
@@ -335,10 +358,19 @@ function refreshPlan(): void {
     runBtn.disabled = true;
     return;
   }
-  const { all, capped } = plannedCandidates();
+  const { all, capped, skipped } = plannedCandidates();
   const scope = ui.companies.size ? `${ui.companies.size} selected companies` : 'every company';
+  // Named rather than silent. A code that vanishes from the plan with no
+  // explanation is indistinguishable from one the database never had, and this
+  // list is a cache of somebody else's answer — the user has to be able to see
+  // it and undo it.
+  const refusedNote = skipped
+    ? ` ${skipped} refused ${skipped === 1 ? 'code is' : 'codes are'} being skipped.`
+    : '';
   if (all.length === 0) {
-    planSummary.textContent = 'No codes match this selection.';
+    planSummary.textContent = skipped
+      ? `No codes left to race — all ${skipped} were refused by the vendor.`
+      : 'No codes match this selection.';
     planSummary.classList.add('is-warning');
     runBtn.disabled = true;
     return;
@@ -351,10 +383,22 @@ function refreshPlan(): void {
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
-  planSummary.textContent = truncated
-    ? `${all.length} codes match ${scope} — racing ${capped.length} of them (${vendorBreakdown(capped)}). Narrow the list or raise the cap to try more.`
-    : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope} (${vendorBreakdown(capped)}).`;
+  planSummary.textContent =
+    (truncated
+      ? `${all.length} codes match ${scope} — racing ${capped.length} of them (${vendorBreakdown(capped)}). Narrow the list or raise the cap to try more.`
+      : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope} (${vendorBreakdown(capped)}).`) +
+    refusedNote;
   planSummary.classList.toggle('is-warning', truncated);
+  renderRejectedNote();
+}
+
+/** The standing list, separate from this plan's skip count. */
+function renderRejectedNote(): void {
+  const total = ui.rejected.length;
+  rejectedNote.hidden = total === 0;
+  rejectedCount.textContent = total
+    ? `${total} ${total === 1 ? 'code has' : 'codes have'} been refused by a vendor and are no longer raced — `
+    : '';
 }
 
 function readTrip(): Trip {
@@ -522,6 +566,9 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   // The vendor's own verdict on the code, not a fault in the run — so it says
   // what happened to the code rather than what failed to happen to the page.
   'code-rejected': 'the vendor refused this code',
+  // Not "refused": nothing refused it. The search ran and the discount was not
+  // on the answer, which is a different thing and a less certain one.
+  'discount-missing': 'searched, but no company discount was applied',
   'wrong-trip': 'the page priced a different trip',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
@@ -1126,6 +1173,16 @@ budgetCaptchaBtn.addEventListener('click', () => {
   });
 });
 
+rejectedClear.addEventListener('click', () => {
+  // Forgets every refusal rather than offering a per-code list. The whole point
+  // is to re-ask the vendor, and the vendors are the authority — a picker over
+  // remembered answers would be a UI for second-guessing a cache.
+  void clearRejected(chrome.storage.local).then(() => {
+    ui.rejected = [];
+    refreshPlan();
+  });
+});
+
 cancelBtn.addEventListener('click', () => {
   void send({ type: 'CANCEL_RUN' }).then(applyReply);
 });
@@ -1156,6 +1213,8 @@ async function main(): Promise<void> {
   // user is offered, `plannedCandidates` is what actually runs.
   maxCodesInput.max = String(MAX_CODES);
 
+  // Before restoreForm, so the first refreshPlan already knows what to skip.
+  ui.rejected = await loadRejected(chrome.storage.local);
   await restoreForm();
   setCategory(ui.category);
 

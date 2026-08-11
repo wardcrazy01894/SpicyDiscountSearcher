@@ -754,6 +754,47 @@ describe('diagnosing a run afterwards', () => {
   });
 });
 
+describe('remembering a code the vendor refused', () => {
+  // The point of remembering at all: racing a refused code costs a real tab on
+  // a real vendor site and can only ever fail. National refuses several of the
+  // contract ids in the workbook.
+
+  async function settleWith(failure: string): Promise<void> {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure,
+      message: 'whatever the page said',
+      report: REPORT,
+    });
+    await settle(1_000);
+  }
+
+  it('records the vendor’s own refusal', async () => {
+    await settleWith('code-rejected');
+    const stored = chromeMock.local.get('rejectedCodes') as Array<{ code: string }>;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.code).toBe('H1');
+  });
+
+  it('does not record a discount it merely failed to find', async () => {
+    // The rule this whole split exists for. `discount-missing` is our own
+    // inference, not the vendor speaking, and it is equally consistent with a
+    // check that rotted against a redesign — recording it would let a broken
+    // selector quietly retire a working code, permanently and invisibly.
+    await settleWith('discount-missing');
+    expect(chromeMock.local.get('rejectedCodes')).toBeUndefined();
+  });
+
+  it('does not record an ordinary failure', async () => {
+    await settleWith('probe-empty');
+    expect(chromeMock.local.get('rejectedCodes')).toBeUndefined();
+  });
+});
+
 describe('a probe reporting something unexpected', () => {
   it('flags a failed quote that also landed on the home page', async () => {
     // "no price because the link missed its search" and "no price because the

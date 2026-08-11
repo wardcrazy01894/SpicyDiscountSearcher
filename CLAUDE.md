@@ -307,7 +307,8 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`, `form-fill`, `form-submit`, `code-rejected`, `wrong-trip`. The popup
+`cancelled`, `form-fill`, `form-submit`, `code-rejected`, `discount-missing`,
+`wrong-trip`. The popup
 renders a short phrase per code and keeps the raw message in a tooltip. Assert
 the **code** in tests; rewording a message must not change what the system
 believes happened.
@@ -321,9 +322,20 @@ They exist for the vendors whose sites ignore the query string entirely:
 Enterprise's results page is a bare `#car_select`, Budget's a bare `#/vehicles`.
 Those two still refuse to build a URL and are `searchable: false`, so nothing
 routes a run to them; their codes stay in the database waiting for a driver that
-can run. `code-rejected` is the newest of the three and is the vendor's verdict
-on the code rather than a fault in the run — National raises it when its results
-page names no account, which is exactly what a retail-priced page looks like.
+can run. `code-rejected` is the vendor's verdict on the code rather than a fault in the
+run, and it is **the only failure this extension remembers**. A refused code is
+recorded in `chrome.storage.local` by `core/rejected-codes.ts` and skipped by
+every later plan, because racing it costs a real tab and can only fail again.
+
+`discount-missing` exists to keep that safe, and the split is the whole point.
+`code-rejected` is the vendor's own sentence ("this account number cannot be
+used online"); `discount-missing` is _our_ inference that a discount did not
+land, raised when National's results page names no account. The second is
+equally consistent with the code being silently ignored and with our check
+having rotted against a redesign — so recording it would let a broken selector
+quietly retire a working code, permanently and invisibly. Only the vendor's own
+words are durable enough to act on, and the popup says how many codes are being
+skipped and offers to try them again.
 
 Driving the form is the answer for Enterprise, and the shape of it is now
 measured rather than guessed. **The three sentences that used to sit here were

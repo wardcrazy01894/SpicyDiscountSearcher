@@ -819,7 +819,7 @@ describe('verifyResults', () => {
     await expect(verifyResults(makeContext())).resolves.toBeUndefined();
   });
 
-  it('reports code-rejected when results carry no account', async () => {
+  it('reports discount-missing when results carry no account', async () => {
     // The control run, exactly: a real results page, real prices, no discount.
     // Those are retail rates, and letting them through would report them as the
     // company's — a real page, a real number, the wrong answer.
@@ -827,7 +827,9 @@ describe('verifyResults', () => {
     window.location.hash = '#/car_select';
     document.body.prepend(textNode('34 Results $ 74.00 / day'));
     const error = await failureOf(verifyResults(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    // Not `code-rejected`: the vendor said nothing. Only its own refusal is
+    // durable enough to be remembered and stop the code being raced again.
+    expect(error.failure).toBe('discount-missing');
     expect(error.message).toMatch(/retail rates/);
   });
 
@@ -858,7 +860,7 @@ describe('verifyResults', () => {
     window.location.hash = '#/car_select';
     document.body.prepend(textNode('Account Name'));
     const error = await failureOf(verifyResults(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    expect(error.failure).toBe('discount-missing');
   });
 
   it('accepts a label and value marked up as separate elements', async () => {
@@ -885,7 +887,7 @@ describe('verifyResults', () => {
     menu.append(textNode('Account Name'));
     document.body.prepend(menu, textNode('34 Results $ 74.00 / day Est. Total $ 193.80'));
     const error = await failureOf(verifyResults(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    expect(error.failure).toBe('discount-missing');
   });
 });
 
