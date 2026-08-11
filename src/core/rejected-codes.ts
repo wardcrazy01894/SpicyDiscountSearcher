@@ -114,9 +114,22 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  * `WRITE_TIMEOUT_MS`.
  *
  * Abandoning is not cancelling — a write that was merely slow may still land
- * afterwards, out of order. That is worth it: the cost of the stale write is a
- * refusal recorded late or a clear undone, both of which the user can see and
- * redo, against a store that can never be cleared again.
+ * afterwards, out of order — and that is accepted for a *late refusal*, which
+ * costs a wasted tab the user can see. It is **not** accepted for a clear
+ * undone: the popup has already re-read an empty list by then, so it reports
+ * success and schedules no recheck, and the codes simply reappear on the next
+ * open with nothing to explain them. `recordRejected` therefore refuses to
+ * write a list it read before a clear was asked for.
+ *
+ * That closes it when the *read* was the slow part. When the **write** was, the
+ * `set` is already with the platform before a clear can be asked for and no
+ * check here can retract it — closing that would need either a
+ * compare-and-swap, which `chrome.storage` does not offer, or a compensating
+ * re-clear afterwards, which introduces its own ordering against any legitimate
+ * write that followed. Left open deliberately: it needs a `set` to take longer
+ * than `WRITE_TIMEOUT_MS` *and* the user to press "try them again" inside that
+ * window, and the cost is the refusals reappearing, visible on the next open
+ * and clearable again.
  */
 export const WRITE_TIMEOUT_MS = 5_000;
 
@@ -124,6 +137,9 @@ let writes: Promise<void> = Promise.resolve();
 
 /** Links queued and not yet settled, so a waiter can size its own bound. */
 let queued = 0;
+
+/** Clears ever asked for, so a stale record can tell it has been overtaken. */
+let clears = 0;
 
 /**
  * How many writes are outstanding.
@@ -165,12 +181,28 @@ export function recordRejected(
   code: string,
   at: number,
 ): Promise<void> {
+  // Captured at *enqueue*, not inside the body: `clearRejected` increments this
+  // when it is called, which is before this body ever starts running, so a
+  // reading taken in there already includes the clear it is meant to notice.
+  const sawClears = clears;
   return serialise(async () => {
     // Inside the queue, not before it: reading ahead of the writes in front of
     // this one is precisely the lost update.
     const existing = await loadRejected(storage);
     if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;
     if (existing.length >= MAX_ENTRIES) return;
+    // Abandoning a link does not cancel it, so this body can still be running
+    // after the queue moved on — and the list it read is then stale. Writing it
+    // back restores every refusal a clear had just removed, invisibly: the
+    // popup has already re-read an empty list, so it reports success, schedules
+    // no recheck, and the codes reappear on the next open with nothing to
+    // explain them.
+    //
+    // This closes the case where the read was the slow part. It cannot close
+    // the case where the *write* was: that `set` is already with the platform
+    // by the time a clear can be asked for, and there is no compare-and-swap
+    // here to make it conditional. See the module comment.
+    if (sawClears !== clears) return;
     try {
       await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
     } catch {
@@ -180,6 +212,9 @@ export function recordRejected(
 }
 
 export function clearRejected(storage: RejectionStore): Promise<void> {
+  // Counted at *enqueue*, not when it runs: any record already holding a read
+  // taken before this point is now stale, whether or not it has been abandoned.
+  clears += 1;
   // On the same queue: a clear that overtook an in-flight record would leave the
   // record behind, which reads to the user as "try them again" not working.
   return serialise(async () => {

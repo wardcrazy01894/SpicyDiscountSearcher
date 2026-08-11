@@ -1103,7 +1103,16 @@ async function cancelRun(): Promise<void> {
   // what sends the popup back to storage. A cancel settles every quote as
   // `cancelled` and records nothing itself, but a refusal from earlier in the
   // run can still be in flight.
-  await settleWrites(run.pendingWrites);
+  //
+  // Held to one write's worth rather than scaled by how many, unlike teardown.
+  // The window and tabs are already closed by here, so every second of this is
+  // a second the popup sits on "Racing codes…" after a cancel with nothing
+  // visibly happening — and `beginRun` awaits `cancelRun`, so it is also a
+  // second the next START_RUN goes unanswered with Run disabled. At five
+  // outstanding refusals the scaled bound is 25s of that. The user has said
+  // they are done with this run; ordering the note they may never look at is
+  // worth much less here than it is on the path that announces a result.
+  await settleWrites(run.pendingWrites, 'a cancel', 1);
   await publish();
   // Last, after the closes and the final publish, so teardown itself is still
   // covered by a resident worker.

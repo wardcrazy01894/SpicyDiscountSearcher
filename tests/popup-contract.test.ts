@@ -726,6 +726,33 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
   });
 
+  it('keeps saying a clear failed when a later run re-reads the list', async () => {
+    // The third caller of `reloadRejected`, and the third time this flag was
+    // erased by a reader that did not re-judge it. The clear handler owned the
+    // judgement, then `recheckClear` did not, then it did and the RUN_STATE
+    // listener still did not — so a run finishing after a failed clear removed
+    // the warning while every code it named was still refused and still being
+    // skipped. The flag is derived from (what was asked to clear, what is
+    // stored) on every read now, so there is nothing left for a caller to
+    // forget.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
+
+    // A run finishes. Storage is unchanged — the clear never happened.
+    sendMessageImpl = fakeBackground;
+    await broadcastFinishedRun();
+
+    const note = document.querySelector('#rejected-note')?.textContent ?? '';
+    expect(note).toMatch(/1 code has been refused/);
+    expect(note).toMatch(/not been cleared yet/);
+  });
+
   it('retires a failed-clear message when the list is read again', async () => {
     // The flag had no reset but a *successful* clear, and "none needed" held
     // only while nothing could refill the list. The worker's bounded wait can

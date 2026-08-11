@@ -17,6 +17,7 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
+  WRITE_TIMEOUT_MS,
   loadRejected,
   rejectionKey,
   rejectionSet,
@@ -582,6 +583,15 @@ function refreshPlan(): void {
 let rejectedRead = 0;
 
 /**
+ * The refusals the user last asked to forget, or null if they never have.
+ *
+ * `ui.clearFailed` is "some of these are still there", which is why it is
+ * derived from this on every read rather than set by whichever caller happens
+ * to notice.
+ */
+let clearAttempt: ReadonlySet<string> | null = null;
+
+/**
  * Re-read the refusal list, unless a later read has been issued meanwhile.
  *
  * Returns what was stored, or null if this read was superseded — in which case
@@ -593,27 +603,35 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   const entries = await loadRejected(chrome.storage.local);
   if (mine !== rejectedRead) return null;
   ui.rejected = entries;
-  // The complaint is about the list as it was when the clear was pressed, so a
-  // fresh reading of that list retires it. Without this the flag had no reset
-  // but a *successful* clear, and "none needed — a clear that works empties the
-  // list" was only true while nothing could refill it: the worker's bounded
-  // wait can give up on a slow write, setting the flag, and then the queued
-  // clear lands anyway — after which a later run refusing some entirely
-  // different code redrew the note saying those codes "have not been cleared
-  // yet", about a store that had been cleared and a refusal that postdates it.
-  // The clear handler sets it again straight after this, from what it reads.
-  ui.clearFailed = false;
+  // Judged here rather than by each caller, which is the third attempt at this
+  // flag and the first that cannot drift. Setting it `false` here and relying
+  // on "the caller sets it again from what it read" was true of the clear
+  // handler, then untrue of `recheckClear`, then fixed there and still untrue
+  // of the RUN_STATE listener — each time erasing a warning while every code it
+  // named was still refused. As a function of (what the user asked to clear,
+  // what is stored now) there is nothing left for a caller to forget.
+  const attempted = clearAttempt;
+  ui.clearFailed =
+    attempted !== null &&
+    entries.some((entry) => attempted.has(rejectionKey(entry.vendor, entry.code)));
   return entries;
 }
 
 /**
  * How long after a clear reports failure to look once more.
  *
- * Longer than the worker's own per-write bound, so a write that was merely slow
- * has finished by the time this looks. One retry, not a poll: if the clear
- * really did not happen the message is on screen and the button is right there.
+ * Derived, not written as its own number: it has to outlast the worker's
+ * per-write bound, and there is exactly one recheck — so if that constant grew
+ * past this one the single look would happen before a merely-slow write landed,
+ * `ui.clearFailed` would stay true with nothing left to correct it, and the
+ * popup would go on claiming codes were not cleared when they had been. A bare
+ * `6_000` in another module made that invariant unenforceable and the margin
+ * invisible.
+ *
+ * One retry, not a poll: if the clear really did not happen the message is on
+ * screen and the button is right there.
  */
-const RECHECK_CLEAR_MS = 6_000;
+const RECHECK_CLEAR_MS = WRITE_TIMEOUT_MS + 1_000;
 
 /**
  * Re-read after a clear reported failure, in case it landed late.
@@ -626,11 +644,10 @@ const RECHECK_CLEAR_MS = 6_000;
  * indication the button had done nothing, which is the opposite of what
  * `RECHECK_CLEAR_MS` is for.
  */
-async function recheckClear(before: ReadonlySet<string>): Promise<void> {
+async function recheckClear(): Promise<void> {
   const prior = rejectionSet(ui.rejected);
   const entries = await reloadRejected();
   if (!entries) return;
-  ui.clearFailed = entries.some((entry) => before.has(rejectionKey(entry.vendor, entry.code)));
   // Only when the list actually moved. Both renders are a full
   // `replaceChildren`, and this one fires six seconds after the fact with no
   // action of the user's — the same reason the RUN_STATE listener gates its
@@ -1494,7 +1511,7 @@ rejectedClear.addEventListener('click', () => {
   //
   // Judged against the refusals this popup *knew about*, so a new one recorded
   // in the meantime does not read as a failed clear.
-  const before = rejectionSet(ui.rejected);
+  clearAttempt = rejectionSet(ui.rejected);
   void send({ type: 'CLEAR_REJECTED' })
     .then(async (reply) => {
       // A reply is proof the background is reachable — stronger proof than the
@@ -1513,7 +1530,6 @@ rejectedClear.addEventListener('click', () => {
       // answer, and judging the clear against a list this one never saw would
       // be worse than saying nothing.
       if (!entries) return;
-      ui.clearFailed = entries.some((entry) => before.has(rejectionKey(entry.vendor, entry.code)));
       // Chips and the company list carry the count too, so `refreshPlan` alone
       // would leave them showing the reduced numbers after putting the codes back.
       renderVendorChips();
@@ -1527,7 +1543,7 @@ rejectedClear.addEventListener('click', () => {
       // codes the store no longer refuses". The timeout path reached that same
       // outcome by a different road, with nothing to correct it but the user
       // pressing the button again.
-      if (ui.clearFailed) setTimeout(() => void recheckClear(before), RECHECK_CLEAR_MS);
+      if (ui.clearFailed) setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
     });
 });
 

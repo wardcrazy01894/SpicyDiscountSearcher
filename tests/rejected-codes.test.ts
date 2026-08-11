@@ -147,6 +147,51 @@ describe('recordRejected', () => {
     }
   });
 
+  it('does not let an abandoned refusal undo the clear that overtook it', async () => {
+    // Abandoning a link does not cancel it: the body runs on, still holding the
+    // list it read before the clear. Writing that back restores every refusal
+    // the clear removed — and invisibly, because the popup has already re-read
+    // an empty list, so it reports success and schedules no recheck. The codes
+    // reappear on the next open with nothing to explain them.
+    //
+    // The *read* is what hangs here, which is the case a check before the write
+    // can close. A hanging `set` is already with the platform by the time a
+    // clear can be asked for; that one is left open and recorded in the module.
+    vi.useFakeTimers();
+    try {
+      const store = fakeStore();
+      let releaseRead: (() => void) | undefined;
+      const slowRead = {
+        ...store,
+        get: (key: string) =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            releaseRead = () => void store.get(key).then(resolve);
+          }),
+      };
+
+      // Seed a refusal so the clear has something to remove.
+      await recordRejected(store, 'national', 'OLD', 1);
+
+      const recording = recordRejected(slowRead, 'national', '5666666', 1);
+      const clearing = clearRejected(store);
+      // The record is abandoned mid-read; the clear runs and empties the store.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await clearing;
+      expect(await loadRejected(store)).toEqual([]);
+
+      // Now the abandoned read finally returns, holding the pre-clear list.
+      releaseRead?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await recording;
+
+      // Still empty. Losing that refusal is the accepted cost; putting `OLD`
+      // back after the user cleared it is not.
+      expect(await loadRejected(store)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the same code at two vendors apart', async () => {
     // Enterprise files the codes National honours, so the same string can be
     // refused at one brand and fine at another.
