@@ -2,7 +2,7 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
-import { clearRejected, recordRejected } from '../core/rejected-codes.js';
+import { WRITE_TIMEOUT_MS, clearRejected, recordRejected } from '../core/rejected-codes.js';
 import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
@@ -87,7 +87,17 @@ const KEEPALIVE_MS = 20_000;
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
 /**
- * How long teardown will wait for a settling quote's storage write.
+ * A ceiling on the wait below, however many writes are outstanding.
+ *
+ * Teardown holds the finished broadcast for the length of this wait, so it is
+ * also how long the popup can sit on "Racing codes…" after the last tab has
+ * closed. Reached only if storage is pathologically slow *and* the run refused
+ * a lot of codes.
+ */
+const WRITE_WAIT_CEILING_MS = 30_000;
+
+/**
+ * Wait for a settling quote's storage writes, but not forever.
  *
  * The wait exists so the finished broadcast cannot outrun a refusal the popup
  * is about to re-read. Waiting *unboundedly* for it buys a worse failure than
@@ -97,18 +107,23 @@ const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
  * `cancelRun`, the next START_RUN never replies either, latching `pendingStart`
  * and killing the Run button until the popup is reopened.
  *
- * Comfortably longer than a storage round trip and far shorter than the
- * keepalive's inactivity ceiling, which is not extended while teardown waits.
- * Timing out only loses the ordering, which costs a redraw the user can force
- * by reopening the popup — the write itself is still queued and still lands.
- */
-const WRITE_WAIT_MS = 5_000;
-
-/**
- * Wait for `writes`, but never longer than `WRITE_WAIT_MS`.
+ * Derived from `WRITE_TIMEOUT_MS` rather than written as its own number, and
+ * scaled by how many writes are outstanding, because the writes are
+ * **serialised**: five refusals are five round trips one after another, so a
+ * flat 5s bound gave up after the first one whenever storage was merely slow —
+ * around 1.5s a write under memory pressure is enough — and the popup's re-read
+ * then missed the rest. That is the exact race `pendingWrites` was added to
+ * close, reintroduced by the guard meant to bound it. Each link is itself
+ * bounded at `WRITE_TIMEOUT_MS`, so this is the longest the chain can honestly
+ * take, up to a ceiling.
+ *
+ * Not a guarantee: the queue is shared, so a clear or another run's write can
+ * sit in front of these and still run the clock out. Timing out only loses the
+ * ordering — the write is still queued, and still lands unless it is the one
+ * that hung.
  *
  * The writes cannot reject — every link in `rejected-codes.ts` swallows its own
- * failure — so only the hanging case needs handling.
+ * failure — so only the slow and hanging cases need handling.
  */
 async function settleWrites(
   writes: Iterable<Promise<void>>,
@@ -116,12 +131,13 @@ async function settleWrites(
 ): Promise<void> {
   const pending = [...writes];
   if (pending.length === 0) return;
+  const waitMs = Math.min(WRITE_TIMEOUT_MS * pending.length, WRITE_WAIT_CEILING_MS);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
-      warn(`gave up waiting for a storage write before ${what}`, `pending past ${WRITE_WAIT_MS}ms`);
+      warn(`gave up waiting for a storage write before ${what}`, `pending past ${waitMs}ms`);
       resolve();
-    }, WRITE_WAIT_MS);
+    }, waitMs);
   });
   try {
     await Promise.race([Promise.all(pending).then(() => undefined), bound]);

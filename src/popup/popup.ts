@@ -388,7 +388,17 @@ function renderCompanyList(): void {
   emptyNote.textContent = matches.length === 0 ? emptyReason(query, vendors) : '';
 
   // Long lists make the popup crawl; the search box is how you reach the rest.
-  const shown = [...matches, ...stranded].slice(0, 60);
+  //
+  // Stranded rows go **first**, and that ordering is the whole point rather
+  // than a presentation choice. Behind the matches they were cut by this slice
+  // whenever there were already 60 — which never happens for cars (33 matches)
+  // and always happens for hotels (212), so the escape hatch simply did not
+  // exist in that category: tick a Hilton-only company, untick the Hilton chip,
+  // and the row vanished with the slug still in `ui.companies` and the saved
+  // form, which is exactly the trap it was added to prevent. They are also the
+  // rows that need action, and there are only ever as many as the user ticked.
+  const listed = [...stranded, ...matches];
+  const shown = listed.slice(0, 60);
   companyList.replaceChildren(
     ...(selected ? [selected] : []),
     ...(matches.length === 0 ? [emptyNote] : []),
@@ -451,10 +461,14 @@ function renderCompanyList(): void {
     }),
   );
 
-  if (matches.length > shown.length) {
+  // Against everything listed, not just the matches. Comparing a match count to
+  // a length that also held stranded rows under-reported, and at 59 matches
+  // plus 5 stranded it printed nothing at all while four rows were dropped —
+  // the user's only signal that anything is hidden.
+  if (listed.length > shown.length) {
     const more = document.createElement('p');
     more.className = 'empty';
-    more.textContent = `+${matches.length - shown.length} more — keep typing to narrow.`;
+    more.textContent = `+${listed.length - shown.length} more — keep typing to narrow.`;
     companyList.append(more);
   }
 }
@@ -590,6 +604,24 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // The clear handler sets it again straight after this, from what it reads.
   ui.clearFailed = false;
   return entries;
+}
+
+/**
+ * How long after a clear reports failure to look once more.
+ *
+ * Longer than the worker's own per-write bound, so a write that was merely slow
+ * has finished by the time this looks. One retry, not a poll: if the clear
+ * really did not happen the message is on screen and the button is right there.
+ */
+const RECHECK_CLEAR_MS = 6_000;
+
+/** Re-read after a clear reported failure, in case it landed late. */
+async function recheckClear(): Promise<void> {
+  const entries = await reloadRejected();
+  if (!entries) return;
+  renderVendorChips();
+  renderCompanyList();
+  refreshPlan();
 }
 
 /**
@@ -1456,6 +1488,15 @@ rejectedClear.addEventListener('click', () => {
       renderVendorChips();
       renderCompanyList();
       refreshPlan();
+      // One more look, because a clear can land *after* it was reported failed.
+      // The worker's wait is bounded, so a slow write gets an ordinary reply
+      // with the clear still queued — and this handler's own comment above
+      // rejects the null-reply-is-failure reading precisely because it "would
+      // leave `ui.rejected` populated for the whole session, filtering out
+      // codes the store no longer refuses". The timeout path reached that same
+      // outcome by a different road, with nothing to correct it but the user
+      // pressing the button again.
+      if (ui.clearFailed) setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
     });
 });
 

@@ -386,6 +386,56 @@ describe('surviving MV3 suspension', () => {
     // value can ever be inherited.
   });
 
+  it('waits for every refusal, not just as long as one would take', async () => {
+    // The writes are serialised, so N refusals are N round trips one after
+    // another — but the wait was a flat 5s however many there were. With
+    // storage merely slow (memory pressure, a big profile) a two-refusal run
+    // needed more than that, teardown gave up after the first, and the popup's
+    // re-read missed the rest: the exact race `pendingWrites` was added to
+    // close, reintroduced by the guard meant to bound it. The bound is derived
+    // from the per-write one and scaled by how many are outstanding.
+    chromeMock = installChromeMock();
+    // Two writes at 4s each. Serialised that is 8s from the first quote
+    // settling; teardown starts about a second in, so a flat 5s bound expires
+    // before the second lands while the scaled 10s does not — and 4s is inside
+    // the per-link bound, so both writes genuinely complete. At 3s each the
+    // chain finished inside the flat bound too and this measured nothing.
+    chromeMock.delayLocalWrites(4_000);
+
+    const atFinish: unknown[] = [];
+    const fake = (globalThis as { chrome: typeof chrome }).chrome;
+    const sendMessage = fake.runtime.sendMessage.bind(fake.runtime);
+    fake.runtime.sendMessage = (message: unknown) => {
+      if ((message as { state?: { finishedAt?: number } }).state?.finishedAt) {
+        atFinish.push(chromeMock.local.get('rejectedCodes'));
+      }
+      return sendMessage(message);
+    };
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    for (let i = 0; i < 2; i += 1) {
+      const tabId = [...chromeMock.tabs.keys()][0];
+      if (tabId === undefined) break;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      await settle(1_000);
+    }
+    await settle(30_000);
+
+    expect(atFinish).toHaveLength(1);
+    // Both refusals, not just the one that fitted inside a flat bound.
+    expect(atFinish[0]).toHaveLength(2);
+  });
+
   it('gives up on a storage write rather than leaving the run unannounced', async () => {
     // Teardown waits for a settling quote's refusal write so the finished
     // broadcast cannot outrun it. Waiting *unboundedly* buys a worse failure

@@ -559,6 +559,118 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelectorAll('#company-list label.company').length).toBe(1);
   });
 
+  it('keeps a stranded company listed even behind a full page of matches', async () => {
+    // The escape hatch was appended *after* the matches and then sliced at 60,
+    // so it existed only while there were fewer than 60 matches. Cars have 33,
+    // which is why it looked fine; hotels have 146 at Hilton alone, so in that
+    // category the row vanished — slug still in `ui.companies` and in the saved
+    // form, and no checkbox anywhere to untick it.
+    //
+    // The scenario needs matches *and* a stranded row at once, which an earlier
+    // version of this test did not have: unticking the only selected vendor
+    // leaves no matches either, so the ordering it meant to pin made no
+    // difference and the mutation survived.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies().find(
+      (company) => has(company, 'marriott') && !has(company, 'hilton'),
+    )!;
+    savedForm = { category: 'hotel', vendors: ['hilton', 'marriott'], companies: [] };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    const named = () => rows().map((row) => row.querySelector('span')?.textContent ?? '');
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = marriottOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    rows()[0]?.querySelector<HTMLInputElement>('input')?.click();
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Untick Marriott. Hilton stays selected, so there are still 146 matches —
+    // far more than the 60-row cap — and this company is stranded among them.
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Marriott') && box.checked) {
+        box.click();
+      }
+    }
+
+    expect(rows().length).toBe(60);
+    expect(named()).toContain(marriottOnly.name);
+  });
+
+  it('counts the hidden rows against everything it meant to list', async () => {
+    // The hint compared a *match* count against a length that also held
+    // stranded rows, so it under-reported by exactly the number of stranded
+    // rows on screen — and at 59 matches plus 5 stranded printed nothing at all
+    // while four rows were dropped.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies().find(
+      (company) => has(company, 'marriott') && !has(company, 'hilton'),
+    )!;
+    savedForm = { category: 'hotel', vendors: ['hilton', 'marriott'], companies: [] };
+    installChrome();
+    await boot();
+
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = marriottOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector<HTMLInputElement>('#company-list label.company input')?.click();
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Marriott') && box.checked) {
+        box.click();
+      }
+    }
+
+    const hint = document.querySelector('#company-list')?.textContent ?? '';
+    const reported = Number(/\+(\d+) more/.exec(hint)?.[1]);
+    const hiltonCompanies = allCompanies().filter((company) =>
+      company.codes.some((code) => code.code && codeReaches(code.vendor, 'hilton')),
+    ).length;
+    // 146 matches + 1 stranded, 60 shown.
+    expect(reported).toBe(hiltonCompanies + 1 - 60);
+  });
+
+  it('looks again after reporting a clear failed, in case it landed late', async () => {
+    // The worker's wait on the write is bounded, so a slow `chrome.storage` gets
+    // an ordinary reply back with the clear still queued. Reported as a failure
+    // and never re-read, that leaves `ui.rejected` populated for the session —
+    // filtering out codes the store no longer refuses, which is the very
+    // outcome this handler's null-reply reasoning exists to avoid.
+    vi.useFakeTimers();
+    try {
+      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+      installChrome();
+      // A worker that replies before its own write has landed.
+      sendMessageImpl = (message) => {
+        if (message.type === 'CLEAR_REJECTED') {
+          setTimeout(() => void fakeBackground(message), 3_000);
+          return Promise.resolve({ type: 'RUN_STATE', state: null });
+        }
+        return fakeBackground(message);
+      };
+      await import('../src/popup/popup.js');
+      await vi.advanceTimersByTimeAsync(50);
+
+      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+      await vi.advanceTimersByTimeAsync(50);
+      // Reported failed, correctly — storage really did still hold the code.
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+
+      // The clear lands, and the popup looks again of its own accord.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('retires a failed-clear message when the list is read again', async () => {
     // The flag had no reset but a *successful* clear, and "none needed" held
     // only while nothing could refill the list. The worker's bounded wait can

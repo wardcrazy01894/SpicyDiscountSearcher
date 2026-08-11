@@ -118,7 +118,7 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  * refusal recorded late or a clear undone, both of which the user can see and
  * redo, against a store that can never be cleared again.
  */
-const WRITE_TIMEOUT_MS = 5_000;
+export const WRITE_TIMEOUT_MS = 5_000;
 
 let writes: Promise<void> = Promise.resolve();
 
