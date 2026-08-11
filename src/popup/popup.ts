@@ -398,7 +398,14 @@ function renderCompanyList(): void {
   // and the row vanished with the slug still in `ui.companies` and the saved
   // form, which is exactly the trap it was added to prevent. They are also the
   // rows that need action, and there are only ever as many as the user ticked.
-  const listed = [...stranded, ...matches];
+  // Stranded rows first so the 60-row cut cannot swallow the escape hatch, but
+  // capped so the escape hatch cannot swallow the list. `stranded` is bounded
+  // only by how many companies the user has ticked, and with 60-plus ticked —
+  // reachable by searching and ticking — unticking a vendor chip filled the
+  // whole list with rows that cannot race and pushed every company that can
+  // behind the cut. Ten is enough to untick from, and the next render brings
+  // the next ten.
+  const listed = [...stranded.slice(0, 10), ...matches];
   const shown = listed.slice(0, 60);
   companyList.replaceChildren(
     ...(selected ? [selected] : []),
@@ -466,10 +473,14 @@ function renderCompanyList(): void {
   // a length that also held stranded rows under-reported, and at 59 matches
   // plus 5 stranded it printed nothing at all while four rows were dropped —
   // the user's only signal that anything is hidden.
-  if (listed.length > shown.length) {
+  // Against everything there is to list, including the stranded rows this
+  // render is holding back — otherwise capping them makes the overflow line
+  // under-report by exactly the number it hid.
+  const total = stranded.length + matches.length;
+  if (total > shown.length) {
     const more = document.createElement('p');
     more.className = 'empty';
-    more.textContent = `+${listed.length - shown.length} more — keep typing to narrow.`;
+    more.textContent = `+${total - shown.length} more — keep typing to narrow.`;
     companyList.append(more);
   }
 }
@@ -589,7 +600,7 @@ let rejectedRead = 0;
  * derived from this on every read rather than set by whichever caller happens
  * to notice.
  */
-let clearAttempt: ReadonlySet<string> | null = null;
+let clearAttempt: { keys: ReadonlySet<string>; at: number } | null = null;
 
 /**
  * Re-read the refusal list, unless a later read has been issued meanwhile.
@@ -611,9 +622,19 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // named was still refused. As a function of (what the user asked to clear,
   // what is stored now) there is nothing left for a caller to forget.
   const attempted = clearAttempt;
+  // `at`, not just the key. A refusal recorded *after* the clear is a new
+  // answer from the vendor, not a survivor of it — and re-asking is the whole
+  // point of the button, so this is an ordinary outcome rather than a corner.
+  // Without the timestamp, a quote settling between the clear and this read put
+  // the same code back and the popup called a clear that demonstrably worked a
+  // failure, permanently: the 31s recheck reads the same list and leaves the
+  // flag exactly where it was.
   ui.clearFailed =
     attempted !== null &&
-    entries.some((entry) => attempted.has(rejectionKey(entry.vendor, entry.code)));
+    entries.some(
+      (entry) =>
+        attempted.keys.has(rejectionKey(entry.vendor, entry.code)) && entry.at <= attempted.at,
+    );
   // Retired the moment a read finds none of them, or the derivation outlives the
   // question it answers: re-asking a vendor is the whole point of the button,
   // and a vendor refusing the same code again is the *expected* outcome. Kept,
@@ -1519,7 +1540,7 @@ rejectedClear.addEventListener('click', () => {
   //
   // Judged against the refusals this popup *knew about*, so a new one recorded
   // in the meantime does not read as a failed clear.
-  clearAttempt = rejectionSet(ui.rejected);
+  clearAttempt = { keys: rejectionSet(ui.rejected), at: Date.now() };
   void send({ type: 'CLEAR_REJECTED' })
     .then(async (reply) => {
       // A reply is proof the background is reachable — stronger proof than the
@@ -1530,15 +1551,23 @@ rejectedClear.addEventListener('click', () => {
       // `refreshPlan` still took its early return and the plan line went on
       // saying "Could not reach the extension background", with Run disabled,
       // beside chips that had already redrawn with the restored counts.
-      // `applyReply`, not a hand-rolled subset of it. Clearing `sendFailed`
-      // here and patching up whatever was visibly wrong was two rounds of
-      // exactly that: first the plan line, then the Run caption, and then
-      // `pendingStart` — which is cleared only by `renderRun`, so Run stayed
-      // dead beside a healthy-looking plan line and no explanation at all. The
-      // reason this path avoided `applyReply` was that a null state hid a
-      // finished run's results; the worker answers with the same state
-      // GET_STATE would now, so there is nothing left to avoid.
-      if (reply) applyReply(reply);
+      // `applyReply`, not a hand-rolled subset of it — patching up whatever
+      // was visibly wrong took two rounds and still missed `pendingStart`. The
+      // reason this path used to avoid it was that a null state hid a finished
+      // run's results; the worker answers with the same state GET_STATE would
+      // now, so that is no longer a reason.
+      //
+      // **Except while a START_RUN is outstanding.** `renderRun` clears
+      // `pendingStart` unconditionally, and this reply is not an answer to that
+      // message: `beginRun` awaits `cancelRun` before assigning `active`, so a
+      // clear answered inside that gap reports the *previous* finished run, or
+      // none — and Run comes back to life with a race about to start behind it.
+      // A second press then sends the second START_RUN the latch exists to
+      // stop. The failed-send case is the same call: a rejection does not prove
+      // non-delivery, which is exactly why that message and the disabled button
+      // are supposed to stay until the popup is reopened. Leaving them alone
+      // here is the pre-existing behaviour, and it was right.
+      if (reply && !ui.pendingStart) applyReply(reply);
       return reloadRejected();
     })
     .then((entries) => {

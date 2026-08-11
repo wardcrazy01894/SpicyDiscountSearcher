@@ -756,6 +756,76 @@ describe('the popup half of the double-run guard', () => {
     expect(note).toMatch(/not been cleared yet/);
   });
 
+  it('does not call a clear failed when the code was re-refused before the read', async () => {
+    // The variant the key-only rule missed. Press "try them again" during a
+    // live run: the worker clears, a quote settles and records the same code
+    // again — enqueued after the clear, so it is a new answer from the vendor —
+    // and all of that lands before the popup's own read resolves. Judged on the
+    // key alone that read sees a survivor and latches the failure permanently,
+    // since the 31s recheck sees the same list. The stored `at` is what tells
+    // the two apart.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        const { local } = (
+          globalThis as {
+            chrome: {
+              storage: { local: { set: (items: Record<string, unknown>) => Promise<void> } };
+            };
+          }
+        ).chrome.storage;
+        // Cleared, then re-refused by a quote settling a moment later.
+        return local
+          .set({ rejectedCodes: [{ vendor: 'national', code: '5666666', at: Date.now() + 5_000 }] })
+          .then(() => ({ type: 'RUN_STATE', state: null }));
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    // Not `waitFor` on the count: it reads "1 code has been refused" before the
+    // click too, so that condition is satisfied by the boot state and the
+    // assertion below then runs before the clear has done anything — which is
+    // how the first version of this passed against the bug.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/1 code has/);
+    expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+  });
+
+  it('does not let stranded rows crowd out every company that can race', async () => {
+    // Stranded rows go first so the 60-row cut cannot swallow the escape hatch;
+    // uncapped, the escape hatch swallowed the list instead. `stranded` is
+    // bounded only by how many companies the user has ticked.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 30);
+    expect(marriottOnly.length).toBeGreaterThan(20);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    await vi.waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    const strandedShown = rows().filter(
+      (row) => row.querySelector('.vendors')?.textContent === 'no code at these vendors',
+    ).length;
+    // Enough to untick from, and not the whole page.
+    expect(strandedShown).toBeLessThanOrEqual(10);
+    expect(rows().length - strandedShown).toBeGreaterThan(40);
+  });
+
   it('does not call a re-refused code a failed clear', async () => {
     // Re-asking the vendor is the whole point of the button, and the vendor
     // refusing the same code again is the expected outcome. `clearAttempt` was
@@ -828,36 +898,42 @@ describe('the popup half of the double-run guard', () => {
     }
   });
 
-  it('re-arms Run after a clear when a failed START_RUN had disabled it', async () => {
-    // The state the hand-rolled version of this kept missing. A START_RUN whose
-    // send rejects sets `pendingStart` *and* `sendFailed`; clearing only the
-    // second one let `refreshPlan` write the ordinary plan line and the caption
-    // revert, while `runBtn.disabled = ui.running || ui.pendingStart` stayed
-    // true — a dead button beside a healthy-looking plan, with no message and
-    // no recovery short of reopening the popup. Before this branch the
-    // explanation at least stayed on screen.
+  it('does not re-arm Run from a clear while a START_RUN is outstanding', async () => {
+    // A clear's reply is not an answer to START_RUN, and `renderRun` clears
+    // `pendingStart` unconditionally. `beginRun` awaits `cancelRun` before
+    // assigning `active`, so a clear answered inside that gap reports the
+    // previous finished run — or none — and Run comes back to life with a race
+    // about to start behind it. A second press then sends the second START_RUN
+    // the latch exists to stop.
+    //
+    // The failed-send case is the same call and the same answer: a rejection
+    // does not prove non-delivery, so the message and the dead button are
+    // supposed to stay until the popup is reopened. An earlier version of this
+    // test asserted the opposite — that a clear should re-arm Run — which read
+    // as a fix for a stale plan line and was really a hole in the double-run
+    // guard.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
     await boot();
 
-    // A submit whose send fails: `pendingStart` and `sendFailed` both latch.
     sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
     fillCarForm();
     document.querySelector<HTMLButtonElement>('#run-btn')?.click();
     await vi.waitFor(() => {
       expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
     });
-    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
 
-    // The worker is back, and answers the clear with the state GET_STATE would.
+    // The worker answers the clear. The refusal list may update; the run state
+    // must not.
     sendMessageImpl = fakeBackground;
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-
     await vi.waitFor(() => {
-      expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
     });
-    expect(document.querySelector('#run-btn')?.textContent).toBe('Find the cheapest code');
-    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
+
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+    expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
   });
 
   it('fixes the Run caption when a clear proves the background is reachable', async () => {
