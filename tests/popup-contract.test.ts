@@ -250,6 +250,71 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
   });
 
+  it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
+    // The popup usually stays open across a run. Loaded once at boot,
+    // `ui.rejected` would still be empty afterwards and pressing Run again
+    // would re-race codes the vendor refused a moment ago — a real tab spent
+    // rediscovering a refusal, which is the one thing this feature avoids.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
+
+    // What the background would have written while the run was in flight.
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [{ vendor: 'national', code: '5666666', at: 1 }],
+    });
+    for (const listener of broadcastListeners) {
+      listener({
+        type: 'RUN_STATE',
+        state: {
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes: [],
+          finishedAt: Date.now(),
+        },
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/);
+    });
+  });
+
+  it('keeps the recovery button reachable when every code has been refused', async () => {
+    // The one state that needs "try them again" was the one that hid it:
+    // `renderRejectedNote` ran only on refreshPlan's success path, and an
+    // all-refused selection returns early.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    savedForm = {
+      category: 'car',
+      vendors: ['national'],
+      companies: ['ibm'],
+    };
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/No codes left to race/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+  });
+
   it('labels a company with a vendor it only reaches through alsoTryAs', async () => {
     // Reported from a loaded extension: "the codes-to-race list doesn't have
     // any that say National. It has ones that say avis or hertz or sixt and

@@ -852,6 +852,43 @@ describe('verifyResults', () => {
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it('does not read an inline script as the account header', async () => {
+    // Found in review, and a regression from the `innerText` fix: with no
+    // layout every text read falls back to `textContent`, which includes the
+    // source of every inline `<script>`. An analytics payload carrying an
+    // "Account Name" key is its own smallest element holding the phrase, with
+    // the rest of the script as its value — so a **retail** results page would
+    // have passed as a company rate, which is the exact failure this gate
+    // exists to prevent.
+    renderForm();
+    window.location.hash = '#/car_select';
+    const script = document.createElement('script');
+    // A data blob rather than executable source: realistic for an inline
+    // analytics payload, and jsdom runs a plain `text/javascript` tag.
+    script.type = 'application/json';
+    script.textContent = '{ "Account Name": "", "tier": "retail" }';
+    document.body.prepend(script, textNode('34 Results $ 74.00 / day'));
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('discount-missing');
+  });
+
+  it('does not read an inline script as the vendor refusing the code', async () => {
+    // The same root cause pointing the other way, and worse because the verdict
+    // is durable: a `code-rejected` is persisted and the code stops being raced
+    // at all. A page inlining its error catalogue would have retired every
+    // National code permanently and invisibly.
+    renderForm();
+    window.location.hash = '#/car_select';
+    const script = document.createElement('script');
+    script.type = 'application/json';
+    script.textContent = '{ "contractOffline": "this account number cannot be used online" }';
+    document.body.prepend(
+      script,
+      textNode('ACCOUNT NAME I B M CORP (USA) 34 Results $ 70.30 / day'),
+    );
+    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+  });
+
   it('does not accept the words "account name" with nothing beside them', async () => {
     // The label alone is ordinary sign-in furniture and could sit in a profile
     // menu on a page showing retail rates. Requiring a value beside it is what

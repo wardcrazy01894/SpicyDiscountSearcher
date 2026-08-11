@@ -1,6 +1,6 @@
 import { extract } from '../core/extract.js';
 import { FORM_DRIVERS } from '../core/drivers/index.js';
-import { DriverError } from '../core/form-driver.js';
+import { DriverError, visibleText } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
@@ -75,7 +75,14 @@ function wrongTrip(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>
     // empty page, find no rendered airport codes, and pass every Avis quote in
     // silence — a detector that has stopped working looks exactly like one with
     // nothing to report.
-    const text = document.body.innerText || document.body.textContent || '';
+    //
+    // And `visibleText` rather than `textContent` for that fallback, because
+    // `renderedCodes` only reads the first 400 characters. In document order
+    // those are an inline analytics script long before they are the trip
+    // summary — so the plain fallback would either find no codes at all, or
+    // take a `(TPA)` out of a JSON payload and discard a good quote as
+    // `wrong-trip`.
+    const text = document.body.innerText || visibleText(document.body);
     const { rendered, unexpected } = checkTrip(assignment.trip, text);
     if (!unexpected) return null;
     return `page shows ${rendered.join(', ')}, which is not the trip requested`;

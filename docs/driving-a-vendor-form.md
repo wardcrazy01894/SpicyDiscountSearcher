@@ -281,6 +281,29 @@ redirect target is the bare root; a locale split to `/en/` would put that $35
 back into the ranking with nothing on screen to say so. Either capture a working
 URL or make it unsearchable.
 
+## Reading a page that has no layout
+
+The single hardest bug in this whole exercise, and worth its own section because
+every driver will hit it.
+
+A probe tab lives in a **minimised window**, so nothing is rendered and
+`innerText` returns an empty _string_ — not `undefined`. A fallback written
+`innerText ?? textContent` therefore yields `''`, and every text-based lookup in
+a driver silently reads nothing: matching a suggestion, finding a button by its
+label, reading a date back. It survives review, unit tests (jsdom leaves
+`innerText` undefined, so `??` reaches `textContent`) and hand-testing (ad-hoc
+console scripts get written `a || b`, so the throwaway harness is _more_ robust
+than the shipped code).
+
+The fix is `||`, and then immediately a second problem: `textContent` includes
+the source of every inline `<script>`. A page shipping an error catalogue or an
+analytics payload will happily supply the exact phrase a check is looking for.
+Use `visibleText` from `form-driver.ts`, which walks text nodes and skips
+`script`, `style`, `noscript` and `template`.
+
+Timers are throttled to roughly once a second in that tab too, so a 250 ms poll
+costs a second of budget — measure a drive there, never in a visible tab.
+
 ## Before flipping `searchable: true`
 
 Landing a driver is not one change. All of these belong in it — National went

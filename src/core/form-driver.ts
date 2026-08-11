@@ -247,7 +247,49 @@ export function nudgeInput(el: HTMLInputElement): void {
 export function textOf(el: Element | null | undefined): string {
   if (!el) return '';
   const node = el as HTMLElement;
-  return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+  // `visibleText` rather than `textContent` for the fallback, so the empty
+  // `innerText` of a probe tab does not quietly promote script source into
+  // something a check will read as page text.
+  return (node.innerText || visibleText(node)).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Elements whose text a reader never sees.
+ *
+ * `textContent` includes the source of every inline `<script>`, and a probe tab
+ * has no layout so `innerText` is empty and every text read falls back to it.
+ * That turned two checks inside out: a page inlining an error catalogue
+ * containing "cannot be used online" would fail every National quote *and*
+ * persist the refusal, and a `"Account Name"` key in an inline analytics payload
+ * would satisfy the gate that exists to stop a retail page being reported as a
+ * company rate. Both are the kind of string an SPA ships inline as a matter of
+ * course.
+ */
+const UNRENDERED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
+
+/** Text nodes under `node`, skipping script source and one excluded subtree. */
+function collectText(node: Node, out: string[], exclude: Element | null): void {
+  if (exclude && node === exclude) return;
+  if (node.nodeType === 1 && UNRENDERED.has((node as Element).tagName)) return;
+  if (node.nodeType === 3) {
+    out.push(node.nodeValue ?? '');
+    return;
+  }
+  for (const child of node.childNodes) collectText(child, out, exclude);
+}
+
+/**
+ * What a reader would see under `root` — never markup, never script source.
+ *
+ * Use this rather than `textOf` for anything asked of a whole page or a large
+ * region. `textOf` prefers `innerText`, which is already reader-visible when the
+ * browser computes it, but in a probe tab it never does.
+ */
+export function visibleText(root: Element | null | undefined): string {
+  if (!root) return '';
+  const parts: string[] = [];
+  collectText(root, parts, null);
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -269,17 +311,9 @@ export function textOf(el: Element | null | undefined): string {
  */
 export function textOutside(root: Element | null, exclude: Element | null): string {
   if (!root) return '';
-  let out = '';
-  const walk = (node: Node): void => {
-    if (node === exclude) return;
-    if (node.nodeType === node.TEXT_NODE) {
-      out += ` ${node.nodeValue ?? ''}`;
-      return;
-    }
-    for (const child of node.childNodes) walk(child);
-  };
-  walk(root);
-  return out.replace(/\s+/g, ' ').trim();
+  const parts: string[] = [];
+  collectText(root, parts, exclude);
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /**

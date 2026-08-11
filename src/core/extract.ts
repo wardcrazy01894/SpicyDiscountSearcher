@@ -794,13 +794,48 @@ export interface Extraction {
   path: 'vendor-selectors' | 'generic-sweep';
 }
 
+/**
+ * Every container a vendor's selector list names, in the order it names them.
+ *
+ * `extract` tries each in turn and keeps the first that yields prices, which is
+ * what makes fixing `firstMatch` safe. Those narrow selectors had never matched
+ * anything — `main` won on document order — so making the list mean what it
+ * reads as promoted nine vendors' worth of *unexercised* guesses to
+ * load-bearing in one change. Only National's was measured against a live page.
+ *
+ * A container that matches but holds no prices used to be terminal: `extract`
+ * falls back to `doc.body` only when nothing matched at all, so a `.vehicle-list`
+ * that turned out to be a filter sidebar would have taken a working vendor from
+ * priced to `probe-empty`. Falling through costs one extra sweep and removes
+ * that whole class of regression.
+ */
+function containerRoots(doc: Document, selector: string | undefined): Element[] {
+  const roots: Element[] = [];
+  for (const one of (selector ?? '').split(',')) {
+    const trimmed = one.trim();
+    if (!trimmed) continue;
+    try {
+      const found = doc.querySelector(trimmed);
+      if (found && !roots.includes(found)) roots.push(found);
+    } catch {
+      continue; // A selector typo shouldn't take the whole extraction down.
+    }
+  }
+  return roots;
+}
+
 export function extract(doc: Document, vendor: VendorId): Extraction {
   const config = VENDOR_SELECTORS[vendor] ?? {};
-  const root = firstMatch(doc, config.container) ?? doc.body;
-  // No root at all: nothing ran, and the sweep is the honest default only
-  // because it is the branch that would have run.
-  if (!root) return { offers: [], path: 'generic-sweep' };
+  for (const root of containerRoots(doc, config.container)) {
+    const found = extractFrom(root, config);
+    if (found.offers.length > 0) return found;
+  }
+  // Nothing any named container could price. The sweep over the whole body is
+  // the honest default because it is the branch that would have run.
+  return doc.body ? extractFrom(doc.body, config) : { offers: [], path: 'generic-sweep' };
+}
 
+function extractFrom(root: Element, config: VendorSelectors): Extraction {
   const offerNodes = allMatches(root, config.offer);
   if (offerNodes.length > 0) {
     const offers: Offer[] = [];

@@ -357,13 +357,23 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
  * user — but enumerating the excluded ones here is what let this comment and
  * CLAUDE.md drift apart, so the rule is the specification.
  *
- * `form-fill`, `form-submit` and `code-rejected` join here now, and the reason is
- * the rule rather than the calendar: National is `searchable: true` with a
+ * `form-fill`, `form-submit`, `code-rejected` and `discount-missing` join here,
+ * and the reason is the rule rather than the calendar: National is `searchable: true` with a
  * registered driver, so a run really does route to code that emits all three,
  * and each is something only the page can witness — whether a field took a
  * value, whether a submission produced results, whether the vendor named the
- * account the code belongs to. They were held out while no *reachable* emitter
- * existed, because a code admitted early can only ever arrive forged.
+ * account the code belongs to, and whether the discount was on the answer. They
+ * were held out while no *reachable* emitter existed, because a code admitted
+ * early can only ever arrive forged.
+ *
+ * `code-rejected` carries a consequence the others do not, and it is worth
+ * stating beside the allowlist rather than only in `rejected-codes.ts`: it is
+ * **persisted**, so a script on one of the matched hosts can retire a code from
+ * future runs. That is a deliberate trade — the alternative is re-racing a
+ * refusal every run — and it is bounded by `MAX_ENTRIES`, visible in the popup
+ * and clearable in one click. It is also the first page-influenced state this
+ * extension keeps, which is why the recording is restricted to the vendor's own
+ * sentence and never to anything we merely inferred.
  */
 const PROBE_FAILURES = new Set<QuoteFailure>([
   'extract-threw',

@@ -373,6 +373,11 @@ function refreshPlan(): void {
       : 'No codes match this selection.';
     planSummary.classList.add('is-warning');
     runBtn.disabled = true;
+    // Before the early return, not after it. `renderRejectedNote` used to live
+    // only on the success path below, so "try them again" was hidden in exactly
+    // the state that needs it — every candidate refused, nothing to race, and
+    // the one recovery control suppressed.
+    renderRejectedNote();
     return;
   }
   // Not unconditionally: refreshPlan fires on every vendor chip, company
@@ -1201,7 +1206,19 @@ companySearch.addEventListener('input', renderCompanyList);
 maxCodesInput.addEventListener('input', refreshPlan);
 
 chrome.runtime.onMessage.addListener((message: StateMessage) => {
-  if (message.type === 'RUN_STATE') renderRun(message.state);
+  if (message.type !== 'RUN_STATE') return;
+  renderRun(message.state);
+  // A run that has just finished may have refused codes, and the popup often
+  // stays open across one. Without this reload `ui.rejected` is whatever boot
+  // saw, so pressing Run again immediately re-races codes the vendor refused a
+  // moment ago — spending a real tab to rediscover a refusal, which is the one
+  // thing remembering them exists to avoid.
+  if (message.state?.finishedAt) {
+    void loadRejected(chrome.storage.local).then((entries) => {
+      ui.rejected = entries;
+      refreshPlan();
+    });
+  }
 });
 
 async function main(): Promise<void> {
