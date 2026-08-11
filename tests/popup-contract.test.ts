@@ -61,6 +61,19 @@ let savedForm: Record<string, unknown> | null = null;
 /** Codes a vendor has already refused, as the background would have stored them. */
 let savedRejected: Array<{ vendor: string; code: string; at: number }> | null = null;
 
+/**
+ * How long *boot's* storage reads take.
+ *
+ * Zero for every test but one. `main()` is a chain of awaited reads, so slowing
+ * them is what holds open the window between the module registering its
+ * RUN_STATE listener and boot having a selection to draw. Only the first two —
+ * the ones `main` itself awaits — so a broadcast arriving inside that window
+ * gets a *fast* read and renders promptly, which is what puts the assertion
+ * safely between the two events rather than guessing at a gap.
+ */
+let getDelayMs = 0;
+let slowReadsLeft = 0;
+
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
@@ -69,7 +82,15 @@ function installChrome(): void {
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
-        get: () => Promise.resolve(Object.fromEntries(local)),
+        get: () => {
+          const slow = slowReadsLeft > 0;
+          if (slow) slowReadsLeft -= 1;
+          return slow
+            ? new Promise((resolve) =>
+                setTimeout(() => resolve(Object.fromEntries(local)), getDelayMs),
+              )
+            : Promise.resolve(Object.fromEntries(local));
+        },
         set: (items: Record<string, unknown>) => {
           for (const [k, v] of Object.entries(items)) local.set(k, v);
           return Promise.resolve();
@@ -95,6 +116,8 @@ beforeEach(() => {
   broadcastListeners = [];
   savedForm = null;
   savedRejected = null;
+  getDelayMs = 0;
+  slowReadsLeft = 0;
   sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
@@ -477,6 +500,84 @@ describe('the popup half of the double-run guard', () => {
     });
     await broadcastFinishedRun();
     await vi.waitFor(() => expect(row()).not.toBe(before));
+  });
+
+  it('notices a same-sized change to the refused set', async () => {
+    // `loadRejected` deliberately tolerates whatever an older build wrote and
+    // does not dedupe, so counting entries is not the same as comparing sets: a
+    // stored `[A, A]` against a held `[A, B]` matches on length and on every
+    // stored key being one we already had. B's codes would stay excluded from
+    // the chip counts and the company list until the popup was reopened.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: 'XZ15J55', at: 1 },
+    ];
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const count = () =>
+      [...document.querySelectorAll('#vendor-chips .chip')]
+        .find((el) => (el.textContent ?? '').includes('National'))
+        ?.querySelector('.count')?.textContent;
+    expect(count()).toBe('17');
+
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [
+        { vendor: 'national', code: '5666666', at: 1 },
+        { vendor: 'national', code: '5666666', at: 1 },
+      ],
+    });
+    await broadcastFinishedRun();
+
+    await vi.waitFor(() => expect(count()).toBe('18'));
+  });
+
+  it('draws nothing when a run finishes before boot has a selection', async () => {
+    // The RUN_STATE listener is registered at module scope, so a broadcast can
+    // land while `main()` is still awaiting storage. Moving the default-fill out
+    // of the render made that reachable: the handler would draw every chip
+    // unticked and print "Pick at least one vendor" under a user who has several
+    // picked, until `setCategory` corrected it a moment later.
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    // Only boot's *first* read is slowed, and generously. Slowing two of them
+    // does not work and the reason is the whole shape of this test: the reads
+    // interleave by time rather than by count, so the broadcast's own read takes
+    // the second slow slot and the handler renders *after* boot — which is
+    // exactly the state this is trying to catch the popup not being in, so the
+    // mutant passes. One slow read leaves the handler's read fast, so it renders
+    // within milliseconds while boot is still 600ms away.
+    getDelayMs = 600;
+    slowReadsLeft = 1;
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+
+    const started = import('../src/popup/popup.js');
+    await vi.waitFor(() => expect(broadcastListeners.length).toBeGreaterThan(0));
+    await broadcastFinishedRun();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Mid-boot: nothing drawn is the correct amount to draw. Either state below
+    // would be a lie about a selection that has been restored but not applied.
+    // `renderRun` ran, so the listener really did reach the branch under test
+    // rather than throwing on the way — which would pass these two for free.
+    expect(document.querySelector('#results')?.hasAttribute('hidden')).toBe(false);
+    const chips = () => [...document.querySelectorAll<HTMLInputElement>('#vendor-chips input')];
+    expect(chips().some((box) => !box.checked)).toBe(false);
+    expect(document.querySelector('#company-list')?.textContent ?? '').not.toMatch(
+      /Pick at least one vendor/,
+    );
+
+    // And boot still lands, with the saved selection — so this test is watching
+    // a popup that works, not one wedged behind a slow read.
+    await started;
+    await vi.waitFor(() => expect(chips().length).toBeGreaterThan(0));
+    expect(chips().filter((box) => box.checked)).toHaveLength(1);
   });
 
   it('labels a company with a vendor it only reaches through alsoTryAs', async () => {

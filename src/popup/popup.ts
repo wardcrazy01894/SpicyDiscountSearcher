@@ -118,6 +118,14 @@ const ui: UiState = {
   rejected: [],
 };
 
+/**
+ * Whether `main()` has established a selection to draw.
+ *
+ * The RUN_STATE listener is registered at module scope, so a broadcast can
+ * arrive before `restoreForm` and `setCategory` have run.
+ */
+let booted = false;
+
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
 
@@ -164,6 +172,14 @@ function money(amount: number, currency: string): string {
  * had just cleared it, reverting a choice they made and leaving `ui.vendors`
  * disagreeing with the saved form until the next save. Filling belongs to the
  * moments a selection is established, not to drawing one.
+ *
+ * Which is a narrower guarantee than "an untick survives", and deliberately so.
+ * Clicking the already-active category tab still re-fills, and so does
+ * reopening the popup, because `restoreForm` reads a saved `vendors: []` as a
+ * selection and this then replaces it. Both are the behaviour that shipped
+ * before any of this; an empty selection is read as "no preference" rather than
+ * "race nothing", and making it persist is a different decision from stopping a
+ * re-render reverting it.
  */
 function defaultVendorsIfEmpty(): void {
   if (ui.vendors.size > 0) return;
@@ -195,7 +211,10 @@ function renderVendorChips(): void {
       // chip said 19 while the run did 14, because the plan learned to skip
       // refused codes and the count had not.
       const raceable = countCodesFor(vendor.id, refused);
-      const total = countCodesFor(vendor.id);
+      // Each call is a full pass over every record in the database, and with
+      // nothing refused — the overwhelmingly common case — the second one is
+      // guaranteed to return what the first did.
+      const total = refused.size === 0 ? raceable : countCodesFor(vendor.id);
       const count = document.createElement('span');
       count.className = 'count';
       count.textContent = String(raceable);
@@ -1279,11 +1298,22 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
   // thing remembering them exists to avoid.
   if (message.state?.finishedAt) {
     void loadRejected(chrome.storage.local).then((entries) => {
+      // Both directions, not `length` plus one-way containment. `loadRejected`
+      // does not dedupe and accepts whatever an older build wrote, so a stored
+      // `[A, A]` against a held `[A, B]` compares equal on both of those and
+      // leaves B's codes excluded from the counts until the popup is reopened.
       const before = rejectionSet(ui.rejected);
-      const changed =
-        entries.length !== ui.rejected.length ||
-        entries.some((entry) => !before.has(rejectionKey(entry.vendor, entry.code)));
+      const after = rejectionSet(entries);
+      const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
       ui.rejected = entries;
+      // Before boot has established a selection there is nothing to preserve and
+      // no selection to draw: `restoreForm` and `setCategory` have not run, so
+      // `ui.vendors` is empty and rendering here would draw every chip unticked
+      // under a user who has several picked, plus "Pick at least one vendor".
+      // It self-corrects when `setCategory` renders a moment later, which makes
+      // it a flicker rather than a stuck state — and one this listener could not
+      // produce until the default-fill moved out of the render.
+      if (!booted) return;
       // Only when a refusal was actually recorded. Both renders are a full
       // `replaceChildren`, and a run finishes asynchronously with whatever the
       // user is doing — rebuilding the company list under someone mid-click
@@ -1313,6 +1343,7 @@ async function main(): Promise<void> {
   ui.rejected = await loadRejected(chrome.storage.local);
   await restoreForm();
   setCategory(ui.category);
+  booted = true;
 
   const totalCodes = vendorsFor('car')
     .concat(vendorsFor('hotel'))
