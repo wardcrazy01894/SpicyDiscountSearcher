@@ -165,12 +165,21 @@ let writes: Promise<void> = Promise.resolve();
 let queued = 0;
 
 /**
- * How many writes are outstanding.
+ * How many links are queued and not yet finished *or abandoned*.
  *
  * The service worker bounds its wait by how long the chain can honestly take,
  * and every function here returns the *tail* of that chain — so a caller
  * counting its own promises sees one and budgets for one write, however many
  * are queued in front of it.
+ *
+ * "Or abandoned" is the honest part of the name. A link that timed out is
+ * dropped from this count while its `storage.set` may still be outstanding, so
+ * under exactly the slow-storage conditions the scaling exists for this can
+ * read low and a waiter can size its bound short. Counted on real completion
+ * instead, a single hung write would pin the number up for the life of the
+ * worker and every later bound would sit at the ceiling — a permanent cost for
+ * a transient one. The waiter is bounded either way; only its generosity
+ * moves.
  */
 export function pendingWrites(): number {
   return queued;

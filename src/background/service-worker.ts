@@ -144,7 +144,20 @@ async function settleWrites(
     }, waitMs);
   });
   try {
-    await Promise.race([Promise.all(pending).then(() => undefined), bound]);
+    // `.catch` even though no body can reject today — that is a property of
+    // the three callers, not of this function, and one of them hands its
+    // promise straight in with no catch of its own. A throw here skips
+    // `sendResponse` (the popup then waits on a port that never answers, and
+    // its retry only fires on a rejection) or skips `publish` (the finished run
+    // is never broadcast and the popup sits on "Racing codes…" with its window
+    // already closed).
+    await Promise.race([
+      Promise.all(pending).then(
+        () => undefined,
+        () => undefined,
+      ),
+      bound,
+    ]);
   } finally {
     // Or the worker is held up for the length of the bound on every healthy
     // run, which is the sort of thing that makes a timeout worse than no
@@ -1174,11 +1187,13 @@ chrome.runtime.onMessage.addListener(
         }
         case 'CLEAR_REJECTED': {
           // A popup message, and the first destructive one, so it checks who is
-          // asking. `sender.tab` is set only for a content script, and this
-          // extension runs content scripts on six vendor hosts — a page there
-          // could otherwise wipe the one piece of state this extension
-          // deliberately remembers, and the cost of losing it is real tabs on
-          // real vendor sites re-asking questions already answered.
+          // asking. `sender.tab` is set for a content script — this extension
+          // runs them on six vendor hosts, and a page there could otherwise
+          // wipe the one piece of state this extension deliberately remembers,
+          // at a cost of real tabs on real vendor sites re-asking questions
+          // already answered. It is also set for an extension page loaded *in a
+          // tab*, which would be refused too; nothing opens the popup that way
+          // today, and "came from a tab" is the honest reading of the test.
           //
           // Deliberately only here. START_RUN and CANCEL_RUN are equally
           // unguarded and equally reachable, which is worth fixing and is not

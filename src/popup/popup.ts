@@ -17,7 +17,6 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
-  WRITE_WAIT_CEILING_MS,
   loadRejected,
   rejectionKey,
   rejectionSet,
@@ -145,6 +144,17 @@ const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen th
  * replying normally while its own bounded wait gave up on a slow write — in the
  * last of which the background was reached and is still going to clear them.
  * "Not yet" is the only thing true of all three.
+ *
+ * "Try again" is also the whole recovery, and that is deliberate. There used to
+ * be a 31s `setTimeout` here that re-read storage in case the clear landed
+ * late — carefully derived to outlast the worker's own ceiling, and almost
+ * entirely inert: a browser-action popup is destroyed the moment it loses
+ * focus, taking its timers with it, so in ordinary use (press the button, look
+ * at the plan, click away) it never fired. What actually corrects a late clear
+ * is `main()` re-reading storage the next time the popup opens, and
+ * `clearAttempt` living only in memory means the message does not survive to
+ * outlast its own list. Crediting a timer for that was the mechanism this
+ * comment described and the environment did not run.
  */
 const CLEAR_FAILED_MESSAGE = 'Those codes have not been cleared yet. Try again in a moment.';
 
@@ -643,51 +653,6 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // a refusal that postdates it.
   if (attempted !== null && !ui.clearFailed) clearAttempt = null;
   return entries;
-}
-
-/**
- * How long after a clear reports failure to look once more.
- *
- * Derived from the **ceiling**, not from the per-write bound. The first version
- * of this used `WRITE_TIMEOUT_MS + 1s` and cited "the worker's per-write bound"
- * — but the worker waits `WRITE_TIMEOUT_MS x depth` capped by the ceiling, so
- * with a run's refusals queued ahead of the clear it can reply having waited
- * far longer than one write. The single recheck then fired while the clear was
- * still queued, `ui.clearFailed` stayed true with nothing left to correct it,
- * and the popup went on claiming codes were not cleared when they had been —
- * the exact outcome that comment said could not happen, reached through the
- * depth scaling instead of through the constant it named.
- *
- * Still not a guarantee, and the message is written for that: a chain longer
- * than the ceiling outlives this too, and "try again in a moment" is what the
- * user is told. One retry, not a poll — if the clear really did not happen the
- * message is on screen and the button is right there.
- */
-const RECHECK_CLEAR_MS = WRITE_WAIT_CEILING_MS + 1_000;
-
-/**
- * Re-read after a clear reported failure, in case it landed late.
- *
- * Judging the flag is `reloadRejected`'s job, not this one's — it derives it
- * from `clearAttempt` on every read, which is what stopped this function, and
- * then the RUN_STATE listener, from erasing a warning while every code it named
- * was still refused. This one only decides how much to redraw.
- */
-async function recheckClear(): Promise<void> {
-  const prior = rejectionSet(ui.rejected);
-  const entries = await reloadRejected();
-  if (!entries) return;
-  // Only when the list actually moved. Both renders are a full
-  // `replaceChildren`, and this one fires long after the fact with no action of
-  // the user's — the same reason the RUN_STATE listener gates its renders
-  // rather than rebuilding under whatever they are doing.
-  const after = rejectionSet(entries);
-  const changed = prior.size !== after.size || [...after].some((key) => !prior.has(key));
-  if (changed) {
-    renderVendorChips();
-    renderCompanyList();
-  }
-  refreshPlan();
 }
 
 /**
@@ -1545,16 +1510,18 @@ rejectedClear.addEventListener('click', () => {
   // Judged against the refusals this popup *knew about*, so a new one recorded
   // in the meantime does not read as a failed clear.
   clearAttempt = { keys: rejectionSet(ui.rejected), at: Date.now() };
+  // Disabled synchronously, like Run. The worker's wait on the write chain can
+  // hold this reply for the length of the ceiling, and nothing else here says
+  // anything is happening — half a minute of silence is what produces repeat
+  // clicking, and each extra press enqueues another link (raising the depth
+  // every later waiter sizes its own bound from) and overwrites `clearAttempt`,
+  // so the first press's answer would be judged against the last press's list.
+  rejectedClear.disabled = true;
+  const finish = (): void => {
+    rejectedClear.disabled = false;
+  };
   void send({ type: 'CLEAR_REJECTED' })
     .then(async (reply) => {
-      // A reply is proof the background is reachable — stronger proof than the
-      // RUN_STATE broadcast `sendFailed`'s own docstring accepts. This path
-      // deliberately never calls `applyReply`, since `renderRun(null)` would
-      // hide a finished run's results, and in not doing so it also never
-      // retired this flag: after a clear that demonstrably reached the worker,
-      // `refreshPlan` still took its early return and the plan line went on
-      // saying "Could not reach the extension background", with Run disabled,
-      // beside chips that had already redrawn with the restored counts.
       // `applyReply`, not a hand-rolled subset of it — patching up whatever
       // was visibly wrong took two rounds and still missed `pendingStart`. The
       // reason this path used to avoid it was that a null state hid a finished
@@ -1575,14 +1542,8 @@ rejectedClear.addEventListener('click', () => {
       return reloadRejected();
     })
     .then((entries) => {
-      // Null means a later read is already authoritative — it has stored its own
-      // answer and rendered from it, so there is nothing to draw here. The
-      // recheck below is scheduled either way, and deliberately: a run
-      // finishing as the button is pressed is the collision `rejectedRead`
-      // exists for, so returning before the schedule dropped the retry in
-      // exactly the case that motivates it. The later read derives
-      // `ui.clearFailed` the same way this one would have, so the condition is
-      // still the right one to test.
+      // Null means a later read is already authoritative — it has stored its
+      // own answer and rendered from it, so there is nothing to draw here.
       if (entries) {
         // Chips and the company list carry the count too, so `refreshPlan`
         // alone would leave them showing the reduced numbers after putting the
@@ -1591,35 +1552,17 @@ rejectedClear.addEventListener('click', () => {
         renderCompanyList();
         refreshPlan();
       }
-      // One more look, because a clear can land *after* it was reported failed.
-      // The worker's wait is bounded, so a slow write gets an ordinary reply
-      // with the clear still queued — and this handler's own comment above
-      // rejects the null-reply-is-failure reading precisely because it "would
-      // leave `ui.rejected` populated for the whole session, filtering out
-      // codes the store no longer refuses". The timeout path reached that same
-      // outcome by a different road, with nothing to correct it but the user
-      // pressing the button again.
-      //
-      // Unconditional, and both halves of that are load-bearing. Returning
-      // early on a superseded read dropped the retry in exactly the collision
-      // `rejectedRead` exists for — a run finishing as the button is pressed.
-      // And testing `ui.clearFailed` here is no better: when this read *is*
-      // superseded, the read that overtook it may not have resolved yet, so the
-      // flag it will derive is not readable at this point. A spare storage read
-      // half a minute after a clear costs nothing, and `recheckClear` redraws
-      // only if the list moved.
-      setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
+      finish();
     })
     .catch(() => {
-      // A throw anywhere above skips the renders *and* the one self-healing
-      // retry, leaving the popup on its pre-clear counts with nothing left to
-      // correct them — and reports it as an unhandled rejection with no
-      // message. `applyReply` is the reachable thrower: the state it renders
-      // comes from `chrome.storage.session`, which an older build may have
-      // written, and `renderRun` walks it unguarded.
+      // A throw anywhere above skips the renders and leaves the popup on its
+      // pre-clear counts, reported as an unhandled rejection with no message.
+      // `applyReply` is the reachable thrower: the state it renders comes from
+      // `chrome.storage.session`, which an older build may have written, and
+      // `renderRun` walks it unguarded.
       ui.clearFailed = true;
       renderRejectedNote();
-      setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
+      finish();
     });
 });
 

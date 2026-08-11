@@ -644,43 +644,6 @@ describe('the popup half of the double-run guard', () => {
     expect(reported).toBe(hiltonCompanies + 1 - 60);
   });
 
-  it('looks again after reporting a clear failed, in case it landed late', async () => {
-    // The worker's wait on the write is bounded, so a slow `chrome.storage` gets
-    // an ordinary reply back with the clear still queued. Reported as a failure
-    // and never re-read, that leaves `ui.rejected` populated for the session —
-    // filtering out codes the store no longer refuses, which is the very
-    // outcome this handler's null-reply reasoning exists to avoid.
-    vi.useFakeTimers();
-    try {
-      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-      installChrome();
-      // A worker that replies before its own write has landed.
-      sendMessageImpl = (message) => {
-        if (message.type === 'CLEAR_REJECTED') {
-          setTimeout(() => void fakeBackground(message), 3_000);
-          return Promise.resolve({ type: 'RUN_STATE', state: null });
-        }
-        return fakeBackground(message);
-      };
-      await import('../src/popup/popup.js');
-      await vi.advanceTimersByTimeAsync(50);
-
-      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-      await vi.advanceTimersByTimeAsync(50);
-      // Reported failed, correctly — storage really did still hold the code.
-      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
-
-      // The clear lands, and the popup looks again of its own accord. Past the
-      // recheck, which is derived from the worker's *ceiling* rather than its
-      // per-write bound — the worker can legitimately have waited that long
-      // with a run's refusals queued ahead of the clear.
-      await vi.advanceTimersByTimeAsync(40_000);
-      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('keeps saying a clear failed when the recheck finds it still has', async () => {
     // `reloadRejected` sets `ui.clearFailed = false` unconditionally, on the
     // stated understanding that its caller sets it again from what it read.
@@ -804,38 +767,97 @@ describe('the popup half of the double-run guard', () => {
     );
   });
 
-  it('still schedules the recheck when rendering the reply throws', async () => {
-    // The chain had no `.catch`, so a throw skipped the renders *and* the one
-    // self-healing retry, leaving the popup on its pre-clear counts with
-    // nothing left to correct them — reported as an unhandled rejection with no
-    // message. `applyReply` is the reachable thrower: the state it renders
+  it('disables "try them again" while the clear is in flight', async () => {
+    // The worker's wait on the write chain can hold this reply for the length
+    // of its ceiling, and nothing else here says anything is happening — half a
+    // minute of silence is what produces repeat clicking. Each extra press
+    // enqueues another link, raising the depth every later waiter sizes its own
+    // bound from, and overwrites `clearAttempt`, so the first press's answer
+    // would be judged against the last press's list. Same shape as the
+    // synchronous latch on Run.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        return new Promise((resolve) => {
+          answer = () => void fakeBackground(message).then(resolve);
+        });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+
+    const button = () => document.querySelector<HTMLButtonElement>('#rejected-clear')!;
+    expect(button().disabled).toBe(false);
+    button().click();
+    // Synchronously, not when the reply lands — that is the whole window.
+    expect(button().disabled).toBe(true);
+
+    answer?.();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+    expect(sentMessages.filter((m) => m.type === 'CLEAR_REJECTED')).toHaveLength(1);
+  });
+
+  it('corrects a late clear when the popup is next opened', async () => {
+    // What actually recovers a clear that landed after being reported failed.
+    // A 31s `setTimeout` used to claim that job and could not do it: a
+    // browser-action popup is destroyed the moment it loses focus, taking its
+    // timers with it, so in ordinary use it never fired. `main()` re-reading
+    // storage is the mechanism, and `clearAttempt` living only in memory is
+    // what stops the message outliving the list it was about.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    // A worker that answers without having cleared yet.
+    sendMessageImpl = (message) =>
+      message.type === 'CLEAR_REJECTED'
+        ? Promise.resolve({ type: 'RUN_STATE', state: null })
+        : fakeBackground(message);
+    await boot();
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
+
+    // The clear lands after the fact, and the popup is reopened.
+    savedRejected = [];
+    vi.resetModules();
+    document.body.innerHTML = BODY;
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+  });
+
+  it('says the clear did not happen when rendering the reply throws', async () => {
+    // The chain had no `.catch`, so a throw skipped the renders and left the
+    // popup on its pre-clear counts — reported as an unhandled rejection with
+    // no message. `applyReply` is the reachable thrower: the state it renders
     // comes from `chrome.storage.session`, which an older build may have
     // written, and `renderRun` walks it unguarded.
-    vi.useFakeTimers();
-    try {
-      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-      installChrome();
-      sendMessageImpl = (message) => {
-        if (message.type === 'CLEAR_REJECTED') {
-          setTimeout(() => void fakeBackground(message), 1_000);
-          // A state shaped like something an older build wrote.
-          return Promise.resolve({ type: 'RUN_STATE', state: { plan: null, quotes: null } });
-        }
-        return fakeBackground(message);
-      };
-      await import('../src/popup/popup.js');
-      await vi.advanceTimersByTimeAsync(50);
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        // A state shaped like something an older build wrote.
+        return Promise.resolve({ type: 'RUN_STATE', state: { plan: null, quotes: null } });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
 
-      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-      await vi.advanceTimersByTimeAsync(200);
-
-      // The recheck still fires, and the clear that landed behind it is picked
-      // up rather than being lost with the exception.
-      await vi.advanceTimersByTimeAsync(40_000);
-      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
+    // And the button comes back, or the user cannot take the advice.
+    expect(document.querySelector<HTMLButtonElement>('#rejected-clear')?.disabled).toBe(false);
   });
 
   it('does not let stranded rows crowd out every company that can race', async () => {
@@ -894,49 +916,6 @@ describe('the popup half of the double-run guard', () => {
     const note = document.querySelector('#rejected-note')?.textContent ?? '';
     expect(note).toMatch(/1 code has been refused/);
     expect(note).not.toMatch(/not been cleared yet/);
-  });
-
-  it('still schedules the recheck when a finishing run supersedes the clear’s read', async () => {
-    // The collision `rejectedRead` exists for — a run finishing as the button
-    // is pressed — made the clear's own read return null, and the handler
-    // returned on that *before* scheduling the recheck. So the one case that
-    // motivates the counter was the one case that lost the retry: the later
-    // read still derives `clearFailed`, the note says "not been cleared yet",
-    // and nothing was left to correct it.
-    vi.useFakeTimers();
-    try {
-      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-      installChrome();
-      // The worker replies but its write is still queued, so the clear looks
-      // failed; it lands a little later.
-      sendMessageImpl = (message) => {
-        if (message.type === 'CLEAR_REJECTED') {
-          setTimeout(() => void fakeBackground(message), 3_000);
-          return Promise.resolve({ type: 'RUN_STATE', state: null });
-        }
-        return fakeBackground(message);
-      };
-      await import('../src/popup/popup.js');
-      await vi.advanceTimersByTimeAsync(50);
-
-      // Slow the reads so the clear's own read is still in flight when the
-      // run finishes and issues a later one, which is what supersedes it.
-      getDelayMs = 200;
-      slowReadsLeft = 4;
-      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-      await vi.advanceTimersByTimeAsync(20);
-      for (const listener of broadcastListeners) {
-        listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
-      }
-      await vi.advanceTimersByTimeAsync(600);
-      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
-
-      // The recheck must still have been scheduled.
-      await vi.advanceTimersByTimeAsync(40_000);
-      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('does not re-arm Run from a clear while a START_RUN is outstanding', async () => {
