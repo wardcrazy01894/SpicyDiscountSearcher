@@ -112,6 +112,35 @@ describe('textOf', () => {
   it('is empty rather than throwing for a missing element', () => {
     expect(textOf(null)).toBe('');
   });
+
+  it('falls back to textContent when innerText is an empty string', () => {
+    // The bug that cost a day, and the reason nothing caught it. `innerText` is
+    // defined in terms of rendered layout, and a probe tab lives in a minimised
+    // window that has none — measured on National, every suggestion button
+    // returned `innerText === ""` while `textContent` held the airport name.
+    // Written with `??` this returned '', so the driver matched none of
+    // seventeen good options and reported that the autocomplete never answered.
+    //
+    // jsdom leaves `innerText` undefined, so `??` reaches `textContent` here and
+    // the old code passed. Defining it explicitly is what makes this test model
+    // a browser rather than a DOM shim.
+    const el = document.createElement('button');
+    el.textContent = 'Philadelphia International Airport (PHL)';
+    Object.defineProperty(el, 'innerText', { value: '', configurable: true });
+
+    expect(textOf(el)).toBe('Philadelphia International Airport (PHL)');
+    expect(hasToken(textOf(el), 'PHL')).toBe(true);
+  });
+
+  it('still prefers innerText when the browser has something to say', () => {
+    // Not a blanket switch to textContent: `innerText` collapses a rendered
+    // summary to one line, which `verify-trip.ts` depends on, and it omits text
+    // the page is hiding.
+    const el = document.createElement('div');
+    el.textContent = 'hidden and visible';
+    Object.defineProperty(el, 'innerText', { value: 'visible', configurable: true });
+    expect(textOf(el)).toBe('visible');
+  });
 });
 
 describe('waitFor', () => {

@@ -223,15 +223,31 @@ export function nudgeInput(el: HTMLInputElement): void {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-/** Layout-aware where the browser offers it, `textContent` where it does not.
+/**
+ * Layout-aware where the browser offers it, `textContent` where it does not.
  *
- * jsdom implements only the latter, and a driver that read `innerText` alone
- * would be untestable — which is the same trap `verify-trip.ts` documents
- * falling into. */
+ * **The fallback must trigger on an empty string, not only on null**, and that
+ * distinction cost a day. `innerText` is defined in terms of rendered layout,
+ * and a probe tab lives in a minimised window where there is none: measured on
+ * National, every suggestion button returned `innerText === ""` while
+ * `textContent` held "Philadelphia International Airport (PHL)". Written with
+ * `??`, this returned the empty string — so the driver sat in front of
+ * seventeen perfectly good options, matched none of them, and timed out saying
+ * the autocomplete had never answered.
+ *
+ * It survived every check because it is invisible from outside a probe tab. The
+ * ad-hoc scripts used to drive the live site all wrote `a || b`, so the
+ * throwaway harness was more robust than the shipped code and could not
+ * reproduce the bug; jsdom leaves `innerText` undefined, so `??` reaches
+ * `textContent` there and the unit tests were green too.
+ *
+ * `innerText` is still preferred when it has anything to say — it is what
+ * renders a summary as one line, which `verify-trip.ts` depends on.
+ */
 export function textOf(el: Element | null | undefined): string {
   if (!el) return '';
   const node = el as HTMLElement;
-  return (node.innerText ?? node.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
 /**

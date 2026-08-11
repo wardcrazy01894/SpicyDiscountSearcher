@@ -68,7 +68,14 @@ function wrongTrip(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>
     // `textContent` is the fallback because jsdom implements only the latter,
     // which is what made this check untestable — and therefore untested — when
     // it was first written.
-    const text = document.body.innerText ?? document.body.textContent ?? '';
+    //
+    // `||` rather than `??`, for the reason `textOf` records at length: a probe
+    // tab is in a minimised window with no layout, where `innerText` can be an
+    // empty *string* rather than undefined. With `??` this check would read an
+    // empty page, find no rendered airport codes, and pass every Avis quote in
+    // silence — a detector that has stopped working looks exactly like one with
+    // nothing to report.
+    const text = document.body.innerText || document.body.textContent || '';
     const { rendered, unexpected } = checkTrip(assignment.trip, text);
     if (!unexpected) return null;
     return `page shows ${rendered.join(', ')}, which is not the trip requested`;
