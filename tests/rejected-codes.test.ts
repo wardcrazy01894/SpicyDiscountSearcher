@@ -192,6 +192,48 @@ describe('recordRejected', () => {
     }
   });
 
+  it('does not let an abandoned refusal drop the one that overtook it', async () => {
+    // The lost update this queue exists to prevent, arriving through the
+    // timeout added to stop the queue wedging. A's read stalls past the bound,
+    // the chain moves on, B reads without A and writes `[B]` — then A wakes
+    // holding its pre-B list and writes it back, dropping B. The `clears` guard
+    // does not see this: no clear is involved.
+    vi.useFakeTimers();
+    try {
+      const store = fakeStore();
+      let releaseRead: (() => void) | undefined;
+      let stallNextRead = true;
+      const stalling = {
+        ...store,
+        get: (key: string) => {
+          if (!stallNextRead) return store.get(key);
+          stallNextRead = false;
+          return new Promise<Record<string, unknown>>((resolve) => {
+            releaseRead = () => void store.get(key).then(resolve);
+          });
+        },
+      };
+
+      const first = recordRejected(stalling, 'national', 'A', 1);
+      const second = recordRejected(stalling, 'national', 'B', 2);
+      // A is abandoned mid-read; B runs and lands.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await second;
+      expect((await loadRejected(store)).map((e) => e.code)).toEqual(['B']);
+
+      // A's read finally returns, holding the list from before B.
+      releaseRead?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+
+      // B survives. Losing A is the accepted cost of the timeout; losing B —
+      // a refusal that was recorded successfully — is not.
+      expect((await loadRejected(store)).map((e) => e.code)).toEqual(['B']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the same code at two vendors apart', async () => {
     // Enterprise files the codes National honours, so the same string can be
     // refused at one brand and fine at another.

@@ -785,6 +785,49 @@ describe('the popup half of the double-run guard', () => {
     expect(note).not.toMatch(/not been cleared yet/);
   });
 
+  it('still schedules the recheck when a finishing run supersedes the clear’s read', async () => {
+    // The collision `rejectedRead` exists for — a run finishing as the button
+    // is pressed — made the clear's own read return null, and the handler
+    // returned on that *before* scheduling the recheck. So the one case that
+    // motivates the counter was the one case that lost the retry: the later
+    // read still derives `clearFailed`, the note says "not been cleared yet",
+    // and nothing was left to correct it.
+    vi.useFakeTimers();
+    try {
+      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+      installChrome();
+      // The worker replies but its write is still queued, so the clear looks
+      // failed; it lands a little later.
+      sendMessageImpl = (message) => {
+        if (message.type === 'CLEAR_REJECTED') {
+          setTimeout(() => void fakeBackground(message), 3_000);
+          return Promise.resolve({ type: 'RUN_STATE', state: null });
+        }
+        return fakeBackground(message);
+      };
+      await import('../src/popup/popup.js');
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Slow the reads so the clear's own read is still in flight when the
+      // run finishes and issues a later one, which is what supersedes it.
+      getDelayMs = 200;
+      slowReadsLeft = 4;
+      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+      await vi.advanceTimersByTimeAsync(20);
+      for (const listener of broadcastListeners) {
+        listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+      }
+      await vi.advanceTimersByTimeAsync(600);
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+
+      // The recheck must still have been scheduled.
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('re-arms Run after a clear when a failed START_RUN had disabled it', async () => {
     // The state the hand-rolled version of this kept missing. A START_RUN whose
     // send rejects sets `pendingStart` *and* `sendFailed`; clearing only the

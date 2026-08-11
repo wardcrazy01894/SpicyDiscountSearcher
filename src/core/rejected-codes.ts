@@ -170,15 +170,22 @@ export function pendingWrites(): number {
   return queued;
 }
 
-function serialise(write: () => Promise<void>): Promise<void> {
+function serialise(write: (abandoned: () => boolean) => Promise<void>): Promise<void> {
   queued += 1;
   const bounded = async (): Promise<void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The queue moved on without this link. Anything it read before that point
+    // describes a state later writes have already replaced, so a body that
+    // wakes up holding one must not write it back.
+    let gaveUp = false;
     try {
       await Promise.race([
-        write(),
+        write(() => gaveUp),
         new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, WRITE_TIMEOUT_MS);
+          timer = setTimeout(() => {
+            gaveUp = true;
+            resolve();
+          }, WRITE_TIMEOUT_MS);
         }),
       ]);
     } finally {
@@ -202,7 +209,7 @@ export function recordRejected(
   // when it is called, which is before this body ever starts running, so a
   // reading taken in there already includes the clear it is meant to notice.
   const sawClears = clears;
-  return serialise(async () => {
+  return serialise(async (abandoned) => {
     // Inside the queue, not before it: reading ahead of the writes in front of
     // this one is precisely the lost update.
     const existing = await loadRejected(storage);
@@ -220,6 +227,14 @@ export function recordRejected(
     // by the time a clear can be asked for, and there is no compare-and-swap
     // here to make it conditional. See the module comment.
     if (sawClears !== clears) return;
+    // And the same for the writes that are not clears, which the check above
+    // does not see. Two lanes at a driven vendor, A's read stalling past the
+    // bound: the chain moves on, B reads without A and writes `[B]`, then A
+    // wakes holding its pre-B list and writes it back, dropping B. That is
+    // precisely the lost update this queue exists to prevent, arriving through
+    // the timeout added to stop the queue wedging — and it is *not* one of the
+    // orderings the comment above leaves open, which are all clear-related.
+    if (abandoned()) return;
     try {
       await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
     } catch {

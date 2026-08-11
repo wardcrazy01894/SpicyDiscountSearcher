@@ -1543,14 +1543,21 @@ rejectedClear.addEventListener('click', () => {
     })
     .then((entries) => {
       // Null means a later read is already authoritative — it has stored its own
-      // answer, and judging the clear against a list this one never saw would
-      // be worse than saying nothing.
-      if (!entries) return;
-      // Chips and the company list carry the count too, so `refreshPlan` alone
-      // would leave them showing the reduced numbers after putting the codes back.
-      renderVendorChips();
-      renderCompanyList();
-      refreshPlan();
+      // answer and rendered from it, so there is nothing to draw here. The
+      // recheck below is scheduled either way, and deliberately: a run
+      // finishing as the button is pressed is the collision `rejectedRead`
+      // exists for, so returning before the schedule dropped the retry in
+      // exactly the case that motivates it. The later read derives
+      // `ui.clearFailed` the same way this one would have, so the condition is
+      // still the right one to test.
+      if (entries) {
+        // Chips and the company list carry the count too, so `refreshPlan`
+        // alone would leave them showing the reduced numbers after putting the
+        // codes back.
+        renderVendorChips();
+        renderCompanyList();
+        refreshPlan();
+      }
       // One more look, because a clear can land *after* it was reported failed.
       // The worker's wait is bounded, so a slow write gets an ordinary reply
       // with the clear still queued — and this handler's own comment above
@@ -1559,7 +1566,16 @@ rejectedClear.addEventListener('click', () => {
       // codes the store no longer refuses". The timeout path reached that same
       // outcome by a different road, with nothing to correct it but the user
       // pressing the button again.
-      if (ui.clearFailed) setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
+      //
+      // Unconditional, and both halves of that are load-bearing. Returning
+      // early on a superseded read dropped the retry in exactly the collision
+      // `rejectedRead` exists for — a run finishing as the button is pressed.
+      // And testing `ui.clearFailed` here is no better: when this read *is*
+      // superseded, the read that overtook it may not have resolved yet, so the
+      // flag it will derive is not readable at this point. A spare storage read
+      // half a minute after a clear costs nothing, and `recheckClear` redraws
+      // only if the list moved.
+      setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
     });
 });
 

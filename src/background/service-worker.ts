@@ -1194,6 +1194,22 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ type: 'RUN_STATE', state: null } satisfies StateMessage);
             return;
           }
+          // No keepalive runs around this wait, and deliberately not. It can
+          // hold `sendResponse` for up to the ceiling, and the case it exists
+          // for — a hung write left over from a run that has already torn
+          // down — is also the case with no run to keep the worker resident,
+          // so Chrome can reclaim it mid-wait and the reply never comes. The
+          // popup's `send` retries everything but START_RUN, and the restarted
+          // worker has a fresh chain, so it self-heals; what the user gets back
+          // is the second clear's answer rather than the first's, and a refusal
+          // recorded between the two sends is erased by it.
+          //
+          // Left as a retry rather than pinned: `startKeepAlive` is scoped to a
+          // run's lifetime and its ceiling, and calling it from a message
+          // handler means either interfering with a run that starts meanwhile
+          // or growing a second lifetime to track. That is more machinery than
+          // the failure is worth.
+          //
           // Done here rather than in the popup so it goes through the same
           // write queue as `recordRejected` — see the message's own comment.
           // Bounded for the same reason teardown's wait is: this now queues
