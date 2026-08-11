@@ -41,8 +41,10 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget and Enterprise throw instead of building.** They were
-  observed ignoring the query string entirely, and returning a URL for them was
+  **Budget, Enterprise and Sixt throw instead of building** — the first two
+  because they were
+  observed ignoring the query string entirely, Sixt because its URL 302s to the
+  site root. Returning a URL for them was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
   can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
@@ -520,11 +522,21 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites for every vendor
-  except Avis and Hertz (see README). Budget and Enterprise are worse
-  than unverified: both keep the search in session state, so no query
-  string can express it and the builders they have today cannot ever work.
-  National keeps its search there too but is no longer in that group — it is
-  driven rather than deep-linked.
+  except Avis and Hertz (see README). Beyond that there are now three distinct
+  states, and the difference decides what would fix each:
+
+  - **Budget and Enterprise** are worse than unverified: both keep the search in
+    session state, so no query string can express it and the builders they have
+    today cannot ever work. They need drivers.
+  - **Sixt** is measured-broken but not impossible: `/php/reservation` 302s to
+    the site root, which is one path tried once. It is `searchable: false` so it
+    stops spending a lane, and it returns the day someone captures a URL that
+    reaches a real search. `unsearchable()` takes its reason as a whole sentence
+    precisely so its refusal does not borrow the other two's "cannot be
+    searched by URL".
+  - **National** keeps its search in session state like Budget and Enterprise,
+    and is searchable anyway — it is driven rather than deep-linked.
+
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
   settle or its 45s deadline passes, which is longer than Chrome's ~30s idle

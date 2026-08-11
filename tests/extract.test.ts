@@ -483,12 +483,16 @@ describe("National's results container", () => {
   });
 
   it('shows what the scope is worth, using a vendor whose selectors miss', () => {
-    // sixt's list matches nothing here and falls through to `main`, which is the
-    // state National shipped in. Hertz would *not* show it — its list happens to
-    // contain `.vehicle-list` too, so it scopes correctly by luck, which is why
-    // this control names a vendor deliberately.
+    // hyatt's list matches nothing here and falls through to `main`, which is
+    // the state National shipped in. Hertz would *not* show it — its list
+    // happens to contain `.vehicle-list` too, so it scopes correctly by luck,
+    // which is why this control names a vendor deliberately.
+    //
+    // It named sixt until that vendor was disabled. A control should not stand
+    // in for a page the probe never visits, and the hotel builders are the
+    // vendors whose containers really are still unchecked.
     document.body.innerHTML = PAGE;
-    expect(extract(document, 'sixt').offers.map((o) => o.amount)).toContain(9.99);
+    expect(extract(document, 'hyatt').offers.map((o) => o.amount)).toContain(9.99);
   });
 });
 

@@ -32,9 +32,16 @@ const BASIS_RANK: Record<PriceBasis, number> = { total: 0, unknown: 1, 'per-day'
  * first anyway, which reads as "here is your answer, with a caveat" rather than
  * "this is not an answer".
  *
- * Measured, not hypothesised: sixt's builder targets `/php/reservation`, which
+ * Measured, not hypothesised: sixt's builder targeted `/php/reservation`, which
  * 302s to `https://www.sixt.com/` with the location field empty and `$35` on
- * the page. That vendor ships today.
+ * the page. That vendor was `searchable: true` when this guard was written.
+ *
+ * It is not any more — it was disabled for exactly this reason — so no shipping
+ * vendor produces that quote today. The guard stays because "no current vendor
+ * does this" is a fact about the roster rather than about the failure: the
+ * three hotel builders are still `best-effort` and unverified against a live
+ * site, and a landing on the site root is the only unambiguous tell a deep link
+ * ever gets.
  *
  * Excluded quotes are not discarded — `unrankedQuotes` returns them, so the
  * popup lists them under "not ranked" with the reason, which is the treatment a

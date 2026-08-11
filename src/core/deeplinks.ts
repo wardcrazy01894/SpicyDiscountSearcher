@@ -192,21 +192,25 @@ type Builder = (code: string, trip: Trip) => DeepLink;
  */
 function unsearchable(
   vendor: string,
-  because = 'its search lives in session state, so it needs its form driven rather than a deep link',
+  because = 'cannot be searched by URL — its search lives in session state, so it needs its form driven rather than a deep link',
 ): Builder {
   // Defence in depth, not the primary guard: these vendors are also
   // `searchable: false` in vendors.ts, so `buildCandidates` never proposes them
   // and the popup never offers a chip. This catches a plan that arrives some
   // other way.
   //
-  // The reason is a parameter because the vendors do not share one, and the
-  // difference decides what would fix each. Budget and enterprise keep the
-  // search in session state, so no query string can express it and no builder
-  // for them can ever work. Sixt's URL simply reaches the wrong page — one path
-  // measured once, and another may work. Collapsing both into "session state"
-  // would have told the next reader not to bother looking for a Sixt URL.
+  // The reason is the *whole* sentence, not a clause appended to a fixed
+  // prefix, because the vendors do not share one and the difference decides
+  // what would fix each. Budget and enterprise keep the search in session
+  // state, so no query string can express it and no builder for them can ever
+  // work. Sixt's URL simply reaches the wrong page — one path measured once,
+  // and another may work.
+  //
+  // A fixed "cannot be searched by URL" prefix made that distinction
+  // unsayable: it asserted the impossibility for Sixt in the one string a user
+  // actually sees, the `link-build` tooltip.
   return () => {
-    throw new Error(`${vendor} cannot be searched by URL — ${because}`);
+    throw new Error(`${vendor} ${because}`);
   };
 }
 
@@ -408,7 +412,15 @@ const BUILDERS: Record<VendorId, Builder> = {
    * search — README's "Fixing a deep link", and note that replaying it is the
    * step that matters — or give it a driver.
    */
-  sixt: unsearchable('sixt', 'its search URL 302s to the site root, reaching no search'),
+  sixt: unsearchable(
+    'sixt',
+    // Not "cannot be searched by URL", which is the prefix budget and
+    // enterprise carry and is exactly the claim this vendor's whole entry
+    // refuses to make. This string reaches the user, as the `link-build`
+    // tooltip — so the one place anyone reads it must not say a Sixt URL is
+    // impossible when all that was measured is that the one we had missed.
+    'has no working search URL — the only one measured, /php/reservation, 302s to the site root',
+  ),
 
   hilton: (code, trip) => {
     const t = hotelTrip(trip);
