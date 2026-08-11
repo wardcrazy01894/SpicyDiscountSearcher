@@ -71,7 +71,16 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
         !!entry &&
         typeof entry === 'object' &&
         typeof (entry as RejectedCode).vendor === 'string' &&
-        typeof (entry as RejectedCode).code === 'string',
+        typeof (entry as RejectedCode).code === 'string' &&
+        // `at` too, now that something compares it. The popup tells a refusal
+        // that survived a clear from one recorded after it by asking whether
+        // `at` predates the clear — and `undefined <= number` is `false`, so an
+        // entry an older build wrote without a timestamp read as "recorded
+        // afterwards": a failed clear reported success, with the code still
+        // filtered out of the chips, the list and the plan for the session.
+        // Dropping it here rather than special-casing it there, because this is
+        // the function whose job is not trusting what it reads.
+        typeof (entry as RejectedCode).at === 'number',
     );
   } catch {
     // Storage being unavailable costs a wasted tab, not correctness — the run
@@ -155,9 +164,6 @@ let writes: Promise<void> = Promise.resolve();
 /** Links queued and not yet settled, so a waiter can size its own bound. */
 let queued = 0;
 
-/** Clears ever asked for, so a stale record can tell it has been overtaken. */
-let clears = 0;
-
 /**
  * How many writes are outstanding.
  *
@@ -205,10 +211,6 @@ export function recordRejected(
   code: string,
   at: number,
 ): Promise<void> {
-  // Captured at *enqueue*, not inside the body: `clearRejected` increments this
-  // when it is called, which is before this body ever starts running, so a
-  // reading taken in there already includes the clear it is meant to notice.
-  const sawClears = clears;
   return serialise(async (abandoned) => {
     // Inside the queue, not before it: reading ahead of the writes in front of
     // this one is precisely the lost update.
@@ -217,23 +219,23 @@ export function recordRejected(
     if (existing.length >= MAX_ENTRIES) return;
     // Abandoning a link does not cancel it, so this body can still be running
     // after the queue moved on — and the list it read is then stale. Writing it
-    // back restores every refusal a clear had just removed, invisibly: the
-    // popup has already re-read an empty list, so it reports success, schedules
-    // no recheck, and the codes reappear on the next open with nothing to
-    // explain them.
+    // back undoes whatever ran in the meantime: a clear, invisibly (the popup
+    // has already re-read an empty list, so it reports success and schedules no
+    // recheck), or another refusal, which is the lost update this queue exists
+    // to prevent arriving through the timeout added to stop the queue wedging.
+    //
+    // One check covers both. A separate clear counter used to sit here as well,
+    // captured at enqueue; it was redundant — links are strictly serialised, so
+    // nothing can interleave between this read and this write *unless* the link
+    // was abandoned, which is exactly what this tests. The one case the two
+    // disagreed on was a clear merely queued behind a live record, where
+    // skipping and writing produce the same stored state because the clear
+    // wipes it either way.
     //
     // This closes the case where the read was the slow part. It cannot close
     // the case where the *write* was: that `set` is already with the platform
-    // by the time a clear can be asked for, and there is no compare-and-swap
+    // by the time anything can overtake it, and there is no compare-and-swap
     // here to make it conditional. See the module comment.
-    if (sawClears !== clears) return;
-    // And the same for the writes that are not clears, which the check above
-    // does not see. Two lanes at a driven vendor, A's read stalling past the
-    // bound: the chain moves on, B reads without A and writes `[B]`, then A
-    // wakes holding its pre-B list and writes it back, dropping B. That is
-    // precisely the lost update this queue exists to prevent, arriving through
-    // the timeout added to stop the queue wedging — and it is *not* one of the
-    // orderings the comment above leaves open, which are all clear-related.
     if (abandoned()) return;
     try {
       await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
@@ -244,9 +246,6 @@ export function recordRejected(
 }
 
 export function clearRejected(storage: RejectionStore): Promise<void> {
-  // Counted at *enqueue*, not when it runs: any record already holding a read
-  // taken before this point is now stale, whether or not it has been abandoned.
-  clears += 1;
   // On the same queue: a clear that overtook an in-flight record would leave the
   // record behind, which reads to the user as "try them again" not working.
   return serialise(async () => {

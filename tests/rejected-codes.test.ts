@@ -263,6 +263,14 @@ describe('loadRejected', () => {
         { vendor: 'national' },
         null,
         'nonsense',
+        // `at` is compared, so it has to be a number. The popup tells a refusal
+        // that survived a clear from one recorded after it by asking whether
+        // `at` predates the clear, and `undefined <= number` is `false` — so an
+        // entry an older build wrote without a timestamp read as "recorded
+        // afterwards", and a failed clear reported success while the code went
+        // on being filtered out of the chips, the list and the plan.
+        { vendor: 'national', code: 'NOSTAMP' },
+        { vendor: 'national', code: 'BADSTAMP', at: 'yesterday' },
       ],
     });
     expect(await loadRejected(store)).toEqual([{ vendor: 'national', code: 'GOOD', at: 1 }]);

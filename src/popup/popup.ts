@@ -726,7 +726,11 @@ function renderRejectedNote(): void {
   if (total > 0 && ui.clearFailed) {
     if (!clearFailedNote) {
       clearFailedNote = document.createElement('span');
-      clearFailedNote.className = 'is-warning';
+      // `hint is-warning`, because the stylesheet has no bare `.is-warning`
+      // rule — only `.hint.is-warning`. As a lone class this rendered the
+      // warning in the same muted grey as the count beside it, and every test
+      // asserts `textContent`, so nothing caught it.
+      clearFailedNote.className = 'hint is-warning';
       rejectedNote.append(clearFailedNote);
     }
     clearFailedNote.textContent = ` ${CLEAR_FAILED_MESSAGE}`;
@@ -1604,6 +1608,17 @@ rejectedClear.addEventListener('click', () => {
       // flag it will derive is not readable at this point. A spare storage read
       // half a minute after a clear costs nothing, and `recheckClear` redraws
       // only if the list moved.
+      setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
+    })
+    .catch(() => {
+      // A throw anywhere above skips the renders *and* the one self-healing
+      // retry, leaving the popup on its pre-clear counts with nothing left to
+      // correct them — and reports it as an unhandled rejection with no
+      // message. `applyReply` is the reachable thrower: the state it renders
+      // comes from `chrome.storage.session`, which an older build may have
+      // written, and `renderRun` walks it unguarded.
+      ui.clearFailed = true;
+      renderRejectedNote();
       setTimeout(() => void recheckClear(), RECHECK_CLEAR_MS);
     });
 });

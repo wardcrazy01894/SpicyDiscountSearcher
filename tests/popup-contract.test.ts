@@ -424,6 +424,13 @@ describe('the popup half of the double-run guard', () => {
     const note = () => document.querySelector('#rejected-note')?.textContent ?? '';
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
     await vi.waitFor(() => expect(note()).toMatch(/not been cleared yet/));
+    // Styled as a warning, and `hint is-warning` rather than `is-warning`: the
+    // stylesheet has no bare rule, so on its own the class matched nothing and
+    // the warning rendered in the same muted grey as the count beside it. Every
+    // other assertion here is on `textContent`, which is exactly why nothing
+    // caught that.
+    const warning = document.querySelector('#rejected-note span.is-warning');
+    expect(warning?.classList.contains('hint')).toBe(true);
     // Beside the "try them again" button, which is still there because the
     // codes really are still refused.
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
@@ -795,6 +802,40 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
       /not been cleared yet/,
     );
+  });
+
+  it('still schedules the recheck when rendering the reply throws', async () => {
+    // The chain had no `.catch`, so a throw skipped the renders *and* the one
+    // self-healing retry, leaving the popup on its pre-clear counts with
+    // nothing left to correct them — reported as an unhandled rejection with no
+    // message. `applyReply` is the reachable thrower: the state it renders
+    // comes from `chrome.storage.session`, which an older build may have
+    // written, and `renderRun` walks it unguarded.
+    vi.useFakeTimers();
+    try {
+      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+      installChrome();
+      sendMessageImpl = (message) => {
+        if (message.type === 'CLEAR_REJECTED') {
+          setTimeout(() => void fakeBackground(message), 1_000);
+          // A state shaped like something an older build wrote.
+          return Promise.resolve({ type: 'RUN_STATE', state: { plan: null, quotes: null } });
+        }
+        return fakeBackground(message);
+      };
+      await import('../src/popup/popup.js');
+      await vi.advanceTimersByTimeAsync(50);
+
+      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+      await vi.advanceTimersByTimeAsync(200);
+
+      // The recheck still fires, and the clear that landed behind it is picked
+      // up rather than being lost with the exception.
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not let stranded rows crowd out every company that can race', async () => {
