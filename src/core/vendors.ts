@@ -82,19 +82,30 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Corporate code',
     host: 'www.sixt.com',
-    // Deliberately still searchable, and a close call worth recording here
-    // rather than only in the builder. Its deep link is *measured* to reach no
-    // search — `/php/reservation` 302s to the site root with the location
-    // ignored. That is weaker evidence than the unsearchable vendors
-    // have: for budget and enterprise the search lives in session
-    // state, so no query string can express it at all, whereas this is one path
-    // measured once and another may work.
+    // Not searchable, and this reverses a close call that was recorded here as
+    // a close call. Its deep link is *measured* to reach no search:
+    // `/php/reservation` 302s to the site root with the location ignored, the
+    // dates ignored, and a marketing "$35" on the page.
     //
-    // It also stays because its quotes can no longer rank: a home-page price is
-    // flagged `suspect` and excluded by `compare.ts`, so the harm is bounded to
-    // three of the default twelve slots and the tabs they open. Revisit if that
-    // stops being true, or capture a working URL and fix it.
-    searchable: true,
+    // It stayed enabled on the argument that the damage was contained —
+    // `landedElsewhere` flags a home-page landing `suspect` and `compare.ts`
+    // keeps suspect quotes out of the ranking. Two things wrong with that. The
+    // containment is a measurement, not a property: it holds only while the
+    // redirect target is the bare root, and a locale split to `/en/` would put
+    // that $35 back into the ranking with nothing on screen to say so. And a
+    // vendor that cannot answer still spends a lane and a real tab on every
+    // run, now against a codes cap of 100 rather than 12.
+    //
+    // Same treatment as budget and enterprise: the three codes stay in the
+    // database, the vendor gets no chip, no candidates and no host permission.
+    // Dropping sixt.com from the manifest is a real reduction in what this
+    // extension may read. No company loses its car listing and none vanishes —
+    // every company with a Sixt code has one at another car vendor too.
+    //
+    // It comes back the day someone captures a URL that reaches a real search,
+    // or writes it a driver. Unlike budget and enterprise, nothing proves it
+    // *cannot* work — only that the one path anybody tried does not.
+    searchable: false,
   },
   {
     id: 'hilton',

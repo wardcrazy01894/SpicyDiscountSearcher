@@ -376,7 +376,9 @@ describe('the popup half of the double-run guard', () => {
     // Labels now, not raw ids — and National belongs here: it is searchable via
     // its driver, so a saved selection naming it survives. Budget and
     // Enterprise are what must not, which is the invariant this test is for.
-    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National', 'Sixt']);
+    // Sixt joins Budget and Enterprise here: its deep link reaches no search,
+    // so a saved selection naming it must not survive either.
+    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National']);
   });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {

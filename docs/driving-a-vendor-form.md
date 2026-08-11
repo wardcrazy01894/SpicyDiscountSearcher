@@ -115,7 +115,7 @@ and what "nothing happened" looks like.
 | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                 |
 | Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                               |
-| Sixt                      | **yes**    | Builder measured to 302 to the site root. Enabled but useless — see below                                                                      |
+| Sixt                      | no         | Builder measured to 302 to the site root. Disabled — but nothing proves a URL cannot work. See below                                           |
 | Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
 | Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
 | National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                       |
@@ -271,15 +271,26 @@ What stays true regardless: nothing in this codebase may solve or evade a
 challenge, and no amount of clearance changes the politeness posture — Budget
 gets the same capped concurrency and stagger as everyone else.
 
-**Sixt is the odd one out and deserves a decision.** It is the only vendor that
-is `searchable: true` while being _known_ not to reach a search: its builder
-302s to the site root, where a marketing "$35" sits. The damage is contained —
-`landedElsewhere` flags the quote `suspect` and `compare.ts` keeps suspect
-quotes out of the ranking — but it still spends a tab and a lane on every run to
-produce a number that cannot be used. The containment also holds only while the
-redirect target is the bare root; a locale split to `/en/` would put that $35
-back into the ranking with nothing on screen to say so. Either capture a working
-URL or make it unsearchable.
+**Sixt is unsearchable now, and the decision this used to ask for was made.**
+It was the only vendor that was `searchable: true` while being _known_ not to
+reach a search: its builder 302s to the site root, where a marketing "$35" sits.
+
+The argument for leaving it on was that the damage was contained —
+`landedElsewhere` flags a home-page landing `suspect` and `compare.ts` keeps
+suspect quotes out of the ranking. That containment is a measurement rather than
+a property: it holds only while the redirect target is the bare root, and a
+locale split to `/en/` would put that $35 back into the ranking with nothing on
+screen to say so. Meanwhile a vendor that cannot answer still spent a lane and a
+real tab on every run — now against a codes cap of 100 rather than 12.
+
+It costs three codes and no company: every company with a Sixt code has one at
+another car vendor, so nothing disappears from the picker. `sixt.com` is out of
+the manifest too, which is a real reduction in what the extension may read.
+
+Unlike Budget and Enterprise, **nothing proves Sixt cannot work** — only that
+the one path anybody tried does not. Its builder's refusal says so in its own
+message rather than borrowing theirs, because that difference decides whether
+the next person should go looking for a URL. They should.
 
 ## Reading a page that has no layout
 

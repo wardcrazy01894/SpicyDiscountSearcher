@@ -78,9 +78,12 @@ encode other people's websites. They will break. Both are deliberately isolated:
   two others, rendering LAX to PHL for a URL asking LAX to LAX, because a return
   location left in the browser session won. The probe tabs share the user's
   profile, so that is reachable in normal use. `popup.ts` also validates the
-  IATA shape before any tab opens — failing per-vendor would leave the race to
-  be decided only by Sixt, whose builder takes the location as free text and
-  has never been verified either way.
+  IATA shape before any tab opens — failing per-vendor would once have left the
+  race to be decided only by Sixt, whose builder took the location as free text
+  and was never verified either way. Sixt is `searchable: false` now, so that
+  particular escape is closed; the validation stays because the reasoning was
+  never about Sixt, but about a whole race being decided by whichever vendor
+  fails to notice a bad location.
 
   The popup's single caveat now renders even when nothing is unverified. It was
   `if (unverified > 0)`, so the moment these two became verified a run of only
@@ -195,8 +198,11 @@ The two things that would silently produce a wrong answer, and their guards:
   price only, so the home-page number still entered the primary bucket, still
   won `cheapestComparable`, and `savings` still announced it as the saving. The
   popup badged the row and ranked it first, which reads as an answer with a
-  caveat rather than as no answer. Sixt makes that reachable today — its builder
-  302s to the site root, where a marketing "$35" sits. Suspect quotes are listed
+  caveat rather than as no answer. Sixt used to make that reachable — its builder
+  302s to the site root, where a marketing "$35" sits — and is now
+  `searchable: false` for exactly that reason, so nothing routes to it. The
+  guard stays: `suspect` is the only unambiguous tell a deep link ever gets, and
+  the next vendor to rot will need it. Suspect quotes are listed
   by `unrankedQuotes` instead, the same treatment a mismatched currency gets, so
   the code does not silently vanish. No longer blind for Avis, whose builder now targets
   `/en/reservation/vehicle-availability`, so landing on the root is once again
@@ -426,8 +432,10 @@ would settle another vendor's quote, labelled with the wrong vendor and code,
 paragraph claiming it was "a live bug rather than only a future one" was
 overstated. Its evidence was that Avis and Budget share a parent, and Budget
 left `host_permissions` when it became unsearchable. The six hosts the manifest
-still matches — avis, hertz, hilton, hyatt, marriott, sixt — are six distinct
-brands with no redirect between them. Starwood shares marriott.com but is
+still matches — avis, hertz, nationalcar, hilton, hyatt, marriott — are six
+distinct brands with no redirect between them. Sixt left when it became
+unsearchable; National arrived with its driver, and it shares a _backend_ with
+Enterprise (`prd.location.enterprise.com`) without sharing a matched host. Starwood shares marriott.com but is
 `searchable: false`, so it never holds a quote to misattribute. A redirect to a
 _sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
 entirely, which is the `left-our-origins` case and not this one.
