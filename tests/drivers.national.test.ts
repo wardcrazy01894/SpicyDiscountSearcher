@@ -91,7 +91,12 @@ interface FormOptions {
   months?: string[];
   /** Show two months at a time with working Previous/Next, as the live one does. */
   pagedCalendar?: boolean;
-  onSubmit?: 'results-with-account' | 'results-no-account' | 'results-no-interstitial' | 'nothing';
+  onSubmit?:
+    | 'results-with-account'
+    | 'results-no-account'
+    | 'results-no-interstitial'
+    | 'rejected'
+    | 'nothing';
 }
 
 /** A leaf element carrying text, the shape the readbacks look for. */
@@ -365,6 +370,14 @@ function renderForm(options: FormOptions = {}): void {
 
   goCta.addEventListener('click', () => {
     if (onSubmit === 'nothing') return;
+    if (onSubmit === 'rejected') {
+      // What National really does: no navigation, no results hash, an error
+      // banner on the same page.
+      document.body.prepend(
+        textNode("Warning Error We're sorry, but this account number cannot be used online."),
+      );
+      return;
+    }
     // A signed-in Emerald Club profile goes straight through — no interstitial.
     if (onSubmit === 'results-no-interstitial') {
       showResults();
@@ -776,6 +789,19 @@ describe('submitSearch', () => {
     renderForm({ onSubmit: 'results-no-interstitial' });
     await expect(submitSearch(makeContext())).resolves.toBeUndefined();
     expect(window.location.hash).toBe('#/car_select');
+  });
+
+  it('reports the vendor refusing the code, not a missing results page', async () => {
+    // Measured at National with Accenture's XZ15J55: the field accepts the code
+    // and the search then stays on the home page with "this account number
+    // cannot be used online". Without this the driver waited out its budget for
+    // a results page that was never coming and blamed the submission — for a
+    // search that submitted perfectly and was answered.
+    renderForm({ onSubmit: 'rejected' });
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('code-rejected');
+    expect(error.message).toMatch(/cannot be used online/i);
+    expect(window.location.hash).toBe('');
   });
 
   it('reports form-submit when nothing at all happens', async () => {

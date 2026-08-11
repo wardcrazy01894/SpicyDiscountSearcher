@@ -93,6 +93,27 @@ const RESULTS_HASH = 'car_select';
 const ACCOUNT_LABEL_RE = /ACCOUNT\s+NAME/i;
 
 /**
+ * The vendor's own words when it will not accept an account number.
+ *
+ * Measured at National with Accenture's `XZ15J55`: the field takes the code —
+ * the panel even reads back `ACCOUNT NUMBER (XZ15J55) / COUPONS` — and the
+ * search then **stays on the home page** showing "Warning Error We're sorry,
+ * but this account number cannot be used online". No navigation, no results
+ * hash, no error element with a class worth matching, which is why this reads
+ * the page's text.
+ *
+ * Without it the driver waited out the rest of its budget for a results page
+ * that was never coming and reported `form-submit` — "submitting the search
+ * never loaded a results page" — for a search that submitted perfectly and was
+ * answered. The vendor's verdict on the code is not a fault in the run, and
+ * `code-rejected` is the whole reason that code exists.
+ *
+ * The same sentence Enterprise uses, which is unsurprising: the two share a
+ * backend.
+ */
+const REJECTED_RE = /cannot be used online/i;
+
+/**
  * The longest a *value* rendered beside the label may be.
  *
  * Deliberately a bound on the value rather than on the element holding the
@@ -678,6 +699,16 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
  * discounted rate would be the silent wrong answer, so their absence is
  * `code-rejected` rather than a quiet success.
  */
+/** Throw the vendor's verdict rather than waiting out a page that has answered. */
+function refuseIfRejected(ctx: DriveContext): void {
+  if (REJECTED_RE.test(textOf(ctx.doc.body))) {
+    throw new DriverError(
+      'code-rejected',
+      'National says this account number cannot be used online',
+    );
+  }
+}
+
 export async function submitSearch(ctx: DriveContext): Promise<void> {
   const button = [...ctx.doc.querySelectorAll<HTMLElement>('button')].find((el) =>
     /check availability/i.test(textOf(el)),
@@ -693,6 +724,7 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
     ctx,
     'the guest interstitial or the results page',
     () => {
+      refuseIfRejected(ctx);
       if (ctx.doc.location?.hash.includes(RESULTS_HASH)) return 'results' as const;
       const guest = [...ctx.doc.querySelectorAll<HTMLElement>('button, a')].find((el) =>
         /continue as guest/i.test(textOf(el)),
@@ -726,7 +758,12 @@ export async function verifyResults(ctx: DriveContext): Promise<void> {
   await waitFor(
     ctx,
     'National to answer the search',
-    () => ctx.doc.location?.hash.includes(RESULTS_HASH) || null,
+    () => {
+      // Checked here too, not only at submit: the rejection can arrive after the
+      // interstitial is cleared, and this is the document that will be waiting.
+      refuseIfRejected(ctx);
+      return ctx.doc.location?.hash.includes(RESULTS_HASH) || null;
+    },
     'form-submit',
   );
 
