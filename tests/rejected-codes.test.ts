@@ -7,7 +7,7 @@
  * matters most — only the vendor's own refusal may ever reach it. Recording an
  * inference would let a rotted selector quietly retire a working code.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   clearRejected,
@@ -119,6 +119,32 @@ describe('recordRejected', () => {
     await Promise.all([recording, clearing]);
 
     expect(await loadRejected(store)).toEqual([]);
+  });
+
+  it('moves on from a write that never settles', async () => {
+    // A rejection cannot wedge the chain — every link swallows its own failure —
+    // but a *hang* could, and `chrome.storage` promises nothing about settling.
+    // One call that never returned left the queue pending for the life of the
+    // worker: later refusals silently queued behind it, which is the accepted
+    // trade, and every clear did too — so "try them again" reported failure
+    // forever however often it was pressed. Bounding the waiter in the service
+    // worker does not help; the queue itself has to move on.
+    vi.useFakeTimers();
+    try {
+      const store = fakeStore();
+      const hung = { ...store, set: () => new Promise<void>(() => {}) };
+
+      const stuck = recordRejected(hung, 'national', 'NEVER', 1);
+      const after = clearRejected(store);
+      // Past the per-link bound.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await Promise.all([stuck, after]);
+
+      // The clear behind it ran, which is the whole point.
+      expect(await loadRejected(store)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the same code at two vendors apart', async () => {

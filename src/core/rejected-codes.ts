@@ -103,13 +103,41 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  * clear through the worker makes both writers the same realm, which is what
  * makes this queue the whole story rather than half of it.
  *
- * The chain never rejects — every link swallows its own failure — so it cannot
- * wedge.
+ * Every link swallows its own failure, so a *rejection* cannot wedge the chain.
+ * A **hang** is the other half and needed its own answer: `chrome.storage` makes
+ * no promise of ever settling, and one call that never returns left `writes`
+ * pending for the life of the worker — every later refusal silently queued
+ * behind it (the accepted trade) and, much worse, every `CLEAR_REJECTED` too, so
+ * "try them again" reported "not cleared yet" forever no matter how often it was
+ * pressed. Bounding the *waiter* in the service worker does not help; the queue
+ * itself has to move on. Each link is therefore abandoned after
+ * `WRITE_TIMEOUT_MS`.
+ *
+ * Abandoning is not cancelling — a write that was merely slow may still land
+ * afterwards, out of order. That is worth it: the cost of the stale write is a
+ * refusal recorded late or a clear undone, both of which the user can see and
+ * redo, against a store that can never be cleared again.
  */
+const WRITE_TIMEOUT_MS = 5_000;
+
 let writes: Promise<void> = Promise.resolve();
 
 function serialise(write: () => Promise<void>): Promise<void> {
-  writes = writes.then(write, write);
+  const bounded = async (): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        write(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, WRITE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      // Or a healthy write leaves a live timer behind on every call.
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  writes = writes.then(bounded, bounded);
   return writes;
 }
 

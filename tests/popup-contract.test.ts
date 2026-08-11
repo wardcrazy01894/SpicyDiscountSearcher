@@ -454,6 +454,72 @@ describe('the popup half of the double-run guard', () => {
     expect(note()).not.toMatch(/not been cleared yet/);
   });
 
+  it('updates the refused note even when the popup could not reach the background at boot', async () => {
+    // `refreshPlan` returns early on `ui.sendFailed`, which is set by a failed
+    // GET_STATE at boot and cleared only by `renderRun` — which the clear path
+    // never calls. So a clear that *worked* left the note still reading "N
+    // codes have been refused" with the chips beside it already restored. It is
+    // the second early return to have stranded this note; the first was the
+    // all-refused branch.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.reject(new Error('worker is asleep'));
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+
+    // The worker wakes up for the clear even though GET_STATE never landed.
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+  });
+
+  it('keeps a ticked company listed once all its codes are refused', async () => {
+    // The filter drops a company whose every reachable code has been refused,
+    // but the slug stays in `ui.companies` and in the saved form — so the row
+    // vanished while the plan line read "No codes left to race", with no
+    // checkbox left to untick it. The only escapes were the blanket `clear`,
+    // which drops every company, or restoring all the refusals.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const ibm = allCompanies().find((company) => company.slug === 'ibm')!;
+    savedRejected = ibm.codes
+      .filter((record) => record.code && codeReaches(record.vendor, 'national'))
+      .map((record) => ({ vendor: 'national', code: record.code!, at: 1 }));
+    expect(savedRejected.length).toBeGreaterThan(0);
+    savedForm = { category: 'car', vendors: ['national'], companies: ['ibm'] };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    const ibmRow = () => rows().find((row) => (row.textContent ?? '').includes(ibm.name));
+    await vi.waitFor(() => expect(ibmRow()).toBeDefined());
+    // Listed, tickable — and saying why rather than rendering the blank vendor
+    // list that a half-fix to this filter produced once before.
+    expect(ibmRow()?.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
+    expect(ibmRow()?.querySelector('.vendors')?.textContent).toBe('all refused');
+  });
+
+  it('counts the refused note the way everything else counts it', async () => {
+    // `loadRejected` accepts whatever an older build wrote and does not dedupe,
+    // which is the stated premise for the two-directional `changed` check in the
+    // RUN_STATE listener. Under that premise this line said "2 codes have been
+    // refused" while the chips, the company list and the plan all accounted for
+    // one.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: '5666666', at: 1 },
+    ];
+    installChrome();
+    await boot();
+
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/^1 code has/);
+  });
+
   it('does not complain when the clear worked but the reply did not arrive', async () => {
     // The mirror of the test above, and the reason both judge storage rather
     // than the reply. `send` retries and a rejection does not prove

@@ -328,8 +328,17 @@ function renderCompanyList(): void {
     !!code.code &&
     codeReaches(code.vendor, vendor) &&
     !refused.has(rejectionKey(vendor, code.code));
-  const matches = searchCompanies(query).filter((company) =>
-    company.codes.some((code) => vendors.some((v) => raceableAt(code, v))),
+  const matches = searchCompanies(query).filter(
+    (company) =>
+      company.codes.some((code) => vendors.some((v) => raceableAt(code, v))) ||
+      // A company the user has ticked stays listed even once every code it
+      // reaches has been refused. Otherwise the row vanishes while the slug
+      // stays in `ui.companies` and in the saved form, so the plan reads "No
+      // codes left to race — all 1 were refused" with no checkbox anywhere to
+      // untick: the only ways out are the blanket `clear`, which drops every
+      // company, or putting all the refusals back. Before refusals entered this
+      // filter the row simply stayed and could be unticked.
+      ui.companies.has(company.slug),
   );
   const selected = selectionSummary();
 
@@ -394,11 +403,12 @@ function renderCompanyList(): void {
       // Rendered as labels rather than raw ids, so a row reads
       // "Avis · National" instead of "avis · national". The ids are internal
       // and this is the picker.
-      vendorList.textContent = [
+      const reachable = [
         ...new Set(company.codes.flatMap((c) => vendors.filter((vendor) => raceableAt(c, vendor)))),
-      ]
-        .map((id) => findVendor(id)?.label ?? id)
-        .join(' · ');
+      ].map((id) => findVendor(id)?.label ?? id);
+      // A selected company with nothing left to race is listed anyway, so it
+      // must say why rather than render the blank the fix above is named after.
+      vendorList.textContent = reachable.length ? reachable.join(' · ') : 'all refused';
 
       row.append(box, name, vendorList);
       return row;
@@ -454,6 +464,15 @@ function refreshPlan(): void {
     planSummary.textContent = SEND_FAILED_MESSAGE;
     planSummary.classList.add('is-warning');
     runBtn.disabled = true;
+    // Except the note, which is about a different thing entirely and is the
+    // second early return to have stranded it — the first was the all-refused
+    // branch below. `sendFailed` is set by a failed GET_STATE at boot and is
+    // cleared only by `renderRun`, which the clear path never calls, so a clear
+    // that *worked* left this line still reading "N codes have been refused"
+    // with the chips beside it already showing the restored counts. It is also
+    // the state where a clear is most likely to have failed, and where
+    // `CLEAR_FAILED_MESSAGE` could therefore never appear.
+    renderRejectedNote();
     return;
   }
   const { all, capped, skipped } = plannedCandidates();
@@ -537,7 +556,13 @@ let clearFailedNote: HTMLElement | null = null;
 
 /** The standing list, separate from this plan's skip count. */
 function renderRejectedNote(): void {
-  const total = ui.rejected.length;
+  // Deduped, like every other consumer of this list. `loadRejected` accepts
+  // whatever an older build wrote and does not collapse duplicates — which is
+  // the stated premise for the two-directional `changed` comparison in the
+  // RUN_STATE listener — so a stored `[A, A]` had this line saying "2 codes
+  // have been refused" while the chips, the company list and the plan line all
+  // accounted for one.
+  const total = rejectionSet(ui.rejected).size;
   rejectedNote.hidden = total === 0;
   rejectedCount.textContent = total
     ? `${total} ${total === 1 ? 'code has' : 'codes have'} been refused by a vendor and are no longer raced — `
