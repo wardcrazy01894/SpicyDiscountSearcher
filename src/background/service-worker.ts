@@ -4,7 +4,6 @@ import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/m
 import { MAX_CONCURRENCY } from '../core/types.js';
 import {
   WRITE_TIMEOUT_MS,
-  WRITE_WAIT_CEILING_MS,
   clearRejected,
   pendingWrites,
   recordRejected,
@@ -92,6 +91,22 @@ const KEEPALIVE_MS = 20_000;
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
+/**
+ * The longest anything here will wait for the write queue, however deep it is.
+ *
+ * Lived in `rejected-codes.ts` for a while, on the grounds that "both sides of
+ * the clear need it — the popup's single recheck has to outlast whatever the
+ * worker actually waited". That recheck is gone (a popup is destroyed on blur,
+ * so its timer almost never fired), the popup no longer imports this, and a
+ * placement argument that is no longer true is worse than no argument: it sends
+ * the next reader looking for a second consumer that does not exist.
+ *
+ * Teardown holds the finished broadcast for the length of this wait, so it is
+ * also how long the popup can sit on "Racing codes…" after the last tab has
+ * closed.
+ */
+const WRITE_WAIT_CEILING_MS = 30_000;
+
 /**
  * Wait for a settling quote's storage writes, but not forever.
  *
@@ -336,13 +351,20 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
       quote.candidate.code,
       Date.now(),
     )
-      .then((stored) => {
+      .then((outcome) => {
         // The one failure here that belongs to no quote, which is what `warn`
         // is for. A write the queue abandoned resolves like any other, so
         // `settleWrites` counts it as landed and nothing else notices — while
         // the user has already been told the vendor refused this code and the
         // run will ask again next time. No code and no URL in the message.
-        if (!stored) warn('a refused code was not remembered', 'the write was abandoned');
+        //
+        // The outcome, not a fixed sentence: `store-full` is permanent and
+        // wants the cap looked at, `abandoned` is transient and wants storage
+        // latency looked at, and one message for both sends the reader to the
+        // wrong place — in the only telemetry this extension has.
+        if (outcome !== 'stored' && outcome !== 'already-known') {
+          warn('a refused code was not remembered', outcome);
+        }
       })
       .catch((error: unknown) => warn('could not remember a refused code', error));
     run.pendingWrites.add(write);
@@ -1149,6 +1171,14 @@ async function cancelRun(writeLinks = pendingWrites()): Promise<void> {
   // is a second the popup sits on "Racing codes…" with nothing visibly
   // happening, and at five outstanding refusals the scaled bound is 25s of it —
   // worth trading away when the user has said they are done with this run.
+  //
+  // What is traded is not only waiting time, which the first version of this
+  // comment implied. With slow storage and refusals still queued, the
+  // `finishedAt` broadcast beats the writes, the popup's re-read misses them,
+  // and pressing Run straight after Cancel re-races codes the vendor already
+  // refused — real tabs on real vendor sites. The bet is that a user who has
+  // just cancelled is less likely to press Run within seconds than to sit
+  // watching a window that has already closed.
   //
   // But `beginRun` calls this too, and there the user has cancelled nothing:
   // they pressed Run. Hard-coding 1 published the previous run's `finishedAt`

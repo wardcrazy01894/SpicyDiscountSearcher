@@ -17,7 +17,7 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
-  loadRejected,
+  readRejected,
   rejectionKey,
   rejectionSet,
   type RejectedCode,
@@ -670,8 +670,14 @@ let clearInFlight = false;
  */
 async function reloadRejected(): Promise<RejectedCode[] | null> {
   const mine = ++rejectedRead;
-  const entries = await loadRejected(chrome.storage.local);
-  if (mine !== rejectedRead) return null;
+  // `readRejected`, so an unreadable store is not mistaken for an empty one.
+  // Collapsing the two here made a *failed* clear report success: `ui.rejected`
+  // emptied, the note hid, the chips showed restored counts and `clearAttempt`
+  // was retired for good — and the refusals came back on the next open with
+  // nothing to explain them, which is the outcome `rejected-codes.ts` calls
+  // unacceptable for a clear.
+  const entries = await readRejected(chrome.storage.local);
+  if (mine !== rejectedRead || entries === null) return null;
   ui.rejected = entries;
   // Judged here rather than by each caller, which is the third attempt at this
   // flag and the first that cannot drift. Setting it `false` here and relying
@@ -1707,7 +1713,12 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
         // that stops the counts updating with no message and nothing to tell it
         // apart from "no refusals changed". The clear path carries a `.catch` for
         // the same reason.
-        ui.clearFailed = false;
+        //
+        // It does not touch `ui.clearFailed`. That flag is derived from (what
+        // was asked to clear, what is stored) inside `reloadRejected`
+        // everywhere else, and assigning it here — the one site outside that
+        // derivation — erased a *true* "not cleared yet" whenever a render
+        // threw after a genuinely failed clear. Redrawing the note is the job.
         renderRejectedNote();
       });
   }

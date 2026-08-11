@@ -234,15 +234,21 @@ describe('recordRejected', () => {
     }
   });
 
-  it('reports whether the refusal was actually stored', async () => {
+  it('says why a refusal was not stored, not just that it was not', async () => {
     // A write the queue abandoned resolves like any other, so `settleWrites`
     // counts it as landed and nothing else notices — while the user has already
     // been told the vendor refused this code and the run will ask again next
     // time. The caller needs to be able to say so.
     const store = fakeStore();
-    expect(await recordRejected(store, 'national', 'A', 1)).toBe(true);
+    expect(await recordRejected(store, 'national', 'A', 1)).toBe('stored');
     // Already known is a success too, from the caller's point of view.
-    expect(await recordRejected(store, 'national', 'A', 2)).toBe(true);
+    expect(await recordRejected(store, 'national', 'A', 2)).toBe('already-known');
+
+    // A read that failed is not an empty store, and saying so is what stops the
+    // write replacing everything with one entry.
+    const unreadable = { ...store, get: () => Promise.reject(new Error('no storage')) };
+    expect(await recordRejected(unreadable, 'national', 'C', 4)).toBe('unreadable');
+    expect((await loadRejected(store)).map((e) => e.code)).toEqual(['A']);
 
     vi.useFakeTimers();
     try {
@@ -258,7 +264,7 @@ describe('recordRejected', () => {
       await vi.advanceTimersByTimeAsync(6_000);
       release?.();
       await vi.advanceTimersByTimeAsync(100);
-      expect(await abandoned).toBe(false);
+      expect(await abandoned).toBe('abandoned');
     } finally {
       vi.useRealTimers();
     }

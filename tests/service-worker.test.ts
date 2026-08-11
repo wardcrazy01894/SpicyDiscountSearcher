@@ -948,6 +948,46 @@ describe('remembering a code the vendor refused', () => {
     expect(stored[0]?.code).toBe('H1');
   });
 
+  it('says why a refusal was lost, in the only telemetry there is', async () => {
+    // `recordRejected` fails for three different reasons and one fixed sentence
+    // pointed at the wrong one: `store-full` is permanent and wants the cap
+    // looked at, `abandoned` is transient and wants storage latency looked at.
+    // Nothing else notices at all — `settleWrites` sees the abandoned link
+    // resolve and counts the write as landed.
+    const warned: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warned.push(args.map(String).join(' '));
+    });
+    try {
+      chromeMock = installChromeMock();
+      // A store that cannot be read: `recordRejected` must refuse to write
+      // rather than replace everything with one entry, and say so. Patched on
+      // the installed API, not on `chromeMock.local` — that is the backing Map
+      // the harness exposes for assertions, so assigning to it changes nothing
+      // the worker calls.
+      const installed = (globalThis as { chrome: typeof chrome }).chrome;
+      installed.storage.local.get = () => Promise.reject(new Error('no storage'));
+      vi.resetModules();
+      await import('../src/background/service-worker.js');
+      await vi.advanceTimersByTimeAsync(0);
+
+      await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+      await settle();
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      await settle(1_000);
+
+      expect(warned.join(' ')).toMatch(/not remembered.*unreadable/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('does not record a discount it merely failed to find', async () => {
     // The rule this whole split exists for. `discount-missing` is our own
     // inference, not the vendor speaking, and it is equally consistent with a

@@ -875,6 +875,29 @@ describe('the popup half of the double-run guard', () => {
     expect(inputs()).toContain(document.activeElement);
   });
 
+  it('does not report a clear succeeded when storage could not be read', async () => {
+    // Collapsing an unreadable store into an empty one made a *failed* clear
+    // report success: `ui.rejected` emptied, the note hid, the chips showed
+    // restored counts and the attempt was retired for good — and the refusals
+    // came back on the next open with nothing to explain them.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    });
+
+    // The clear is answered, but the follow-up read fails.
+    const chromeStub = (globalThis as { chrome: { storage: { local: { get: unknown } } } }).chrome;
+    chromeStub.storage.local.get = () => Promise.reject(new Error('no storage'));
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Nothing is claimed either way: the counts the popup already had stand.
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/1 code has/);
+  });
+
   it('does not call a clear failed while it is still out', async () => {
     // Until the worker has written there is nothing to read but the pre-clear
     // list, so a run finishing inside that window made the listener's read

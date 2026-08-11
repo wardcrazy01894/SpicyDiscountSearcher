@@ -59,7 +59,23 @@ export interface RejectionStore {
   set(items: Record<string, unknown>): Promise<void>;
 }
 
-export async function loadRejected(storage: RejectionStore): Promise<RejectedCode[]> {
+/**
+ * The stored list, or **null when storage could not be read**.
+ *
+ * The difference is the whole reason this exists separately from
+ * `loadRejected`. Collapsing a failed read into "no refusals" is harmless for
+ * something that only renders a count, and destructive for anything that then
+ * writes: `recordRejected` is read-modify-write, so one rejected
+ * `chrome.storage.local.get` — context churn, an IO error — turned the whole
+ * remembered list into a single-entry one, silently, and the next run re-raced
+ * every code the vendors had already refused. That is exactly the loss the
+ * write queue above exists to prevent, arriving through the read instead.
+ *
+ * A malformed *value* still reads as empty rather than as a failure: that is a
+ * store an older build really did write, and refusing to write over it would
+ * wedge the feature permanently rather than transiently.
+ */
+export async function readRejected(storage: RejectionStore): Promise<RejectedCode[] | null> {
   try {
     const stored = await storage.get(KEY);
     const list: unknown = stored[KEY];
@@ -83,10 +99,20 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
         typeof (entry as RejectedCode).at === 'number',
     );
   } catch {
-    // Storage being unavailable costs a wasted tab, not correctness — the run
-    // simply re-asks. Never worth failing a race over.
-    return [];
+    return null;
   }
+}
+
+/**
+ * The stored list, treating an unreadable store as an empty one.
+ *
+ * For readers: storage being unavailable costs a wasted tab, not correctness —
+ * the run simply re-asks, and never worth failing a race over. Writers must use
+ * `readRejected` instead and skip the write, or they overwrite what they could
+ * not read.
+ */
+export async function loadRejected(storage: RejectionStore): Promise<RejectedCode[]> {
+  return (await readRejected(storage)) ?? [];
 }
 
 /**
@@ -147,18 +173,6 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  */
 export const WRITE_TIMEOUT_MS = 5_000;
 
-/**
- * The longest anything will wait for this queue, however deep it is.
- *
- * Lives here rather than in the service worker because both sides of the clear
- * need it: the worker sizes its wait as `WRITE_TIMEOUT_MS x depth` capped by
- * this, and the popup's single recheck has to outlast whatever the worker
- * actually waited. With it defined next to the per-write bound, "how long could
- * the worker have waited" is answerable from one place instead of being guessed
- * at across a module boundary.
- */
-export const WRITE_WAIT_CEILING_MS = 30_000;
-
 let writes: Promise<void> = Promise.resolve();
 
 /** Links queued and not yet settled, so a waiter can size its own bound. */
@@ -213,47 +227,60 @@ function serialise(write: (abandoned: () => boolean) => Promise<void>): Promise<
   return writes;
 }
 
-/** Remember a refusal, keeping the first timestamp for one already known. */
 /**
- * @returns whether the refusal is stored — false when this write was dropped
- *   because the queue abandoned it, which the caller is expected to say out
- *   loud: the quote has already told the user the vendor refused this code, and
- *   losing the record means racing it again next run, which is the one thing
- *   this store exists to prevent. Nothing else notices, because `settleWrites`
- *   sees the abandoned link *resolve* and treats the write as landed.
+ * What became of a refusal handed to `recordRejected`.
+ *
+ * A verdict rather than a boolean, because the caller is expected to say so out
+ * loud and the three failures want different responses: `abandoned` is
+ * transient and points at storage latency, `store-full` is permanent and points
+ * at the cap, and `unreadable` says the store could not be read at all. Logging
+ * one cause for three sent a reader after the wrong thing, and this `warn` is
+ * the only telemetry the extension has.
+ */
+export type RecordOutcome =
+  'stored' | 'already-known' | 'abandoned' | 'store-full' | 'unreadable' | 'write-failed';
+
+/**
+ * Remember a refusal, keeping the first timestamp for one already known.
+ *
+ * Anything but `stored` or `already-known` means the code will be raced again
+ * next run — the one thing this store exists to prevent — and nothing else
+ * notices, because `settleWrites` sees an abandoned link *resolve* and treats
+ * the write as landed.
  */
 export function recordRejected(
   storage: RejectionStore,
   vendor: VendorId,
   code: string,
   at: number,
-): Promise<boolean> {
-  let stored = false;
-  let alreadyKnown = false;
+): Promise<RecordOutcome> {
+  let outcome: RecordOutcome = 'abandoned';
   return serialise(async (abandoned) => {
     // Inside the queue, not before it: reading ahead of the writes in front of
     // this one is precisely the lost update.
-    const existing = await loadRejected(storage);
-    if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) {
-      // Already there, which is a success as far as the caller is concerned.
-      alreadyKnown = true;
+    //
+    // `readRejected`, not `loadRejected`: a failed read must not become an
+    // empty list here, or this write replaces every remembered refusal with one
+    // entry.
+    const existing = await readRejected(storage);
+    if (existing === null) {
+      outcome = 'unreadable';
       return;
     }
-    if (existing.length >= MAX_ENTRIES) return;
+    if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) {
+      outcome = 'already-known';
+      return;
+    }
+    if (existing.length >= MAX_ENTRIES) {
+      outcome = 'store-full';
+      return;
+    }
     // Abandoning a link does not cancel it, so this body can still be running
     // after the queue moved on — and the list it read is then stale. Writing it
     // back undoes whatever ran in the meantime: a clear, invisibly (the popup
     // has already re-read an empty list, so it reports success and schedules no
     // recheck), or another refusal, which is the lost update this queue exists
     // to prevent arriving through the timeout added to stop the queue wedging.
-    //
-    // One check covers both. A separate clear counter used to sit here as well,
-    // captured at enqueue; it was redundant — links are strictly serialised, so
-    // nothing can interleave between this read and this write *unless* the link
-    // was abandoned, which is exactly what this tests. The one case the two
-    // disagreed on was a clear merely queued behind a live record, where
-    // skipping and writing produce the same stored state because the clear
-    // wipes it either way.
     //
     // This closes the case where the read was the slow part. It cannot close
     // the case where the *write* was: that `set` is already with the platform
@@ -262,11 +289,11 @@ export function recordRejected(
     if (abandoned()) return;
     try {
       await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
-      stored = true;
+      outcome = 'stored';
     } catch {
-      // Same trade as above.
+      outcome = 'write-failed';
     }
-  }).then(() => stored || alreadyKnown);
+  }).then(() => outcome);
 }
 
 export function clearRejected(storage: RejectionStore): Promise<void> {
