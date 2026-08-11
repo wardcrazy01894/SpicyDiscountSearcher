@@ -75,6 +75,21 @@ function fakeBackground(message: { type: string }): Promise<unknown> {
 /** Swapped by a test to make START_RUN reject the way a dead worker does. */
 let sendMessageImpl: (message: { type: string }) => Promise<unknown> = fakeBackground;
 
+/** The plan a finished-run broadcast carries; its contents do not matter here. */
+const PLAN = {
+  trip: {
+    category: 'car',
+    pickupLocation: 'TPA',
+    dropoffLocation: '',
+    pickupDate: '2026-09-04',
+    pickupTime: '10:00',
+    dropoffDate: '2026-09-11',
+    dropoffTime: '10:00',
+  },
+  candidates: [],
+  concurrency: 2,
+};
+
 /** Seeded into chrome.storage.local before the popup boots. */
 let savedForm: Record<string, unknown> | null = null;
 /** Codes a vendor has already refused, as the background would have stored them. */
@@ -104,11 +119,16 @@ function installChrome(): void {
         get: () => {
           const slow = slowReadsLeft > 0;
           if (slow) slowReadsLeft -= 1;
+          // Snapshot when the read is *issued*, not when it resolves — which is
+          // what `chrome.storage.get` does, and the whole difference between a
+          // slow read and a stale one. Resolving with the map's later contents
+          // made a delayed read silently pick up writes that happened after it,
+          // so a test for "the stale read must not win" had no stale read in it
+          // and passed against the bug.
+          const snapshot = Object.fromEntries(local);
           return slow
-            ? new Promise((resolve) =>
-                setTimeout(() => resolve(Object.fromEntries(local)), getDelayMs),
-              )
-            : Promise.resolve(Object.fromEntries(local));
+            ? new Promise((resolve) => setTimeout(() => resolve(snapshot), getDelayMs))
+            : Promise.resolve(snapshot);
         },
         set: (items: Record<string, unknown>) => {
           for (const [k, v] of Object.entries(items)) local.set(k, v);
@@ -392,7 +412,7 @@ describe('the popup half of the double-run guard', () => {
     });
   });
 
-  it('says so when the background cannot be reached to clear', async () => {
+  it('says so beside the button, without hiding what the run will do', async () => {
     // Storage decides, not the reply. Here the send fails *and* the codes are
     // still there, so the button really did nothing and saying nothing would
     // leave the note on screen with no explanation.
@@ -401,31 +421,37 @@ describe('the popup half of the double-run guard', () => {
     await boot();
     sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
 
+    const note = () => document.querySelector('#rejected-note')?.textContent ?? '';
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
-    });
-    // And the note stays, because the codes really are still refused.
+    await vi.waitFor(() => expect(note()).toMatch(/not been cleared yet/));
+    // Beside the "try them again" button, which is still there because the
+    // codes really are still refused.
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
 
-    // The half a one-off `textContent` write misses: every refreshPlan trigger
-    // overwrites that line, so a single keystroke in the codes box wiped the
-    // only evidence the clear had failed while the refusals went on being
-    // skipped. Same gap `ui.sendFailed` closes for START_RUN.
+    // And the plan line still says what the run will do. It lived there for one
+    // round and *replaced* that text wholesale, so the truncation warning —
+    // which CLAUDE.md calls out as the thing that must never be silent — and
+    // the skipped-codes note were invisible for as long as the flag was set.
+    const plan = () => document.querySelector('#plan-summary')?.textContent ?? '';
+    expect(plan()).toMatch(/codes match|Racing/);
+    expect(plan()).not.toMatch(/not been cleared yet/);
+
+    // Survives the refreshPlan triggers that wiped it when it was a one-off
+    // write: a max-codes keystroke, a chip, a checkbox.
     const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
     maxCodes.value = '30';
     maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
-    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+    expect(note()).toMatch(/not been cleared yet/);
+    expect(plan()).toMatch(/codes match|Racing/);
 
-    // And it goes away when a clear actually works, rather than latching.
+    // And it goes away when a clear actually works — no reset needed, because
+    // the note it lives in hides once nothing is refused.
     sendMessageImpl = fakeBackground;
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
-        /not been cleared yet/,
-      );
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
     });
+    expect(note()).not.toMatch(/not been cleared yet/);
   });
 
   it('does not complain when the clear worked but the reply did not arrive', async () => {
@@ -453,27 +479,34 @@ describe('the popup half of the double-run guard', () => {
     );
   });
 
-  it('stops complaining about a failed clear once the background answers', async () => {
-    // Nothing else reset the flag, so one transient failure replaced the plan
-    // line for the rest of the popup's life — hiding the truncation warning and
-    // the skipped-codes note behind a stale complaint, through runs that
-    // started and finished perfectly well.
+  it('does not let a finishing run undo a clear the user just made', async () => {
+    // Three places read the refusal list — boot, the finished-run broadcast and
+    // the clear — and none was ordered against the others, so whichever
+    // `storage.get` resolved last won regardless of which was *issued* last.
+    // A run finishing as the user presses "try them again" therefore left the
+    // popup holding the pre-clear list: the codes they had just cleared went on
+    // being skipped and the note came back seconds later, with nothing to
+    // correct it until the popup was reopened.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
     await boot();
-    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
-    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
     });
 
-    // Any answer from the background is proof it is reachable, and the state has
-    // moved on. The refused note is still there to press again.
-    await broadcastFinishedRun();
-    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
-      /not been cleared yet/,
-    );
-    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    // The broadcast's read is issued first and resolves last — the interleaving
+    // that used to win. One slow read is enough: the clear's own read is fast.
+    getDelayMs = 200;
+    slowReadsLeft = 1;
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // The stale read must not have put the cleared codes back.
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
   });
 
   it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
