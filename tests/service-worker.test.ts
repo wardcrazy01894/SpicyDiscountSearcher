@@ -386,6 +386,52 @@ describe('surviving MV3 suspension', () => {
     // value can ever be inherited.
   });
 
+  it('stays resident while teardown waits on storage', async () => {
+    // Teardown stamps `finishedAt` in memory, then awaits — closing the window,
+    // waiting on a refusal write, and only then persisting and broadcasting. It
+    // used to stop the keepalive before all of that. A reclaim in the gap loses
+    // the finished snapshot and the popup falls back to `reapInterrupted`,
+    // reporting a completed race as interrupted. `cancelRun` has always stopped
+    // last for this reason; the two paths simply disagreed, and awaiting a
+    // storage write between them is what made the gap wide enough to matter.
+    await bootWorker();
+    // Longer than a keepalive period, so a poke inside the wait is observable
+    // at all — at 2s the worker could be stopped throughout and nothing would
+    // show, which is how this test would have measured nothing.
+    chromeMock.delayLocalWrites(MAX_GAP_MS + 20_000);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const answer = async (failure: string): Promise<void> => {
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, { type: 'PROBE_FAILED', failure, report: REPORT });
+      await settle(1_000);
+    };
+    await answer('probe-empty');
+    await answer('code-rejected');
+
+    // The broadcast, not `finishedAt` — teardown stamps that on the in-memory
+    // state before it awaits anything, and GET_STATE reads the same object, so
+    // the field says nothing about whether the run has been announced.
+    const announced = (): number =>
+      chromeMock.broadcasts.filter(
+        (message) => (message as { state?: { finishedAt?: number } }).state?.finishedAt,
+      ).length;
+
+    // Inside the wait: nothing announced yet, and the worker is still poked.
+    const duringWait = chromeMock.keepAlivePings();
+    await settle(MAX_GAP_MS + 5_000);
+    expect(announced()).toBe(0);
+    expect(chromeMock.keepAlivePings()).toBeGreaterThan(duringWait);
+
+    // Then the write lands, the run publishes, and the poking stops.
+    await settle(60_000);
+    expect(announced()).toBeGreaterThan(0);
+    const afterFinish = chromeMock.keepAlivePings();
+    await settle(MAX_GAP_MS + 5_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterFinish);
+  });
+
   it('stops poking after cancelling a run that never tore itself down', async () => {
     // Cancelling settles every quote, and settling extends the ceiling — so
     // this bought a wedged run another ten minutes of resident worker *after*

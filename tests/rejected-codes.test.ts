@@ -30,6 +30,35 @@ function fakeStore(seed: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The same store, with every read held until `open()`.
+ *
+ * Reads that are merely *slow* are not enough: equal-delay timers run one
+ * callback's microtasks to completion before the next fires, so two calls
+ * serialise by accident and a lost update cannot be observed. Once open, later
+ * reads pass straight through — otherwise a *correctly* serialised second write
+ * would deadlock waiting for a gate nobody is left to open.
+ */
+function heldReads(inner: ReturnType<typeof fakeStore>) {
+  let open = false;
+  const waiting: Array<() => void> = [];
+  return {
+    store: {
+      get: (key: string) =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          const read = (): void => void inner.get(key).then(resolve);
+          if (open) read();
+          else waiting.push(read);
+        }),
+      set: inner.set,
+    },
+    open: () => {
+      open = true;
+      for (const read of waiting.splice(0)) read();
+    },
+  };
+}
+
 describe('recordRejected', () => {
   it('remembers a refusal so the code is not raced again', async () => {
     const store = fakeStore();
@@ -46,6 +75,50 @@ describe('recordRejected', () => {
     const entries = await loadRejected(store);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.at).toBe(1_000);
+  });
+
+  it('keeps both when two refusals land together', async () => {
+    // Read-modify-write with no atomicity underneath it: both calls read the
+    // same list inside one `get` round trip and the second `set` drops the
+    // first. Two lanes at a driven vendor is how that happens, and the cost is
+    // the exact bug this store exists to prevent — a refused code left in the
+    // plan, raced again next run, and counted on the vendor's chip.
+    const store = fakeStore();
+    // A held read rather than a slow one. Two `setTimeout`s of equal delay do
+    // *not* overlap — node drains microtasks between timer callbacks, so the
+    // first call runs to completion before the second one even reads, and the
+    // fake serialises the very thing the test is trying to interleave. Measured,
+    // after that version passed with the queue removed. This holds every read
+    // until the gate opens, so both are genuinely in flight at once.
+    const held = heldReads(store);
+
+    const both = Promise.all([
+      recordRejected(held.store, 'national', 'XZ15J55', 1),
+      recordRejected(held.store, 'national', 'XZ45B65', 1),
+    ]);
+    await Promise.resolve();
+    held.open();
+    await both;
+
+    const codes = (await loadRejected(store)).map((entry) => entry.code);
+    expect(codes.sort()).toEqual(['XZ15J55', 'XZ45B65']);
+  });
+
+  it('does not let a refusal land behind a clear that came after it', async () => {
+    // The order a user would report as "try them again didn't work". The clear
+    // is asked for second, so it must win — but it needs no `get`, while the
+    // record in front of it is still waiting on one, so unserialised the clear
+    // lands first and the refusal reappears on top of it.
+    const store = fakeStore();
+    const held = heldReads(store);
+
+    const recording = recordRejected(held.store, 'national', 'XZ15J55', 1);
+    const clearing = clearRejected(held.store);
+    await Promise.resolve();
+    held.open();
+    await Promise.all([recording, clearing]);
+
+    expect(await loadRejected(store)).toEqual([]);
   });
 
   it('keeps the same code at two vendors apart', async () => {

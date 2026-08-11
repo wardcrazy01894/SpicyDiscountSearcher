@@ -71,6 +71,17 @@ export function codeReaches(filedUnder: VendorId, vendor: VendorId): boolean {
  *   Hilton 287 against 279. Pre-existing and much smaller than the National
  *   case, but the same fault, so it is fixed by the same set.
  */
+/**
+ * Declared above its only use, which is a default parameter.
+ *
+ * A `const` is in TDZ until the module body has finished evaluating, so with
+ * this below the function a `countCodesFor()` reached during that window throws
+ * `ReferenceError` rather than doing anything subtle. Nothing in this module's
+ * import graph can reach it today; the point is that the failure would be the
+ * popup dead at boot, and moving the line costs nothing.
+ */
+const EMPTY: ReadonlySet<string> = new Set();
+
 export function countCodesFor(vendor: VendorId, refused: ReadonlySet<string> = EMPTY): number {
   const codes = new Set<string>();
   for (const company of DB.companies) {
@@ -88,8 +99,6 @@ export function countCodesFor(vendor: VendorId, refused: ReadonlySet<string> = E
   }
   return codes.size;
 }
-
-const EMPTY: ReadonlySet<string> = new Set();
 
 export interface CandidateQuery {
   vendors: VendorId[];

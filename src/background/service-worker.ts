@@ -933,16 +933,34 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
-        // Guarded on `active === run` with the rest of teardown: a newer run
-        // has started its own keepalive, and stopping unconditionally here
-        // would suspend the worker out from under it.
-        stopKeepAlive();
         run.state.finishedAt = Date.now();
         await closeWindow(run);
         // Before the broadcast, because the broadcast is what tells the popup
         // to re-read the refusal list. These cannot reject.
         await Promise.all([...run.pendingWrites]);
         await publish();
+        // Last, after the closes and the final publish, so teardown itself is
+        // still covered by a resident worker — the same ordering `cancelRun`
+        // has always used, and for the same reason. `finishedAt` lives only in
+        // memory until `publish` persists it, so a reclaim before that loses
+        // the finished snapshot and the popup falls back to `reapInterrupted`.
+        // It mattered less when nothing here awaited I/O; awaiting a storage
+        // write between the two is what made the gap worth closing.
+        //
+        // Re-checked, not covered by the block's own `active === run`: that
+        // test is now three awaits old, and a newer run starting inside them
+        // has its own keepalive to stop out from under. Exactly the regression
+        // `cancelRun` records below, which is why it re-checks too.
+        //
+        // Deleting this guard passes the whole suite, and that is recorded
+        // rather than hidden: reaching it needs a second run to start *inside*
+        // teardown's storage wait, and `startRun` cancels the active run first
+        // — which awaits the same write this one is parked on. Kept because the
+        // reasoning is `cancelRun`'s, where the unguarded version was a real
+        // measured regression, and because a guard that costs one comparison is
+        // not worth trading for a test that would have to be built out of that
+        // interleaving.
+        if (active === run) stopKeepAlive();
       }
     }
   })();

@@ -80,29 +80,59 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
   }
 }
 
+/**
+ * Every write, in order.
+ *
+ * `recordRejected` is read-modify-write, and `chrome.storage` gives it no
+ * atomicity: two refusals settling inside one `get` round trip both read the
+ * same list and the second `set` drops the first. Two lanes at a driven vendor
+ * is exactly how that happens, and the cost is the bug this whole store exists
+ * to prevent — a refused code silently kept in the plan and raced again next
+ * run, now with a chip counting it.
+ *
+ * Module-level rather than per-store because there is one
+ * `chrome.storage.local` behind every caller; a per-store queue would serialise
+ * against the wrong thing. The chain never rejects — every link swallows its own
+ * failure — so it cannot wedge.
+ */
+let writes: Promise<void> = Promise.resolve();
+
+function serialise(write: () => Promise<void>): Promise<void> {
+  writes = writes.then(write, write);
+  return writes;
+}
+
 /** Remember a refusal, keeping the first timestamp for one already known. */
-export async function recordRejected(
+export function recordRejected(
   storage: RejectionStore,
   vendor: VendorId,
   code: string,
   at: number,
 ): Promise<void> {
-  const existing = await loadRejected(storage);
-  if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;
-  if (existing.length >= MAX_ENTRIES) return;
-  try {
-    await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
-  } catch {
-    // Same trade as above.
-  }
+  return serialise(async () => {
+    // Inside the queue, not before it: reading ahead of the writes in front of
+    // this one is precisely the lost update.
+    const existing = await loadRejected(storage);
+    if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;
+    if (existing.length >= MAX_ENTRIES) return;
+    try {
+      await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
+    } catch {
+      // Same trade as above.
+    }
+  });
 }
 
-export async function clearRejected(storage: RejectionStore): Promise<void> {
-  try {
-    await storage.set({ [KEY]: [] });
-  } catch {
-    // Same trade as above.
-  }
+export function clearRejected(storage: RejectionStore): Promise<void> {
+  // On the same queue: a clear that overtook an in-flight record would leave the
+  // record behind, which reads to the user as "try them again" not working.
+  return serialise(async () => {
+    try {
+      await storage.set({ [KEY]: [] });
+    } catch {
+      // Same trade as above.
+    }
+  });
 }
 
 /** The set a plan should skip, in the shape `buildCandidates` keys on. */
