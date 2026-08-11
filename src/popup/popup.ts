@@ -153,13 +153,26 @@ function money(amount: number, currency: string): string {
   }
 }
 
+/**
+ * An empty vendor selection means "no preference", so it is filled in.
+ *
+ * Deliberately *not* inside `renderVendorChips`, where it lived until this
+ * render gained call sites that are not the user establishing a selection —
+ * clearing the refusal list, and a run finishing. Unticking every chip leaves
+ * `ui.vendors` empty with the boxes unticked (the change handler does not
+ * re-render), so the fill would have re-ticked the whole row under a user who
+ * had just cleared it, reverting a choice they made and leaving `ui.vendors`
+ * disagreeing with the saved form until the next save. Filling belongs to the
+ * moments a selection is established, not to drawing one.
+ */
+function defaultVendorsIfEmpty(): void {
+  if (ui.vendors.size > 0) return;
+  for (const vendor of vendorsFor(ui.category)) ui.vendors.add(vendor.id);
+}
+
 function renderVendorChips(): void {
   const vendors = vendorsFor(ui.category);
   const refused = rejectionSet(ui.rejected);
-  // Whenever nothing is selected — not only on first open. Deliberate: an
-  // empty selection cannot race anything, so it is treated as "no preference"
-  // rather than "race nothing".
-  if (ui.vendors.size === 0) for (const vendor of vendors) ui.vendors.add(vendor.id);
 
   vendorChips.replaceChildren(
     ...vendors.map((vendor) => {
@@ -240,6 +253,21 @@ function syncSelectionSummary(): void {
   if (fresh) companyList.prepend(fresh);
 }
 
+/** Nothing matched because of the vendor picker or the search box. */
+function emptyBySelection(query: string): string {
+  return query
+    ? `No company matching "${query}" has a code for these vendors.`
+    : 'Pick at least one vendor.';
+}
+
+/** Nothing matched because every code that would have was refused. */
+function emptyByRefusal(query: string): string {
+  const what = query ? `Every code matching "${query}" at these vendors` : 'Every code here';
+  // Names the button below the form rather than describing the state and
+  // stopping, because the state is undoable and the undo is two lines away.
+  return `${what} was refused by the vendor. Use "try them again" to re-ask.`;
+}
+
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
@@ -262,11 +290,22 @@ function renderCompanyList(): void {
   const selected = selectionSummary();
 
   if (matches.length === 0) {
+    // Which of the two filters emptied the list? The same predicate without the
+    // refusal check answers it, and the answer decides between two opposite
+    // diagnoses: "you have picked nothing" and "the vendors said no to
+    // everything". Reachable — select only National, let its codes be refused
+    // over a few runs, and the plan line correctly says every code was refused
+    // while this list told the user to pick a vendor they had already picked.
+    const onlyRefusalsRemain =
+      vendors.length > 0 &&
+      searchCompanies(query).some((company) =>
+        company.codes.some(
+          (code) => !!code.code && vendors.some((v) => codeReaches(code.vendor, v)),
+        ),
+      );
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = query
-      ? `No company matching "${query}" has a code for these vendors.`
-      : 'Pick at least one vendor.';
+    empty.textContent = onlyRefusalsRemain ? emptyByRefusal(query) : emptyBySelection(query);
     // Still offer the escape hatch — an empty list is exactly when a stale
     // selection has stranded the plan.
     companyList.replaceChildren(...(selected ? [selected, empty] : [empty]));
@@ -1058,6 +1097,7 @@ function setCategory(category: Category): void {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('.tab')) {
     tab.classList.toggle('is-active', tab.dataset['category'] === category);
   }
+  defaultVendorsIfEmpty();
   renderVendorChips();
   renderCompanyList();
   refreshPlan();
@@ -1239,9 +1279,22 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
   // thing remembering them exists to avoid.
   if (message.state?.finishedAt) {
     void loadRejected(chrome.storage.local).then((entries) => {
+      const before = rejectionSet(ui.rejected);
+      const changed =
+        entries.length !== ui.rejected.length ||
+        entries.some((entry) => !before.has(rejectionKey(entry.vendor, entry.code)));
       ui.rejected = entries;
-      renderVendorChips();
-      renderCompanyList();
+      // Only when a refusal was actually recorded. Both renders are a full
+      // `replaceChildren`, and a run finishes asynchronously with whatever the
+      // user is doing — rebuilding the company list under someone mid-click
+      // resets their scroll and drops their focus. Most runs record nothing, so
+      // this makes the disruption as rare as the news that causes it. It does
+      // not remove it: a run that does refuse a code still rebuilds both lists,
+      // which is the honest trade for showing counts that are no longer true.
+      if (changed) {
+        renderVendorChips();
+        renderCompanyList();
+      }
       refreshPlan();
     });
   }
