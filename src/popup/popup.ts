@@ -136,8 +136,15 @@ let booted = false;
 
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
-/** Same reason, for the clear: written once and restored by every refreshPlan. */
-const CLEAR_FAILED_MESSAGE = 'Could not reach the extension background to clear those codes.';
+/**
+ * Same reason, for the clear: written once and restored by every refreshPlan.
+ *
+ * Deliberately does not name a cause. It covers a send that failed, a reply that
+ * never came, *and* the worker replying normally while its own bounded wait gave
+ * up on a slow write — in the last of which the background was reached and is
+ * still going to clear them. "Not yet" is the only thing true of all three.
+ */
+const CLEAR_FAILED_MESSAGE = 'Those codes have not been cleared yet. Try again in a moment.';
 
 /**
  * The most codes one run may race.
@@ -901,6 +908,15 @@ function renderRun(state: RunState | null): void {
   // popup is exactly how the user recovers.
   ui.pendingStart = false;
   ui.sendFailed = false;
+  // Same reason, and it needs saying because this one is not about reachability
+  // alone: nothing else resets it, so a single failed clear replaced the plan
+  // line for the rest of the popup's life — hiding the truncation warning
+  // ("racing 12 of them") and the skipped-codes note behind a stale complaint,
+  // through runs that started and finished perfectly well. The durable
+  // affordance is not this line anyway: the refused note and its "try them
+  // again" button are still on screen precisely because the codes are still
+  // refused.
+  ui.clearFailed = false;
   cancelBtn.hidden = !running;
   runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
@@ -1307,29 +1323,35 @@ rejectedClear.addEventListener('click', () => {
   // worker are separate realms: a clear written from this side can land between
   // an in-flight `recordRejected`'s read and its write, and be undone by it.
   // See CLEAR_REJECTED in `messages.ts`.
-  void send({ type: 'CLEAR_REJECTED' }).then((reply) => {
-    if (!reply) {
-      // A null reply is a failed send, not a completed clear. Saying nothing
-      // would leave the note on screen with no explanation for why pressing it
-      // did nothing — and the message has to be a flag rather than a one-off
-      // write, because every refreshPlan overwrites that line.
-      ui.clearFailed = true;
-      refreshPlan();
-      return;
-    }
-    ui.clearFailed = false;
-    // Re-read rather than assuming empty: the worker is the writer now, so its
-    // storage is the answer, and a run settling a refusal in the same moment
-    // should not be papered over with a guess.
-    void loadRejected(chrome.storage.local).then((entries) => {
+  //
+  // Storage decides whether it worked, not the reply — on every path, which is
+  // what makes the three ways this can go wrong come out right:
+  //
+  // - **A null reply does not prove the clear did not happen.** `send` retries
+  //   and a rejection does not prove non-delivery; this file already reasons
+  //   that way about START_RUN. Treating it as failure while the worker really
+  //   had cleared would leave `ui.rejected` populated for the whole session,
+  //   filtering out codes the store no longer refuses.
+  // - **A reply does not prove it did.** The worker's wait on the write is
+  //   bounded, so a slow `chrome.storage` gets a perfectly ordinary
+  //   `RUN_STATE` back with the clear still queued.
+  // - A run settling a refusal in the same moment should not be papered over
+  //   either way.
+  //
+  // Judged against the refusals this popup *knew about*, so a new one recorded
+  // in the meantime does not read as a failed clear.
+  const before = rejectionSet(ui.rejected);
+  void send({ type: 'CLEAR_REJECTED' })
+    .then(() => loadRejected(chrome.storage.local))
+    .then((entries) => {
       ui.rejected = entries;
+      ui.clearFailed = entries.some((entry) => before.has(rejectionKey(entry.vendor, entry.code)));
       // Chips and the company list carry the count too, so `refreshPlan` alone
       // would leave them showing the reduced numbers after putting the codes back.
       renderVendorChips();
       renderCompanyList();
       refreshPlan();
     });
-  });
 });
 
 cancelBtn.addEventListener('click', () => {

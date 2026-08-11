@@ -445,6 +445,47 @@ describe('surviving MV3 suspension', () => {
     expect(reply.state).not.toBeNull();
   });
 
+  it('stops poking even if teardown throws on its way out', async () => {
+    // `stopKeepAlive` used to be teardown's *first* statement, so it ran
+    // whatever happened next. Moving it last — to keep the worker resident
+    // across the closes, the write wait and the publish — silently traded that
+    // unconditional stop away: anything in between rejecting left the interval
+    // poking every 20s for the rest of the ceiling with no run in progress,
+    // pinning the worker for ten minutes over a run that had already finished.
+    //
+    // `broadcast` is the reachable case. It calls `chrome.runtime.sendMessage`
+    // and catches the *rejection*, which does not cover a synchronous throw —
+    // what an invalidated extension context actually produces.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    const fake = (globalThis as { chrome: typeof chrome }).chrome;
+    const sendMessage = fake.runtime.sendMessage.bind(fake.runtime);
+    fake.runtime.sendMessage = (message: unknown) => {
+      if ((message as { state?: { finishedAt?: number } }).state?.finishedAt) {
+        throw new Error('Extension context invalidated.');
+      }
+      return sendMessage(message);
+    };
+
+    for (let i = 0; i < 2; i += 1) {
+      const tabId = [...chromeMock.tabs.keys()][0];
+      if (tabId === undefined) break;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'probe-empty',
+        report: REPORT,
+      });
+      await settle(1_000);
+    }
+
+    // Teardown threw on the way out. The interval must still be gone.
+    const afterTeardown = chromeMock.keepAlivePings();
+    await settle(MAX_GAP_MS + 20_000);
+    expect(chromeMock.keepAlivePings()).toBe(afterTeardown);
+  });
+
   it('stops poking after cancelling a run that never tore itself down', async () => {
     // Cancelling settles every quote, and settling extends the ceiling — so
     // this bought a wedged run another ten minutes of resident worker *after*

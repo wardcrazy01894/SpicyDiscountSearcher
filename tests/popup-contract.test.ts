@@ -393,9 +393,9 @@ describe('the popup half of the double-run guard', () => {
   });
 
   it('says so when the background cannot be reached to clear', async () => {
-    // A failed send is not a completed clear. Silently emptying the list here
-    // would show the codes restored while storage still holds every one of
-    // them, and the next open would put them back with no explanation.
+    // Storage decides, not the reply. Here the send fails *and* the codes are
+    // still there, so the button really did nothing and saying nothing would
+    // leave the note on screen with no explanation.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
     await boot();
@@ -403,28 +403,77 @@ describe('the popup half of the double-run guard', () => {
 
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
     });
     // And the note stays, because the codes really are still refused.
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
 
-    // The half that matters, and the half a one-off `textContent` write misses:
-    // every refreshPlan trigger overwrites that line, so a single keystroke in
-    // the codes box wiped the only evidence the clear had failed while the
-    // refusals went on being skipped. Same gap `ui.sendFailed` closes for
-    // START_RUN.
+    // The half a one-off `textContent` write misses: every refreshPlan trigger
+    // overwrites that line, so a single keystroke in the codes box wiped the
+    // only evidence the clear had failed while the refusals went on being
+    // skipped. Same gap `ui.sendFailed` closes for START_RUN.
     const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
     maxCodes.value = '30';
     maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
     expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
 
     // And it goes away when a clear actually works, rather than latching.
     sendMessageImpl = fakeBackground;
     document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
+      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
+        /not been cleared yet/,
+      );
     });
+  });
+
+  it('does not complain when the clear worked but the reply did not arrive', async () => {
+    // The mirror of the test above, and the reason both judge storage rather
+    // than the reply. `send` retries and a rejection does not prove
+    // non-delivery — this file already reasons that way about START_RUN — so a
+    // clear that really happened while the response channel dropped must not be
+    // reported as a failure. Treating it as one left `ui.rejected` populated for
+    // the rest of the session, filtering out codes the store no longer refused.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    sendMessageImpl = (message) => {
+      // Delivered and acted on; only the answer is lost.
+      void fakeBackground(message);
+      return Promise.reject(new Error('response channel closed'));
+    };
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+  });
+
+  it('stops complaining about a failed clear once the background answers', async () => {
+    // Nothing else reset the flag, so one transient failure replaced the plan
+    // line for the rest of the popup's life — hiding the truncation warning and
+    // the skipped-codes note behind a stale complaint, through runs that
+    // started and finished perfectly well.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/not been cleared yet/);
+    });
+
+    // Any answer from the background is proof it is reachable, and the state has
+    // moved on. The refused note is still there to press again.
+    await broadcastFinishedRun();
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
   });
 
   it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
