@@ -203,6 +203,15 @@ describe('buildDeepLink', () => {
     }
   });
 
+  it('refuses for sixt, but for a reason that leaves the door open', () => {
+    // Not "session state". Budget and enterprise keep their search somewhere no
+    // query string can reach, so a builder for them can never work. Sixt's URL
+    // merely lands on the wrong page — one path measured once, and another may
+    // work. The message is what tells the next reader which of those it is.
+    expect(() => buildDeepLink('sixt', 'X1', CAR)).toThrow(/302s to the site root/);
+    expect(() => buildDeepLink('sixt', 'X1', CAR)).not.toThrow(/session state/);
+  });
+
   it('opens the form page for a vendor whose driver does the searching', () => {
     // National left the list above when it got a driver. Its URL is not a deep
     // link and is not graded as one: it carries no itinerary and no code,
@@ -238,7 +247,7 @@ describe('buildDeepLink', () => {
     // plan either. Pinned by count so a vendor silently dropping out of the
     // registry fails here rather than shrinking the loop unnoticed.
     const built = searchableVendors();
-    expect(built.filter((v) => v.category === 'car')).toHaveLength(4);
+    expect(built.filter((v) => v.category === 'car')).toHaveLength(3);
     for (const vendor of built) {
       const trip = vendor.category === 'car' ? CAR : HOTEL;
       const { url, confidence } = buildDeepLink(vendor.id, 'TESTCODE', trip);

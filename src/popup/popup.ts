@@ -131,10 +131,10 @@ const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen th
  * here knows which code will win. Whatever this number cuts off is cut off
  * arbitrarily, which is the argument for it being generous.
  *
- * 100 covers every car code there is — 66 across Hertz, Avis, Sixt and National
- * with all four selected — so a car run can now be exhaustive. Hotels still
- * cannot: there are 401, and Hilton alone has 279. Raising it far enough for
- * those is a different conversation, because it is also 401 tabs.
+ * 100 covers every car code there is — 63 across Hertz, Avis and National with
+ * all three selected — so a car run can be exhaustive. Hotels still cannot:
+ * there are 401, and Hilton alone has 279. Raising it far enough for those is a
+ * different conversation, because it is also 401 tabs.
  *
  * The previous ceiling was 60, which bound even a full car run, and it carried
  * no recorded reason anywhere in the repo.
@@ -500,15 +500,20 @@ function validate(trip: Trip): string | null {
   if (trip.category === 'car') {
     if (!trip.pickupLocation) return 'Enter a pick-up location.';
     // Checked here as well as in the builders, because failing per-vendor is
-    // not a safe default. "Chicago Downtown" makes Avis and Hertz throw
-    // `link-build`, and the race is then decided *only* by Sixt — whose builder
-    // passes the location through as free text, has never been verified either
-    // way, and would win uncontested. Rejecting before any tab opens is the
-    // difference between no answer and a confidently wrong one.
+    // not a safe default: "Chicago Downtown" makes Avis and Hertz throw
+    // `link-build` and hands the race to whatever is left.
     //
-    // (The reason used to name Budget, Enterprise and National. They are
-    // `searchable: false` now and produce no candidate at all, so the survivor
-    // is Sixt.)
+    // Who that is has changed twice, which is the point. It was Budget,
+    // Enterprise and National, whose home pages answered with a marketing
+    // "from $19/day"; then Sixt alone, whose builder took the location as free
+    // text and was never verified either way. Both are `searchable: false` now,
+    // and today's survivor is National — whose driver types the location into a
+    // real form and refuses the quote unless the form shows the branch back.
+    // So the current lineup happens to be safe.
+    //
+    // The check stays because that is a fact about today's vendors rather than
+    // about the rule. Rejecting before any tab opens is the difference between
+    // no answer and a confidently wrong one, whoever is racing.
     if (!AIRPORT_CODE_RE.test(trip.pickupLocation.trim())) {
       return 'Pick-up must be a 3-letter airport code, e.g. TPA.';
     }

@@ -11,8 +11,7 @@
     "https://www.hilton.com/*",
     "https://www.hyatt.com/*",
     "https://www.marriott.com/*",
-    "https://www.nationalcar.com/*",
-    "https://www.sixt.com/*"
+    "https://www.nationalcar.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -26,8 +25,7 @@
         "https://www.hilton.com/*",
         "https://www.hyatt.com/*",
         "https://www.marriott.com/*",
-        "https://www.nationalcar.com/*",
-        "https://www.sixt.com/*"
+        "https://www.nationalcar.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

@@ -190,16 +190,27 @@ type Builder = (code: string, trip: Trip) => DeepLink;
  * are known never to have worked, so producing a URL at all only manufactures a
  * plausible wrong price.
  */
-function unsearchable(vendor: string): Builder {
+function unsearchable(
+  vendor: string,
+  because = 'cannot be searched by URL — its search lives in session state, so it needs its form driven rather than a deep link',
+): Builder {
   // Defence in depth, not the primary guard: these vendors are also
   // `searchable: false` in vendors.ts, so `buildCandidates` never proposes them
   // and the popup never offers a chip. This catches a plan that arrives some
   // other way.
+  //
+  // The reason is the *whole* sentence, not a clause appended to a fixed
+  // prefix, because the vendors do not share one and the difference decides
+  // what would fix each. Budget and enterprise keep the search in session
+  // state, so no query string can express it and no builder for them can ever
+  // work. Sixt's URL simply reaches the wrong page — one path measured once,
+  // and another may work.
+  //
+  // A fixed "cannot be searched by URL" prefix made that distinction
+  // unsayable: it asserted the impossibility for Sixt in the one string a user
+  // actually sees, the `link-build` tooltip.
   return () => {
-    throw new Error(
-      `${vendor} ignores the search URL entirely — its search lives in session state, ` +
-        'so it needs its form driven rather than a deep link',
-    );
+    throw new Error(`${vendor} ${because}`);
   };
 }
 
@@ -331,7 +342,7 @@ const BUILDERS: Record<VendorId, Builder> = {
   },
 
   /**
-   * Budget, Enterprise and National refuse rather than build.
+   * Budget and Enterprise refuse rather than build.
    *
    * All three keep the search in session state, and this is not a suspicion:
    * a hand-run Enterprise search ends on `/en/reserve.html#car_select` and a
@@ -347,6 +358,11 @@ const BUILDERS: Record<VendorId, Builder> = {
    * and wins on being cheapest. `landedElsewhere` cannot save it either —
    * `finalPath` is truncated at the first `#`, so `reservation.html#car_select`
    * compares equal to the path we asked for and is never flagged.
+   *
+   * Sixt throws too, and its own entry below says why — a different reason, and
+   * deliberately not this one: its URL reaches the wrong page rather than
+   * carrying a search the site ignores. National left this group in #55; it
+   * builds the page its form lives on and is driven.
    *
    * So they throw, and surface as `link-build` against the code that could not
    * be searched. That is the same trade this file makes for a malformed date
@@ -386,42 +402,30 @@ const BUILDERS: Record<VendorId, Builder> = {
   }),
 
   /**
-   * Reaches no search, measured: `/php/reservation` 302s to
-   * `https://www.sixt.com/` with the location field empty, the dates ignored,
-   * and a marketing "$35" on the page. So this is not merely unverified in the
-   * way the hotel builders are — it is known not to work, and the only reason
-   * it is not `unsearchable` alongside Budget, Enterprise and National is that nothing
-   * proves it *cannot* work. Its search may well be URL-expressible at some
-   * other path; nobody has captured one. Do that before trusting it.
+   * Sixt refuses rather than building, for a reason of its own.
    *
-   * Until then the damage is contained rather than absent: the landing page is
-   * the site root, so `landedElsewhere` flags the quote `suspect`, and
-   * `compare.ts` keeps suspect quotes out of the ranking entirely. That matters
-   * because $35 is cheaper than any genuine rate and used to win.
+   * Measured: `/php/reservation` 302s to `https://www.sixt.com/` with the
+   * location field empty, the dates ignored, and a marketing "$35" on the page.
+   * Returning a URL for that is the same bad trade budget and enterprise make —
+   * the landing page answers with a plausible number, the probe reads it as a
+   * price, and `compare.ts` never looks at `confidence`.
    *
-   * That containment is a measurement, not a property. `landedElsewhere` fires
-   * only on a landed path of `/`, so if this 302 ever targets `/en/` — a locale
-   * split, a market router, an A/B — the quote is no longer `suspect`, the $35
-   * re-enters the primary bucket and wins again, with nothing red and nothing on
-   * screen. It holds *while* the redirect target is the bare root.
-   *
-   * The airport-code rule `validate()` applies to the whole car form therefore
-   * costs nothing here: `pickupStation` takes free text, but no value of it
-   * reaches a search. Revisit that if this builder is ever fixed.
+   * The distinction from those two is worth keeping, because it decides what
+   * would fix this. Their searches live in session state, so no query string
+   * can ever express one and a builder for them cannot exist. Here, one path
+   * was tried and does not work; another may. Capture a URL that reaches a real
+   * search — README's "Fixing a deep link", and note that replaying it is the
+   * step that matters — or give it a driver.
    */
-  sixt: (code, trip) => {
-    const t = carTrip(trip);
-    return {
-      confidence: 'best-effort',
-      url: withParams('https://www.sixt.com/php/reservation', {
-        cc: code,
-        pickupStation: t.pickupLocation,
-        returnStation: t.dropoffLocation || t.pickupLocation,
-        pickupDate: t.pickupDate,
-        returnDate: t.dropoffDate,
-      }),
-    };
-  },
+  sixt: unsearchable(
+    'sixt',
+    // Not "cannot be searched by URL", which is the prefix budget and
+    // enterprise carry and is exactly the claim this vendor's whole entry
+    // refuses to make. This string reaches the user, as the `link-build`
+    // tooltip — so the one place anyone reads it must not say a Sixt URL is
+    // impossible when all that was measured is that the one we had missed.
+    'has no working search URL — the only one measured, /php/reservation, 302s to the site root',
+  ),
 
   hilton: (code, trip) => {
     const t = hotelTrip(trip);

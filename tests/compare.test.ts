@@ -178,8 +178,12 @@ describe('orderForDisplay', () => {
 
 describe('a quote that landed somewhere other than the search', () => {
   // The failure this closes, measured rather than imagined: sixt's builder
-  // targets /php/reservation, which 302s to https://www.sixt.com/ with the
-  // location field empty and "$35" on the page. The probe reads that, the quote
+  // targeted /php/reservation, which 302s to https://www.sixt.com/ with the
+  // location field empty and "$35" on the page. That vendor has since been
+  // disabled for this exact reason, so nothing shipping produces the quote
+  // today — but the three hotel builders are still `best-effort` and unchecked
+  // against a live site, and this is the only unambiguous tell a deep link
+  // gets. The probe reads that, the quote
   // comes back `ok` with a real number, and because a marketing rate is cheaper
   // than any genuine one it took the primary bucket and won outright. The popup
   // put a flag on the row and still ranked it first, which reads as an answer

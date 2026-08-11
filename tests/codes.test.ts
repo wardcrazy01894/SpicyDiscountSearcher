@@ -153,12 +153,17 @@ describe('countCodesFor', () => {
         (code) => code.code && codeReaches(code.vendor, 'national'),
       );
       expect(reachable, name).toBe(true);
-      // And they have nothing at any other car vendor, which is what made the
-      // omission total rather than cosmetic.
+      // And they have nothing at any other *reachable* car vendor, which is what
+      // made the omission total rather than cosmetic. Derived from the registry
+      // rather than listed: it named sixt until that vendor was disabled, and a
+      // hard-coded list quietly asserts something about vendors nothing routes
+      // to — passing today, and failing on a workbook edit with a message
+      // claiming a code is reachable when it is not.
+      const otherCarVendors = VENDORS.filter(
+        (v) => v.category === 'car' && v.searchable && v.id !== 'national',
+      ).map((v) => v.id);
       const elsewhere = company!.codes.some(
-        (code) =>
-          code.code &&
-          (['hertz', 'avis', 'sixt'] as const).some((v) => codeReaches(code.vendor, v)),
+        (code) => code.code && otherCarVendors.some((v) => codeReaches(code.vendor, v)),
       );
       expect(elsewhere, name).toBe(false);
     }
@@ -319,13 +324,14 @@ describe('interleaveByVendor', () => {
     // this guards — and goes red merely because a lane runs short.
     const withCodes = new Set(all.map((c) => c.vendor));
     expect(perVendor.size).toBe(withCodes.size);
-    // Five, which is the true worst case: Sixt has three codes, so the other
-    // two vendors absorb the remaining nine and one of them legitimately
-    // reaches five of twelve. An exact share (`ceil(12 / vendors)` = 4) goes
-    // red merely because a lane runs short; half the cap would permit {6,3,3},
-    // which is closer to the twelve-Avis-codes bug this guards than to a fair
-    // spread.
-    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(5);
+    // Four, and the number is derived rather than chosen. It was five while
+    // Sixt shipped with three codes: the other two lanes had to absorb the
+    // remaining nine, so one of them legitimately reached five of twelve. Sixt
+    // is `searchable: false` now and every remaining car vendor has at least
+    // nineteen codes, so a fair spread over twelve slots is exactly four — and
+    // leaving the bound at five would quietly tolerate a {5,4,3} split it was
+    // never meant to allow.
+    expect(Math.max(...perVendor.values())).toBeLessThanOrEqual(4);
   });
 
   it('spreads the default cap across companies, not just vendors', () => {

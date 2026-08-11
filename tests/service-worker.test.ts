@@ -535,7 +535,10 @@ describe('politeness', () => {
     const solo = { ...plan(1) };
     solo.candidates = [
       ...plan().candidates,
-      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
+      // National rather than sixt, which no longer builds a URL at all. Its
+      // `driven` confidence makes the same point better: three quotes, three
+      // builders, and the value is per-quote rather than per-run.
+      { companySlug: 'ibm', companyName: 'IBM', vendor: 'national', code: '5666666', note: null },
     ];
     await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
     await settle();
@@ -731,13 +734,14 @@ describe('diagnosing a run afterwards', () => {
     //   Asserting an unverified vendor separately proved nothing about the
     //   worker, because that vendor was never in the run.
     //
-    // With sixt — still best-effort — in the plan alongside two verified
-    // vendors, a hard-coded flag fails whichever value it picks.
+    // With National — `driven` — in the plan alongside two verified vendors, a
+    // hard-coded flag fails whichever value it picks. This used sixt while that
+    // vendor was `best-effort`; sixt now builds no URL at all.
     await bootWorker();
     const mixed = { ...plan(3) };
     mixed.candidates = [
       ...plan().candidates,
-      { companySlug: 'initech', companyName: 'Initech', vendor: 'sixt', code: 'S1', note: null },
+      { companySlug: 'ibm', companyName: 'IBM', vendor: 'national', code: '5666666', note: null },
     ];
     await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
     await settle();
@@ -749,7 +753,7 @@ describe('diagnosing a run afterwards', () => {
       expect(quote.confidence).toBe(expected.confidence);
     }
     expect(new Set(state?.quotes.map((q) => q.confidence))).toEqual(
-      new Set(['verified', 'best-effort']),
+      new Set(['verified', 'driven']),
     );
   });
 });

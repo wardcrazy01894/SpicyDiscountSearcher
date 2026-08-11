@@ -30,8 +30,10 @@ encode other people's websites. They will break. Both are deliberately isolated:
 
 - Deep links are one function per vendor with a `confidence` flag, which rides
   on the `Quote` and shows in the popup. Everything else calls `buildDeepLink`
-  and doesn't care. **Avis and Hertz are `'verified'`**; the rest are still
-  `'best-effort'`. Both were captured from a search run by hand and then proved
+  and doesn't care. **Avis and Hertz are `'verified'`**; the three hotel
+  builders are `'best-effort'`; National is `'driven'`, which is not a grade on
+  that scale but a statement that its URL carries no search at all; and Budget,
+  Enterprise, Sixt and Starwood build nothing. Both were captured from a search run by hand and then proved
   to _replay_ rather than merely load — Avis by changing the airport and
   watching the results page name Tampa, Hertz by changing it and watching the
   inventory change (36 vehicles at $31-$133 against 31 at $36-$111). Loading
@@ -52,11 +54,22 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `link-build` is visible; that is not. Same trade as the malformed date and
   the one-way trip.
 
+  **Sixt throws too, and deliberately not for these reasons.** Its landing page
+  shows `$35` rather than `from $19/day`, and — the part that matters —
+  `landedElsewhere` _did_ catch it: the 302 goes to the bare root, which is the
+  one shape that flag recognises, so its quotes were flagged `suspect` and kept
+  out of the ranking. It was disabled anyway, because that containment is a
+  measurement rather than a property (a locale split to `/en/` would end it) and
+  because a vendor that cannot answer still spends a lane and a real tab on
+  every run. Reading this bullet as covering Sixt would say the flag never
+  fired, when the point is that it did and was still not enough.
+
   They are also `searchable: false`, which is the half that matters to the user.
   Throwing alone left them selectable, and `interleaveByVendor` round-robins one
   candidate per vendor — so three vendors that could not run took **half** the
   default cap of twelve, and the plan line promised codes the popup already knew
-  would fail. `starwood` had the same shape and the same answer for years: the
+  would fail. (That episode was budget, enterprise and national; Sixt was
+  searchable throughout it and left later, on its own evidence.) `starwood` had the same shape and the same answer for years: the
   codes stay in the database, the vendor gets no chip, no candidate, and no host
   permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
@@ -78,9 +91,12 @@ encode other people's websites. They will break. Both are deliberately isolated:
   two others, rendering LAX to PHL for a URL asking LAX to LAX, because a return
   location left in the browser session won. The probe tabs share the user's
   profile, so that is reachable in normal use. `popup.ts` also validates the
-  IATA shape before any tab opens — failing per-vendor would leave the race to
-  be decided only by Sixt, whose builder takes the location as free text and
-  has never been verified either way.
+  IATA shape before any tab opens — failing per-vendor would once have left the
+  race to be decided only by Sixt, whose builder took the location as free text
+  and was never verified either way. Sixt is `searchable: false` now, so that
+  particular escape is closed; the validation stays because the reasoning was
+  never about Sixt, but about a whole race being decided by whichever vendor
+  fails to notice a bad location.
 
   The popup's single caveat now renders even when nothing is unverified. It was
   `if (unverified > 0)`, so the moment these two became verified a run of only
@@ -195,8 +211,11 @@ The two things that would silently produce a wrong answer, and their guards:
   price only, so the home-page number still entered the primary bucket, still
   won `cheapestComparable`, and `savings` still announced it as the saving. The
   popup badged the row and ranked it first, which reads as an answer with a
-  caveat rather than as no answer. Sixt makes that reachable today — its builder
-  302s to the site root, where a marketing "$35" sits. Suspect quotes are listed
+  caveat rather than as no answer. Sixt used to make that reachable — its builder
+  302s to the site root, where a marketing "$35" sits — and is now
+  `searchable: false` for exactly that reason, so nothing routes to it. The
+  guard stays: `suspect` is the only unambiguous tell a deep link ever gets, and
+  the next vendor to rot will need it. Suspect quotes are listed
   by `unrankedQuotes` instead, the same treatment a mismatched currency gets, so
   the code does not silently vanish. No longer blind for Avis, whose builder now targets
   `/en/reservation/vehicle-availability`, so landing on the root is once again
@@ -426,8 +445,10 @@ would settle another vendor's quote, labelled with the wrong vendor and code,
 paragraph claiming it was "a live bug rather than only a future one" was
 overstated. Its evidence was that Avis and Budget share a parent, and Budget
 left `host_permissions` when it became unsearchable. The six hosts the manifest
-still matches — avis, hertz, hilton, hyatt, marriott, sixt — are six distinct
-brands with no redirect between them. Starwood shares marriott.com but is
+still matches — avis, hertz, nationalcar, hilton, hyatt, marriott — are six
+distinct brands with no redirect between them. Sixt left when it became
+unsearchable; National arrived with its driver, and it shares a _backend_ with
+Enterprise (`prd.location.enterprise.com`) without sharing a matched host. Starwood shares marriott.com but is
 `searchable: false`, so it never holds a quote to misattribute. A redirect to a
 _sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
 entirely, which is the `left-our-origins` case and not this one.
@@ -512,11 +533,21 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites for every vendor
-  except Avis and Hertz (see README). Budget and Enterprise are worse
-  than unverified: both keep the search in session state, so no query
-  string can express it and the builders they have today cannot ever work.
-  National keeps its search there too but is no longer in that group — it is
-  driven rather than deep-linked.
+  except Avis and Hertz (see README). Beyond that there are now three distinct
+  states, and the difference decides what would fix each:
+
+  - **Budget and Enterprise** are worse than unverified: both keep the search in
+    session state, so no query string can express it and the builders they have
+    today cannot ever work. They need drivers.
+  - **Sixt** is measured-broken but not impossible: `/php/reservation` 302s to
+    the site root, which is one path tried once. It is `searchable: false` so it
+    stops spending a lane, and it returns the day someone captures a URL that
+    reaches a real search. `unsearchable()` takes its reason as a whole sentence
+    precisely so its refusal does not borrow the other two's "cannot be
+    searched by URL".
+  - **National** keeps its search in session state like Budget and Enterprise,
+    and is searchable anyway — it is driven rather than deep-linked.
+
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
   settle or its 45s deadline passes, which is longer than Chrome's ~30s idle
