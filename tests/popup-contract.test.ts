@@ -785,6 +785,38 @@ describe('the popup half of the double-run guard', () => {
     expect(note).not.toMatch(/not been cleared yet/);
   });
 
+  it('re-arms Run after a clear when a failed START_RUN had disabled it', async () => {
+    // The state the hand-rolled version of this kept missing. A START_RUN whose
+    // send rejects sets `pendingStart` *and* `sendFailed`; clearing only the
+    // second one let `refreshPlan` write the ordinary plan line and the caption
+    // revert, while `runBtn.disabled = ui.running || ui.pendingStart` stayed
+    // true — a dead button beside a healthy-looking plan, with no message and
+    // no recovery short of reopening the popup. Before this branch the
+    // explanation at least stayed on screen.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+
+    // A submit whose send fails: `pendingStart` and `sendFailed` both latch.
+    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+    fillCarForm();
+    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
+    });
+    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
+
+    // The worker is back, and answers the clear with the state GET_STATE would.
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(false);
+    });
+    expect(document.querySelector('#run-btn')?.textContent).toBe('Find the cheapest code');
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
+  });
+
   it('fixes the Run caption when a clear proves the background is reachable', async () => {
     // `runBtn.textContent` is written in exactly two places, and this path calls
     // neither — so clearing `ui.sendFailed` re-enabled the button while it still

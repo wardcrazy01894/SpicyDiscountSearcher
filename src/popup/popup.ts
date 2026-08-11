@@ -1530,14 +1530,15 @@ rejectedClear.addEventListener('click', () => {
       // `refreshPlan` still took its early return and the plan line went on
       // saying "Could not reach the extension background", with Run disabled,
       // beside chips that had already redrawn with the restored counts.
-      if (reply) {
-        ui.sendFailed = false;
-        // The caption too. It is written in exactly two places — `applyReply`'s
-        // failure branch and `renderRun` — and this path calls neither, so
-        // re-enabling the button left it reading "Reopen the popup to retry"
-        // while being perfectly able to start a race.
-        runBtn.textContent = ui.running ? 'Racing codes…' : 'Find the cheapest code';
-      }
+      // `applyReply`, not a hand-rolled subset of it. Clearing `sendFailed`
+      // here and patching up whatever was visibly wrong was two rounds of
+      // exactly that: first the plan line, then the Run caption, and then
+      // `pendingStart` — which is cleared only by `renderRun`, so Run stayed
+      // dead beside a healthy-looking plan line and no explanation at all. The
+      // reason this path avoided `applyReply` was that a null state hid a
+      // finished run's results; the worker answers with the same state
+      // GET_STATE would now, so there is nothing left to avoid.
+      if (reply) applyReply(reply);
       return reloadRejected();
     })
     .then((entries) => {

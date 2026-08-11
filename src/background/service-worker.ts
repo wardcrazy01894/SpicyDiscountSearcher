@@ -1005,7 +1005,12 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
           // Before the broadcast, because the broadcast is what tells the popup
           // to re-read the refusal list. Bounded, so a storage call that never
           // returns cannot hold the run unannounced.
-          await settleWrites(run.pendingWrites);
+          // The queue's depth, not this run's promise count: every function in
+          // `rejected-codes.ts` returns the chain's *tail*, so a clear enqueued
+          // between two refusals sits inside the wait without being counted —
+          // the same under-counting the `links` argument exists for, which only
+          // the CLEAR_REJECTED path was using.
+          await settleWrites(run.pendingWrites, 'a run announcement', pendingWrites());
           await publish();
         } finally {
           // Last, after the closes and the final publish, so teardown itself is
@@ -1054,6 +1059,23 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     warn('teardown failed after the run finished', error);
   });
 
+  return state;
+}
+
+/**
+ * What the popup should be shown: the live run, or the settled snapshot.
+ *
+ * Shared by GET_STATE and CLEAR_REJECTED so their answers cannot disagree —
+ * they did, and the difference was load-bearing: the clear replied
+ * `active?.state ?? null`, so after a worker restart it said "no run" about one
+ * the user could still see on screen.
+ */
+async function currentState(): Promise<RunState | null> {
+  if (active) return active.state;
+  // No active run, so anything unfinished in the snapshot belongs to a worker
+  // that was suspended. Settle it before the popup sees it.
+  const state = reapInterrupted(await loadPersisted());
+  if (state) await persist(state).catch(() => {});
   return state;
 }
 
@@ -1184,19 +1206,15 @@ chrome.runtime.onMessage.addListener(
           // it, each of which has its own per-write bound.
           const depth = pendingWrites() + 1;
           await settleWrites([clearRejected(chrome.storage.local)], 'a clear', depth);
-          sendResponse({ type: 'RUN_STATE', state: active?.state ?? null } satisfies StateMessage);
+          // The same state GET_STATE would give, not `active?.state ?? null`.
+          // The popup treats any reply as an ordinary state update, and a bare
+          // null from a worker that had merely restarted told it there was no
+          // run — hiding the results of one the user was still looking at.
+          sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
         case 'GET_STATE': {
-          if (active) {
-            sendResponse({ type: 'RUN_STATE', state: active.state } satisfies StateMessage);
-            return;
-          }
-          // No active run, so anything unfinished in the snapshot belongs to a
-          // worker that was suspended. Settle it before the popup sees it.
-          const state = reapInterrupted(await loadPersisted());
-          if (state) await persist(state).catch(() => {});
-          sendResponse({ type: 'RUN_STATE', state } satisfies StateMessage);
+          sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
         case 'PROBE_READY': {

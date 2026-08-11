@@ -1040,6 +1040,27 @@ describe('remembering a code the vendor refused', () => {
     expect(atReply).toEqual([]);
   });
 
+  it('answers a clear with the same state GET_STATE would', async () => {
+    // The popup treats any reply as an ordinary state update, so this one has
+    // to be one. Replying `active?.state ?? null` said "no run" whenever the
+    // worker had restarted — which MV3 does routinely — and the popup then hid
+    // the results of a run the user was still looking at. That is the whole
+    // reason the clear path used to avoid `applyReply` and hand-roll a subset
+    // of it, which is where three rounds of missed flags came from.
+    await bootWorker();
+    chromeMock.session.set('runState', {
+      plan: plan(),
+      quotes: [],
+      finishedAt: Date.now(),
+    });
+
+    const reply = (await chromeMock.fromPopup({ type: 'CLEAR_REJECTED' })) as {
+      state: RunState | null;
+    };
+    expect(reply.state).not.toBeNull();
+    expect(reply.state?.finishedAt).toBeTypeOf('number');
+  });
+
   it('refuses to clear for a content script', async () => {
     // The first destructive popup-only message, and this extension runs content
     // scripts on six vendor hosts. A page there could otherwise wipe the one

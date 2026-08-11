@@ -121,15 +121,20 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
  * open with nothing to explain them. `recordRejected` therefore refuses to
  * write a list it read before a clear was asked for.
  *
- * That closes it when the *read* was the slow part. When the **write** was, the
- * `set` is already with the platform before a clear can be asked for and no
- * check here can retract it — closing that would need either a
- * compare-and-swap, which `chrome.storage` does not offer, or a compensating
- * re-clear afterwards, which introduces its own ordering against any legitimate
- * write that followed. Left open deliberately: it needs a `set` to take longer
- * than `WRITE_TIMEOUT_MS` *and* the user to press "try them again" inside that
- * window, and the cost is the refusals reappearing, visible on the next open
- * and clearable again.
+ * That closes it when the *read* was the slow part. Two orderings stay open,
+ * both needing a `set` slower than `WRITE_TIMEOUT_MS`, and both left open on
+ * purpose rather than for want of noticing:
+ *
+ * - An abandoned **record** whose `set` was already issued cannot be retracted,
+ *   so it can still land after a clear and restore what was cleared.
+ * - An abandoned **clear** can land after a later refusal and erase it, which
+ *   costs one wasted tab on the next run.
+ *
+ * Closing either needs a compare-and-swap `chrome.storage` does not offer, or a
+ * compensating re-write that then has to be ordered against every legitimate
+ * write after it — more machinery, with its own orderings to get wrong, for
+ * failures that need the platform to stall for five seconds. The guard above
+ * is kept because it costs one comparison; these are not.
  */
 export const WRITE_TIMEOUT_MS = 5_000;
 
