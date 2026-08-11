@@ -281,6 +281,39 @@ export async function clearStaleLocation(ctx: DriveContext): Promise<void> {
   }
 }
 
+/**
+ * What the page looked like when the autocomplete never answered.
+ *
+ * Deliberately facts rather than a verdict. "Timed out waiting for the
+ * autocomplete" has been blamed on a lost keystroke, on an over-eager retry and
+ * on a stale element reference, and only the second was right — each time
+ * because the message said what failed but nothing about what the page was
+ * doing. These are the observations that separate the remaining candidates: a
+ * field that lost its value means the widget cleared it, a menu present with no
+ * options means the lookup ran and returned nothing, and no menu at all after
+ * several nudges means the events are not reaching the component.
+ */
+function autocompleteState(
+  ctx: DriveContext,
+  field: HTMLInputElement,
+  iata: string,
+  nudges: number,
+  elapsed: number,
+): string {
+  const menu = ctx.doc.querySelector('.search-autocomplete__results');
+  const options = ctx.doc.querySelectorAll('button.search-autocomplete__result').length;
+  return [
+    `field=${field.value === iata ? 'held' : JSON.stringify(field.value)}`,
+    `connected=${field.isConnected}`,
+    `menu=${menu ? 'present' : 'absent'}`,
+    `options=${options}`,
+    `chips=${ctx.doc.querySelectorAll(CHIP_REMOVE).length}`,
+    `widget=${ctx.doc.querySelector(HYDRATED_MARKER) ? 'present' : 'absent'}`,
+    `nudges=${nudges}`,
+    `waited=${Math.round(elapsed / 1000)}s`,
+  ].join(' ');
+}
+
 export async function fillLocation(ctx: DriveContext): Promise<void> {
   const trip = carTrip(ctx);
 
@@ -316,6 +349,8 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   // wiped it — and an intact one is only re-announced, which leaves any lookup
   // in flight alone. Clearing and retyping is exactly what broke every live
   // run; see `RETRY_INTERVAL_MS`.
+  let nudges = 0;
+  const startedAt = ctx.now();
   const option = await waitWithRetry(
     ctx,
     `the autocomplete to offer ${iata}`,
@@ -329,10 +364,22 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
       return null;
     },
     () => {
+      nudges += 1;
       if (field.value === iata) nudgeInput(field);
       else setNativeValue(field, iata);
     },
-  );
+  ).catch((error: unknown) => {
+    // Enriched rather than re-worded, because this timeout has now been
+    // diagnosed wrongly twice from the outside. Everything here is something
+    // only the failing page can report, and the popup keeps the raw message in
+    // a tooltip — so the next failure arrives as evidence rather than as
+    // another round of guessing about a tab nobody can inspect.
+    if (!(error instanceof DriverError)) throw error;
+    throw new DriverError(
+      error.failure,
+      `${error.message} (${autocompleteState(ctx, field, iata, nudges, ctx.now() - startedAt)})`,
+    );
+  });
   option.click();
 
   // The widget renders the branch as `Tampa International Airport (TPA)`, so the

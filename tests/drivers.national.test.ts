@@ -615,6 +615,22 @@ describe('fillLocation', () => {
     expect(error.message).toMatch(/one-way/);
   });
 
+  it('reports what the page was doing when the autocomplete never answered', async () => {
+    // This timeout has now been diagnosed wrongly twice from outside the
+    // browser. The message has to carry the observations that separate the
+    // remaining candidates, because nobody can inspect a probe tab after the
+    // fact — a field that lost its value, a menu present with no options, and
+    // no menu at all after several nudges are three different faults.
+    renderForm({ suggestDelayMs: 0, selectionDoesNothing: false, widgetMountsAfterMs: 60_000 });
+    const error = await failureOf(fillLocation(realTimerContext({ deadline: Date.now() + 6_000 })));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toContain('field=held');
+    expect(error.message).toContain('menu=absent');
+    expect(error.message).toContain('options=0');
+    expect(error.message).toMatch(/nudges=\d+/);
+    expect(error.message).toMatch(/waited=\d+s/);
+  }, 25_000);
+
   it('refuses a one-way trip', async () => {
     renderForm();
     const error = await failureOf(
