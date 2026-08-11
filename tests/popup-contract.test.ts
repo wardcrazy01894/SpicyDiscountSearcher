@@ -267,6 +267,33 @@ describe('the popup half of the double-run guard', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
+  it('says the run is starting, rather than going quiet', async () => {
+    // `beginRun` awaits `cancelRun`, which waits on the previous run's
+    // outstanding refusal writes — so this reply is not prompt, and a disabled
+    // button with its ordinary label, no tabs opening and no "Racing codes…" is
+    // indistinguishable from a dead extension. Same answer the clear button
+    // gives with "clearing…".
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) => {
+      if (message.type === 'START_RUN') {
+        return new Promise((resolve) => {
+          answer = () => resolve({ type: 'RUN_STATE', state: null });
+        });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+    fillCarForm();
+
+    const run = () => document.querySelector<HTMLButtonElement>('#run-btn')!;
+    run().click();
+    expect(run().disabled).toBe(true);
+    expect(run().textContent).toBe('Starting…');
+
+    answer?.();
+    await vi.waitFor(() => expect(run().textContent).toBe('Find the cheapest code'));
+  });
+
   it('offers a codes cap high enough to race every car code, and enforces it', async () => {
     // 100 covers all 66 car candidates, so a car run can be exhaustive. The
     // number matters because nothing ranks the codes — `interleaveByVendor`
@@ -324,8 +351,14 @@ describe('the popup half of the double-run guard', () => {
     );
     expect(chip?.querySelector('.count')?.textContent).toBe('14');
     // The smaller number alone is its own confusion, so the chip carries the
-    // difference rather than swallowing it.
-    expect(chip?.getAttribute('title')).toMatch(/19 codes, 5 refused/);
+    // difference rather than swallowing it — and says it through `aria-label`
+    // too, since a `title` needs a hovering mouse and the whole point is that
+    // a bare "14" explains nothing.
+    expect(chip?.getAttribute('title')).toMatch(/19 codes at National.*5 refused/);
+    expect(chip?.getAttribute('aria-label')).toBe(chip?.getAttribute('title'));
+    // And names what it counts: a per-vendor total across every company, which
+    // is not the plan's number once a company is ticked.
+    expect(chip?.getAttribute('title')).toMatch(/across every company/);
 
     // And it agrees with the plan's own count of what is left to race. The cap
     // is a separate, visible truncation — "14 codes match … racing 12 of them" —

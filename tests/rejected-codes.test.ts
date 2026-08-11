@@ -234,6 +234,36 @@ describe('recordRejected', () => {
     }
   });
 
+  it('reports whether the refusal was actually stored', async () => {
+    // A write the queue abandoned resolves like any other, so `settleWrites`
+    // counts it as landed and nothing else notices — while the user has already
+    // been told the vendor refused this code and the run will ask again next
+    // time. The caller needs to be able to say so.
+    const store = fakeStore();
+    expect(await recordRejected(store, 'national', 'A', 1)).toBe(true);
+    // Already known is a success too, from the caller's point of view.
+    expect(await recordRejected(store, 'national', 'A', 2)).toBe(true);
+
+    vi.useFakeTimers();
+    try {
+      let release: (() => void) | undefined;
+      const stalling = {
+        ...store,
+        get: (key: string) =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            release = () => void store.get(key).then(resolve);
+          }),
+      };
+      const abandoned = recordRejected(stalling, 'national', 'B', 3);
+      await vi.advanceTimersByTimeAsync(6_000);
+      release?.();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await abandoned).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the same code at two vendors apart', async () => {
     // Enterprise files the codes National honours, so the same string can be
     // refused at one brand and fine at another.

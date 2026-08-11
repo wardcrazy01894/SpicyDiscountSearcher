@@ -214,17 +214,31 @@ function serialise(write: (abandoned: () => boolean) => Promise<void>): Promise<
 }
 
 /** Remember a refusal, keeping the first timestamp for one already known. */
+/**
+ * @returns whether the refusal is stored — false when this write was dropped
+ *   because the queue abandoned it, which the caller is expected to say out
+ *   loud: the quote has already told the user the vendor refused this code, and
+ *   losing the record means racing it again next run, which is the one thing
+ *   this store exists to prevent. Nothing else notices, because `settleWrites`
+ *   sees the abandoned link *resolve* and treats the write as landed.
+ */
 export function recordRejected(
   storage: RejectionStore,
   vendor: VendorId,
   code: string,
   at: number,
-): Promise<void> {
+): Promise<boolean> {
+  let stored = false;
+  let alreadyKnown = false;
   return serialise(async (abandoned) => {
     // Inside the queue, not before it: reading ahead of the writes in front of
     // this one is precisely the lost update.
     const existing = await loadRejected(storage);
-    if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;
+    if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) {
+      // Already there, which is a success as far as the caller is concerned.
+      alreadyKnown = true;
+      return;
+    }
     if (existing.length >= MAX_ENTRIES) return;
     // Abandoning a link does not cancel it, so this body can still be running
     // after the queue moved on — and the list it read is then stale. Writing it
@@ -248,10 +262,11 @@ export function recordRejected(
     if (abandoned()) return;
     try {
       await storage.set({ [KEY]: [...existing, { vendor, code, at }] });
+      stored = true;
     } catch {
       // Same trade as above.
     }
-  });
+  }).then(() => stored || alreadyKnown);
 }
 
 export function clearRejected(storage: RejectionStore): Promise<void> {

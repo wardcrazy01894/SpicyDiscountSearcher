@@ -335,7 +335,16 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
       quote.candidate.vendor,
       quote.candidate.code,
       Date.now(),
-    ).catch((error: unknown) => warn('could not remember a refused code', error));
+    )
+      .then((stored) => {
+        // The one failure here that belongs to no quote, which is what `warn`
+        // is for. A write the queue abandoned resolves like any other, so
+        // `settleWrites` counts it as landed and nothing else notices — while
+        // the user has already been told the vendor refused this code and the
+        // run will ask again next time. No code and no URL in the message.
+        if (!stored) warn('a refused code was not remembered', 'the write was abandoned');
+      })
+      .catch((error: unknown) => warn('could not remember a refused code', error));
     run.pendingWrites.add(write);
     void write.finally(() => run.pendingWrites.delete(write));
   }

@@ -255,13 +255,23 @@ function renderVendorChips(): void {
       const count = document.createElement('span');
       count.className = 'count';
       count.textContent = String(raceable);
-      if (total > raceable) {
-        // The smaller number alone is its own confusion — a vendor you know has
-        // nineteen codes quietly showing fourteen. The chip carries the
-        // difference rather than swallowing it, and the standing note below the
-        // form is the clickable way to put them back.
-        label.title = `${total} codes, ${total - raceable} refused by the vendor and no longer raced`;
-      }
+      // Said out loud, not only in a `title`. The smaller number alone is its
+      // own confusion — a vendor you know has nineteen codes quietly showing
+      // fourteen — and a tooltip needs a hovering mouse, so on a touch device
+      // or through a screen reader the chip was exactly the bare "14" this is
+      // supposed to avoid.
+      //
+      // It also names what it counts. This is a per-vendor total across every
+      // company, which agrees with the plan line only when no company is
+      // ticked; tick one with a single National code and the chip still reads
+      // 14 while the plan says "Racing 1 code". Scoping the count to the
+      // selection would make the chips move as companies are ticked, which is
+      // a different and worse thing to read.
+      label.title =
+        total > raceable
+          ? `${total} codes at ${vendor.label} across every company, ${total - raceable} refused by the vendor and no longer raced`
+          : `${total} codes at ${vendor.label} across every company`;
+      label.setAttribute('aria-label', label.title);
 
       label.append(box, document.createTextNode(vendor.label), count);
       return label;
@@ -506,13 +516,12 @@ function renderCompanyList(): void {
     }),
   );
 
-  // Against everything listed, not just the matches. Comparing a match count to
-  // a length that also held stranded rows under-reported, and at 59 matches
-  // plus 5 stranded it printed nothing at all while four rows were dropped —
-  // the user's only signal that anything is hidden.
   // Against everything there is to list, including the stranded rows this
-  // render is holding back — otherwise capping them makes the overflow line
-  // under-report by exactly the number it hid.
+  // render is holding back. Comparing a match count to a length that also held
+  // stranded rows under-reported — at 59 matches plus 5 stranded it printed
+  // nothing at all while four rows were dropped, which is the user's only
+  // signal that anything is hidden — and capping those rows would under-report
+  // again by exactly the number it hid.
   const total = stranded.length + matches.length;
   if (total > shown.length) {
     const more = document.createElement('p');
@@ -1462,6 +1471,17 @@ form.addEventListener('submit', (event) => {
   // building a new one; this is the half that stops the message being sent.
   ui.pendingStart = true;
   runBtn.disabled = true;
+  // And says so, for the same reason the clear button does. This reply is not
+  // prompt: `beginRun` awaits `cancelRun`, which waits on the previous run's
+  // outstanding refusal writes — up to the ceiling if storage is slow, and a
+  // run with seven or more refusals has a chain longer than that, so teardown
+  // can give up with writes still pending and leave this call to wait again.
+  // A disabled button with its ordinary label, no tabs opening and no "Racing
+  // codes…" is indistinguishable from a dead extension.
+  //
+  // `renderRun` sets the caption on every reply, so nothing has to put this
+  // back; `applyReply`'s failure branch replaces it with its own.
+  runBtn.textContent = 'Starting…';
   void send({ type: 'START_RUN', plan }).then(applyReply);
 });
 
@@ -1652,34 +1672,44 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
     // `[A, A]` against a held `[A, B]` compares equal on both of those and
     // leaves B's codes excluded from the counts until the popup is reopened.
     const before = rejectionSet(ui.rejected);
-    void reloadRejected().then((entries) => {
-      // Superseded: a clear the user pressed in the meantime has already stored
-      // its answer, and this read predates it. Applying it would put the codes
-      // they just cleared back into the counts.
-      if (!entries) return;
-      const after = rejectionSet(entries);
-      const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
-      // Before boot has established a selection there is nothing to preserve and
-      // no selection to draw: `restoreForm` and `setCategory` have not run, so
-      // `ui.vendors` is empty and rendering here would draw every chip unticked
-      // under a user who has several picked, plus "Pick at least one vendor".
-      // It self-corrects when `setCategory` renders a moment later, which makes
-      // it a flicker rather than a stuck state — and one this listener could not
-      // produce until the default-fill moved out of the render.
-      if (!booted) return;
-      // Only when a refusal was actually recorded. Both renders are a full
-      // `replaceChildren`, and a run finishes asynchronously with whatever the
-      // user is doing — rebuilding the company list under someone mid-click
-      // resets their scroll and drops their focus. Most runs record nothing, so
-      // this makes the disruption as rare as the news that causes it. It does
-      // not remove it: a run that does refuse a code still rebuilds both lists,
-      // which is the honest trade for showing counts that are no longer true.
-      if (changed) {
-        renderVendorChips();
-        renderCompanyList();
-      }
-      refreshPlan();
-    });
+    void reloadRejected()
+      .then((entries) => {
+        // Superseded: a clear the user pressed in the meantime has already stored
+        // its answer, and this read predates it. Applying it would put the codes
+        // they just cleared back into the counts.
+        if (!entries) return;
+        const after = rejectionSet(entries);
+        const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
+        // Before boot has established a selection there is nothing to preserve and
+        // no selection to draw: `restoreForm` and `setCategory` have not run, so
+        // `ui.vendors` is empty and rendering here would draw every chip unticked
+        // under a user who has several picked, plus "Pick at least one vendor".
+        // It self-corrects when `setCategory` renders a moment later, which makes
+        // it a flicker rather than a stuck state — and one this listener could not
+        // produce until the default-fill moved out of the render.
+        if (!booted) return;
+        // Only when a refusal was actually recorded. Both renders are a full
+        // `replaceChildren`, and a run finishes asynchronously with whatever the
+        // user is doing — rebuilding the company list under someone mid-click
+        // resets their scroll and drops their focus. Most runs record nothing, so
+        // this makes the disruption as rare as the news that causes it. It does
+        // not remove it: a run that does refuse a code still rebuilds both lists,
+        // which is the honest trade for showing counts that are no longer true.
+        if (changed) {
+          renderVendorChips();
+          renderCompanyList();
+        }
+        refreshPlan();
+      })
+      .catch(() => {
+        // This body grew from one assignment into two full `replaceChildren`
+        // re-renders plus `refreshPlan`, so a throw is now an unhandled rejection
+        // that stops the counts updating with no message and nothing to tell it
+        // apart from "no refusals changed". The clear path carries a `.catch` for
+        // the same reason.
+        ui.clearFailed = false;
+        renderRejectedNote();
+      });
   }
 });
 
