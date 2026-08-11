@@ -1,5 +1,6 @@
 import database from '../data/codes.generated.json' with { type: 'json' };
 import type { Candidate, CodeDatabase, Company, VendorId } from './types.js';
+import { rejectionKey } from './rejected-codes.js';
 import { getVendor } from './vendors.js';
 
 const DB = database as unknown as CodeDatabase;
@@ -70,16 +71,25 @@ export function codeReaches(filedUnder: VendorId, vendor: VendorId): boolean {
  *   Hilton 287 against 279. Pre-existing and much smaller than the National
  *   case, but the same fault, so it is fixed by the same set.
  */
-export function countCodesFor(vendor: VendorId): number {
+export function countCodesFor(vendor: VendorId, refused: ReadonlySet<string> = EMPTY): number {
   const codes = new Set<string>();
   for (const company of DB.companies) {
     for (const record of company.codes) {
       if (!record.code) continue;
-      if (codeReaches(record.vendor, vendor)) codes.add(record.code);
+      if (!codeReaches(record.vendor, vendor)) continue;
+      // Refusals are part of "what this vendor would race", not a separate
+      // subtraction the caller does afterwards. Keeping it here is the same
+      // lesson as `codeReaches`: the chip disagreed with the plan again — 19
+      // against 14 — because the plan learned to skip refused codes and the
+      // count did not.
+      if (refused.has(rejectionKey(vendor, record.code))) continue;
+      codes.add(record.code);
     }
   }
   return codes.size;
 }
+
+const EMPTY: ReadonlySet<string> = new Set();
 
 export interface CandidateQuery {
   vendors: VendorId[];

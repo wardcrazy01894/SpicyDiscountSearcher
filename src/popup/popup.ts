@@ -155,6 +155,7 @@ function money(amount: number, currency: string): string {
 
 function renderVendorChips(): void {
   const vendors = vendorsFor(ui.category);
+  const refused = rejectionSet(ui.rejected);
   // Whenever nothing is selected — not only on first open. Deliberate: an
   // empty selection cannot race anything, so it is treated as "no preference"
   // rather than "race nothing".
@@ -176,9 +177,22 @@ function renderVendorChips(): void {
         void saveForm();
       });
 
+      // What this vendor would actually race, which is the number the plan line
+      // reports and the whole reason this is not just `countCodesFor(id)`: the
+      // chip said 19 while the run did 14, because the plan learned to skip
+      // refused codes and the count had not.
+      const raceable = countCodesFor(vendor.id, refused);
+      const total = countCodesFor(vendor.id);
       const count = document.createElement('span');
       count.className = 'count';
-      count.textContent = String(countCodesFor(vendor.id));
+      count.textContent = String(raceable);
+      if (total > raceable) {
+        // The smaller number alone is its own confusion — a vendor you know has
+        // nineteen codes quietly showing fourteen. The chip carries the
+        // difference rather than swallowing it, and the standing note below the
+        // form is the clickable way to put them back.
+        label.title = `${total} codes, ${total - raceable} refused by the vendor and no longer raced`;
+      }
 
       label.append(box, document.createTextNode(vendor.label), count);
       return label;
@@ -237,8 +251,13 @@ function renderCompanyList(): void {
   // `Purdue / Big TEN`, `UNION Bank/MUFG` and `University of Maryland` among
   // them, which are precisely the companies README says disappeared when these
   // vendors went unsearchable.
+  const refused = rejectionSet(ui.rejected);
+  const raceableAt = (code: { code: string | null; vendor: VendorId }, vendor: VendorId): boolean =>
+    !!code.code &&
+    codeReaches(code.vendor, vendor) &&
+    !refused.has(rejectionKey(vendor, code.code));
   const matches = searchCompanies(query).filter((company) =>
-    company.codes.some((code) => code.code && vendors.some((v) => codeReaches(code.vendor, v))),
+    company.codes.some((code) => vendors.some((v) => raceableAt(code, v))),
   );
   const selected = selectionSummary();
 
@@ -293,11 +312,7 @@ function renderCompanyList(): void {
       // "Avis · National" instead of "avis · national". The ids are internal
       // and this is the picker.
       vendorList.textContent = [
-        ...new Set(
-          company.codes
-            .filter((c) => c.code)
-            .flatMap((c) => vendors.filter((vendor) => codeReaches(c.vendor, vendor))),
-        ),
+        ...new Set(company.codes.flatMap((c) => vendors.filter((vendor) => raceableAt(c, vendor)))),
       ]
         .map((id) => findVendor(id)?.label ?? id)
         .join(' · ');
@@ -1189,6 +1204,10 @@ rejectedClear.addEventListener('click', () => {
   // remembered answers would be a UI for second-guessing a cache.
   void clearRejected(chrome.storage.local).then(() => {
     ui.rejected = [];
+    // Chips and the company list carry the count too, so `refreshPlan` alone
+    // would leave them showing the reduced numbers after putting the codes back.
+    renderVendorChips();
+    renderCompanyList();
     refreshPlan();
   });
 });
@@ -1221,6 +1240,8 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
   if (message.state?.finishedAt) {
     void loadRejected(chrome.storage.local).then((entries) => {
       ui.rejected = entries;
+      renderVendorChips();
+      renderCompanyList();
       refreshPlan();
     });
   }

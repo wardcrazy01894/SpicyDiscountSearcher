@@ -211,6 +211,59 @@ describe('the popup half of the double-run guard', () => {
     expect(raced).toBe(100);
   });
 
+  it('counts the vendor chip the way the run counts it', async () => {
+    // Reported from a loaded extension: "National has 5 codes that have been
+    // refused so won't be raced. So it is doing 14, though the check box next
+    // to National still says 19."
+    //
+    // The same disagreement as before — the chip promising what the run will not
+    // do — arriving because the plan learned to skip refused codes and
+    // `countCodesFor` had not.
+    savedRejected = ['XZ15J55', 'XZ45B65', 'XZ24R05', 'XZ24S06', 'XZ15CH7'].map((code) => ({
+      vendor: 'national',
+      code,
+      at: 1,
+    }));
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const chip = [...document.querySelectorAll('#vendor-chips .chip')].find((el) =>
+      (el.textContent ?? '').includes('National'),
+    );
+    expect(chip?.querySelector('.count')?.textContent).toBe('14');
+    // The smaller number alone is its own confusion, so the chip carries the
+    // difference rather than swallowing it.
+    expect(chip?.getAttribute('title')).toMatch(/19 codes, 5 refused/);
+
+    // And it agrees with the plan's own count of what is left to race. The cap
+    // is a separate, visible truncation — "14 codes match … racing 12 of them" —
+    // so the number to compare the chip against is the match, not the slice.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/^14 codes match/);
+    });
+  });
+
+  it('puts the chip count back when the refusals are cleared', async () => {
+    // `refreshPlan` alone would leave the chip and the company list showing the
+    // reduced numbers after the codes had been put back.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const count = () =>
+      [...document.querySelectorAll('#vendor-chips .chip')]
+        .find((el) => (el.textContent ?? '').includes('National'))
+        ?.querySelector('.count')?.textContent;
+    expect(count()).toBe('18');
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => expect(count()).toBe('19'));
+  });
+
   it('stops racing a code the vendor has refused, and says it is doing so', async () => {
     // Racing a refused code costs a real tab on a real vendor site and can only
     // fail. National refuses several of the contract ids in the workbook.
