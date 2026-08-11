@@ -342,7 +342,7 @@ const BUILDERS: Record<VendorId, Builder> = {
   },
 
   /**
-   * Budget, Enterprise and National refuse rather than build.
+   * Budget and Enterprise refuse rather than build.
    *
    * All three keep the search in session state, and this is not a suspicion:
    * a hand-run Enterprise search ends on `/en/reserve.html#car_select` and a
@@ -358,6 +358,11 @@ const BUILDERS: Record<VendorId, Builder> = {
    * and wins on being cheapest. `landedElsewhere` cannot save it either —
    * `finalPath` is truncated at the first `#`, so `reservation.html#car_select`
    * compares equal to the path we asked for and is never flagged.
+   *
+   * Sixt throws too, and its own entry below says why — a different reason, and
+   * deliberately not this one: its URL reaches the wrong page rather than
+   * carrying a search the site ignores. National left this group in #55; it
+   * builds the page its form lives on and is driven.
    *
    * So they throw, and surface as `link-build` against the code that could not
    * be searched. That is the same trade this file makes for a malformed date

@@ -30,8 +30,10 @@ encode other people's websites. They will break. Both are deliberately isolated:
 
 - Deep links are one function per vendor with a `confidence` flag, which rides
   on the `Quote` and shows in the popup. Everything else calls `buildDeepLink`
-  and doesn't care. **Avis and Hertz are `'verified'`**; the rest are still
-  `'best-effort'`. Both were captured from a search run by hand and then proved
+  and doesn't care. **Avis and Hertz are `'verified'`**; the three hotel
+  builders are `'best-effort'`; National is `'driven'`, which is not a grade on
+  that scale but a statement that its URL carries no search at all; and Budget,
+  Enterprise, Sixt and Starwood build nothing. Both were captured from a search run by hand and then proved
   to _replay_ rather than merely load — Avis by changing the airport and
   watching the results page name Tampa, Hertz by changing it and watching the
   inventory change (36 vehicles at $31-$133 against 31 at $36-$111). Loading

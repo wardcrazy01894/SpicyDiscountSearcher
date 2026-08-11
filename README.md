@@ -80,7 +80,7 @@ reaches a real search and it comes straight back. That costs **3 codes**, and no
 company disappears — every company with a Sixt code has one at another car
 vendor.
 
-For Budget, Enterprise and National, returning a URL was the worse option: the
+For Budget and Enterprise, returning a URL was the worse option: the
 landing page shows a marketing "from $19/day", the probe reads it as a real price, and nothing downstream can
 tell — ranking never looks at `confidence`, so it would be compared
 head-to-head with the verified vendors and win on being cheapest. Leaving them

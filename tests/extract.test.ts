@@ -724,21 +724,27 @@ describe('labels', () => {
     // doing nothing there and deleting it leaves the suite green.
     //
     // This is the shape where the bound is the only thing standing: a page with
-    // no <main> at all, whose container selector matches a plain <div>. Sixt's
-    // selector list includes `.offer-list`, so that div becomes the root while
-    // matching none of `body, html, main`. Named deliberately: this is the one
+    // no <main> at all, whose container selector matches a plain <div>. Hilton's
+    // selector list includes `.hotel-results`, so that div becomes the root
+    // while matching none of `body, html, main`.
+    //
+    // Hilton rather than sixt, which is where this sat until that vendor was
+    // disabled. Sixt's `VENDOR_SELECTORS` entry is dead config now, and a future
+    // cleanup deleting it would drop the root back to `<body>` — inside the
+    // bound — leaving this test green while testing nothing. A live guard should
+    // not hang off config for a page the probe never visits. Named deliberately: this is the one
     // place a disabled vendor's `VENDOR_SELECTORS` entry is load-bearing, so
     // deleting sixt's entry as dead config would drop the root back to <body> —
     // inside the bound — and this test would go green while testing nothing. Without the bound the walk reaches it
     // and headingText() querySelectors the whole results list, handing the promo
     // banner the first card's class — the exact mislabel the test above is about.
     document.body.innerHTML = `
-      <div class="offer-list">
+      <div class="hotel-results">
         <div class="promo">Weekend deals from $19/day</div>
         <div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>
         <div class="card"><h3>Midsize</h3><div>$34.99 per day</div></div>
       </div>`;
-    const offers = extractOffers(document, 'sixt');
+    const offers = extractOffers(document, 'hilton');
     expect(offers.find((o) => o.amount === 19)?.label).toBeNull();
     expect(offers.find((o) => o.amount === 29.99)?.label).toBe('Economy');
     expect(offers.find((o) => o.amount === 34.99)?.label).toBe('Midsize');
