@@ -808,6 +808,76 @@ describe('the popup half of the double-run guard', () => {
     ).not.toBe(before);
   });
 
+  it('keeps the keyboard on the list when a stranded row is unticked', async () => {
+    // The re-render is a `replaceChildren`, so it detaches the very input being
+    // dispatched to: focus falls back to `<body>` and the next Tab restarts
+    // from the top of the popup. Unticking the ten stranded rows one after
+    // another — the flow the cap's own justification assumes — then needs a
+    // mouse.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 15);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const inputs = () => [
+      ...document.querySelectorAll<HTMLInputElement>('#company-list label.company input'),
+    ];
+    await vi.waitFor(() => expect(inputs().length).toBeGreaterThan(10));
+    const first = inputs()[0]!;
+    first.focus();
+    expect(document.activeElement).toBe(first);
+    first.click();
+
+    // Focus is still in the list, on the row that took its place.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(inputs()).toContain(document.activeElement);
+  });
+
+  it('does not call a clear failed while it is still out', async () => {
+    // Until the worker has written there is nothing to read but the pre-clear
+    // list, so a run finishing inside that window made the listener's read
+    // report every attempted code as a survivor — rendering "Those codes have
+    // not been cleared yet" beside a button still reading "clearing…". It
+    // corrected itself when the clear's own read landed, but the message is the
+    // one thing on screen that says the action did not work.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        return new Promise((resolve) => {
+          answer = () => void fakeBackground(message).then(resolve);
+        });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    // A run finishes while the clear is still out.
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+
+    answer?.();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+  });
+
   it('disables "try them again" while the clear is in flight', async () => {
     // The worker's wait on the write chain can hold this reply for the length
     // of its ceiling, and nothing else here says anything is happening — half a

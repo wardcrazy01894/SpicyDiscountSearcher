@@ -445,7 +445,21 @@ function renderCompanyList(): void {
         //
         // Every other tick keeps `syncSelectionSummary`, which exists precisely
         // so the list is not rebuilt under the click that caused it.
-        if (isStranded && !box.checked) renderCompanyList();
+        if (isStranded && !box.checked) {
+          // Keep the keyboard where it was. `renderCompanyList` is a
+          // `replaceChildren`, so it detaches the very input being dispatched
+          // to: focus falls back to `<body>` and the next Tab restarts from the
+          // top of the popup — which makes unticking the ten stranded rows one
+          // after another, the flow the cap's own justification assumes,
+          // impossible without a mouse.
+          const had = document.activeElement === box;
+          const index = [...companyList.querySelectorAll('label.company')].indexOf(row);
+          renderCompanyList();
+          if (had && index >= 0) {
+            const inputs = companyList.querySelectorAll<HTMLInputElement>('label.company input');
+            inputs[Math.min(index, inputs.length - 1)]?.focus();
+          }
+        }
       });
 
       const name = document.createElement('span');
@@ -626,6 +640,19 @@ let rejectedRead = 0;
 let clearAttempt: { keys: ReadonlySet<string>; at: number } | null = null;
 
 /**
+ * A clear asked for and not yet answered.
+ *
+ * `ui.clearFailed` is derived from whatever the latest read saw, and until the
+ * worker has written there is nothing to read but the pre-clear list — so a run
+ * finishing inside that window made the listener's read report every attempted
+ * code as a survivor and rendered "Those codes have not been cleared yet"
+ * beside a button still reading "clearing…". It corrected itself when the
+ * clear's own read landed, but the message is the one thing on screen that says
+ * the action did not work, and it was a lie while it showed.
+ */
+let clearInFlight = false;
+
+/**
  * Re-read the refusal list, unless a later read has been issued meanwhile.
  *
  * Returns what was stored, or null if this read was superseded — in which case
@@ -644,7 +671,8 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // of the RUN_STATE listener — each time erasing a warning while every code it
   // named was still refused. As a function of (what the user asked to clear,
   // what is stored now) there is nothing left for a caller to forget.
-  const attempted = clearAttempt;
+  // No verdict while the clear is still out: see `clearInFlight`.
+  const attempted = clearInFlight ? null : clearAttempt;
   // `at`, not just the key. A refusal recorded *after* the clear is a new
   // answer from the vendor, not a survivor of it — and re-asking is the whole
   // point of the button, so this is an ordinary outcome rather than a corner.
@@ -1529,6 +1557,7 @@ rejectedClear.addEventListener('click', () => {
   // clicking, and each extra press enqueues another link (raising the depth
   // every later waiter sizes its own bound from) and overwrites `clearAttempt`,
   // so the first press's answer would be judged against the last press's list.
+  clearInFlight = true;
   rejectedClear.disabled = true;
   // And say so. Disabling removes the second click but not the silence that
   // invites it — the worker can hold this reply for the length of its ceiling
@@ -1538,6 +1567,7 @@ rejectedClear.addEventListener('click', () => {
   const label = rejectedClear.textContent;
   rejectedClear.textContent = 'clearing…';
   const finish = (): void => {
+    clearInFlight = false;
     rejectedClear.disabled = false;
     rejectedClear.textContent = label;
   };
@@ -1560,6 +1590,10 @@ rejectedClear.addEventListener('click', () => {
       // are supposed to stay until the popup is reopened. Leaving them alone
       // here is the pre-existing behaviour, and it was right.
       if (reply && !ui.pendingStart) applyReply(reply);
+      // Cleared before this read, not in `finish()`: the suppression is there
+      // to stop *other* readers judging a clear that has not been answered yet,
+      // and this is the read that is entitled to judge it.
+      clearInFlight = false;
       return reloadRejected();
     })
     .then((entries) => {

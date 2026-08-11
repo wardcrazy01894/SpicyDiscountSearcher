@@ -356,6 +356,40 @@ quietly retire a working code, permanently and invisibly. Only the vendor's own
 words are durable enough to act on, and the popup says how many codes are being
 skipped and offers to try them again.
 
+**Every write to that store goes through one queue in the service worker, and
+that is the branch's most load-bearing invariant.** `recordRejected` is
+read-modify-write and `chrome.storage` offers no atomicity, so two refusals
+settling inside one `get` round trip both read the same list and the second
+`set` drops the first — the exact bug the store exists to prevent, and reachable
+the moment a second driven vendor makes two lanes able to refuse at once.
+`serialise` in `rejected-codes.ts` orders them, bounds each link so a
+`chrome.storage` call that never settles cannot wedge the queue for the life of
+the worker, and refuses a write from a link the queue has already abandoned —
+because abandoning is not cancelling, and a body that wakes up holding a stale
+list would undo whatever ran while it slept.
+
+That queue orders **one realm**, which is why **"try them again" is a
+`CLEAR_REJECTED` message rather than a `storage.set` in the popup**. The popup
+and the worker each get their own copy of the module, so a clear written from
+the popup lands between the worker's read and its write and is undone by it:
+every refusal the user asked to forget comes back, invisibly, because the popup
+has already emptied its own copy and looks right until it is next opened.
+Routing it through the worker makes both writers the same realm. A future change
+that "simplifies" this back into a direct write reintroduces exactly that.
+
+Two orderings are knowingly left open, both needing a `set` slower than the
+per-link bound: an abandoned record whose `set` was already issued can still
+land after a clear, and an abandoned clear can land after a later refusal.
+Closing either needs a compare-and-swap `chrome.storage` does not offer, or a
+compensating write with its own orderings to get wrong.
+
+The popup's own recovery from a clear that landed late is **reopening it**, not
+a timer. A 31s `setTimeout` used to do that job and could not: a browser-action
+popup is destroyed the moment it loses focus, taking its timers with it, so in
+ordinary use it never fired. `main()` re-reading storage is the mechanism, and
+`clearAttempt` living only in memory is what stops the "not cleared yet" message
+outliving the list it was about.
+
 Driving the form is the answer for Enterprise, and the shape of it is now
 measured rather than guessed. **The three sentences that used to sit here were
 wrong on every count** — they described a multi-step wizard whose real inputs
