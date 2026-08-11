@@ -98,11 +98,12 @@ interface UiState {
    */
   sendFailed: boolean;
   /**
-   * "Try them again" was pressed and the codes are still refused.
+   * "Try them again" was pressed and the codes were still refused afterwards.
    *
-   * Read only by `renderRejectedNote`, which draws it beside that button. No
-   * reset of its own and none needed: a clear that works empties `ui.rejected`,
-   * which hides the whole note.
+   * Read only by `renderRejectedNote`, which draws it beside that button, and
+   * retired by any fresh reading of the list — see `reloadRejected`. It is a
+   * statement about the refusals the popup held at the moment of the clear, so
+   * it must not outlive them.
    */
   clearFailed: boolean;
   /**
@@ -312,6 +313,25 @@ function emptyByRefusal(query: string): string {
   return `${what} was refused by the vendor. Use "try them again" to re-ask.`;
 }
 
+/**
+ * Which of the two filters emptied the list.
+ *
+ * The same predicate without the refusal check answers it, and the answer
+ * decides between two opposite diagnoses: "you have picked nothing" and "the
+ * vendors said no to everything". Reachable — select only National, let its
+ * codes be refused over a few runs, and the plan line correctly says every code
+ * was refused while this list told the user to pick a vendor they had already
+ * picked.
+ */
+function emptyReason(query: string, vendors: VendorId[]): string {
+  const reachesAnyway =
+    vendors.length > 0 &&
+    searchCompanies(query).some((company) =>
+      company.codes.some((code) => !!code.code && vendors.some((v) => codeReaches(code.vendor, v))),
+    );
+  return reachesAnyway ? emptyByRefusal(query) : emptyBySelection(query);
+}
+
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
@@ -328,47 +348,50 @@ function renderCompanyList(): void {
     !!code.code &&
     codeReaches(code.vendor, vendor) &&
     !refused.has(rejectionKey(vendor, code.code));
-  const matches = searchCompanies(query).filter(
-    (company) =>
-      company.codes.some((code) => vendors.some((v) => raceableAt(code, v))) ||
-      // A company the user has ticked stays listed even once every code it
-      // reaches has been refused. Otherwise the row vanishes while the slug
-      // stays in `ui.companies` and in the saved form, so the plan reads "No
-      // codes left to race — all 1 were refused" with no checkbox anywhere to
-      // untick: the only ways out are the blanket `clear`, which drops every
-      // company, or putting all the refusals back. Before refusals entered this
-      // filter the row simply stayed and could be unticked.
-      ui.companies.has(company.slug),
+  const found = searchCompanies(query);
+  const matches = found.filter((company) =>
+    company.codes.some((code) => vendors.some((v) => raceableAt(code, v))),
+  );
+  // A company the user has ticked stays listed even when it has nothing left to
+  // race. Otherwise the row vanishes while the slug stays in `ui.companies` and
+  // in the saved form, so the plan reads "No codes left to race — all 1 were
+  // refused" with no checkbox anywhere to untick: the only ways out are the
+  // blanket `clear`, which drops every company, or putting all the refusals
+  // back.
+  //
+  // Kept apart from `matches` rather than folded into it, because everything
+  // below asks "is there anything to race" and a stranded row is not an answer
+  // to that. Merged, it suppressed the empty-list branch entirely — so
+  // unticking every vendor chip with a company still selected showed no rows'
+  // worth of plan and never said `Pick at least one vendor`, which was exactly
+  // the diagnosis.
+  const raceableSlugs = new Set(matches.map((company) => company.slug));
+  const stranded = found.filter(
+    (company) => ui.companies.has(company.slug) && !raceableSlugs.has(company.slug),
   );
   const selected = selectionSummary();
 
-  if (matches.length === 0) {
-    // Which of the two filters emptied the list? The same predicate without the
-    // refusal check answers it, and the answer decides between two opposite
-    // diagnoses: "you have picked nothing" and "the vendors said no to
-    // everything". Reachable — select only National, let its codes be refused
-    // over a few runs, and the plan line correctly says every code was refused
-    // while this list told the user to pick a vendor they had already picked.
-    const onlyRefusalsRemain =
-      vendors.length > 0 &&
-      searchCompanies(query).some((company) =>
-        company.codes.some(
-          (code) => !!code.code && vendors.some((v) => codeReaches(code.vendor, v)),
-        ),
-      );
+  if (matches.length === 0 && stranded.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = onlyRefusalsRemain ? emptyByRefusal(query) : emptyBySelection(query);
+    empty.textContent = emptyReason(query, vendors);
     // Still offer the escape hatch — an empty list is exactly when a stale
     // selection has stranded the plan.
     companyList.replaceChildren(...(selected ? [selected, empty] : [empty]));
     return;
   }
 
+  // The empty-list message still belongs above the stranded rows when there is
+  // genuinely nothing to race — they are an escape hatch, not a plan.
+  const emptyNote = document.createElement('p');
+  emptyNote.className = 'empty';
+  emptyNote.textContent = matches.length === 0 ? emptyReason(query, vendors) : '';
+
   // Long lists make the popup crawl; the search box is how you reach the rest.
-  const shown = matches.slice(0, 60);
+  const shown = [...matches, ...stranded].slice(0, 60);
   companyList.replaceChildren(
     ...(selected ? [selected] : []),
+    ...(matches.length === 0 ? [emptyNote] : []),
     ...shown.map((company) => {
       const row = document.createElement('label');
       row.className = 'company';
@@ -406,9 +429,22 @@ function renderCompanyList(): void {
       const reachable = [
         ...new Set(company.codes.flatMap((c) => vendors.filter((vendor) => raceableAt(c, vendor)))),
       ].map((id) => findVendor(id)?.label ?? id);
-      // A selected company with nothing left to race is listed anyway, so it
-      // must say why rather than render the blank the fix above is named after.
-      vendorList.textContent = reachable.length ? reachable.join(' · ') : 'all refused';
+      // A stranded row must say why rather than render the blank the fix above
+      // is named after — and the reason has to be *determined*, not assumed.
+      // "All refused" was asserted for every stranded row, so unticking the one
+      // vendor a company has a code at labelled it `all refused` with an empty
+      // refusal store. The two cases want opposite actions from the user: put
+      // the refusals back, or pick a different vendor.
+      const refusedHere = company.codes.some(
+        (c) =>
+          !!c.code &&
+          vendors.some((v) => codeReaches(c.vendor, v) && refused.has(rejectionKey(v, c.code!))),
+      );
+      vendorList.textContent = reachable.length
+        ? reachable.join(' · ')
+        : refusedHere
+          ? 'all refused'
+          : 'no code at these vendors';
 
       row.append(box, name, vendorList);
       return row;
@@ -543,6 +579,16 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   const entries = await loadRejected(chrome.storage.local);
   if (mine !== rejectedRead) return null;
   ui.rejected = entries;
+  // The complaint is about the list as it was when the clear was pressed, so a
+  // fresh reading of that list retires it. Without this the flag had no reset
+  // but a *successful* clear, and "none needed — a clear that works empties the
+  // list" was only true while nothing could refill it: the worker's bounded
+  // wait can give up on a slow write, setting the flag, and then the queued
+  // clear lands anyway — after which a later run refusing some entirely
+  // different code redrew the note saying those codes "have not been cleared
+  // yet", about a store that had been cleared and a refusal that postdates it.
+  // The clear handler sets it again straight after this, from what it reads.
+  ui.clearFailed = false;
   return entries;
 }
 

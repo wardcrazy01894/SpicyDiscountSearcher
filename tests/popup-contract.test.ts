@@ -504,6 +504,93 @@ describe('the popup half of the double-run guard', () => {
     expect(ibmRow()?.querySelector('.vendors')?.textContent).toBe('all refused');
   });
 
+  it('says why a ticked company has nothing to race, rather than assuming', async () => {
+    // The escape-hatch row above was kept for *any* reason, then labelled
+    // `all refused` unconditionally — so a company that simply has no code at
+    // the remaining vendors was blamed on refusals, with an empty store. The
+    // two cases want opposite actions: put the refusals back, or pick another
+    // vendor.
+    savedForm = { category: 'car', vendors: ['hertz', 'avis'], companies: [] };
+    installChrome();
+    await boot();
+
+    // Tick the first company that reaches Avis and not Hertz, then untick Avis.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const avisOnly = allCompanies().find(
+      (company) =>
+        company.codes.some((c) => c.code && codeReaches(c.vendor, 'avis')) &&
+        !company.codes.some((c) => c.code && codeReaches(c.vendor, 'hertz')),
+    )!;
+    const rowFor = (name: string) =>
+      [...document.querySelectorAll('#company-list label.company')].find((row) =>
+        (row.textContent ?? '').includes(name),
+      );
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = avisOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    rowFor(avisOnly.name)?.querySelector<HTMLInputElement>('input')?.click();
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Avis') && box.checked) box.click();
+    }
+
+    // Still listed, so it can be unticked — and honest about why.
+    expect(rowFor(avisOnly.name)?.querySelector('.vendors')?.textContent).toBe(
+      'no code at these vendors',
+    );
+  });
+
+  it('still says to pick a vendor when a ticked company is all that is listed', async () => {
+    // Folding the stranded row into `matches` suppressed the empty-list branch
+    // entirely: with a company ticked and every chip unticked, the list showed
+    // one unraceable row and never said `Pick at least one vendor`, which was
+    // exactly the diagnosis.
+    savedForm = { category: 'car', vendors: ['national'], companies: ['ibm'] };
+    installChrome();
+    await boot();
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if (box.checked) box.click();
+    }
+
+    const list = () => document.querySelector('#company-list')?.textContent ?? '';
+    expect(list()).toMatch(/Pick at least one vendor/);
+    // And the row is still there to untick.
+    expect(document.querySelectorAll('#company-list label.company').length).toBe(1);
+  });
+
+  it('retires a failed-clear message when the list is read again', async () => {
+    // The flag had no reset but a *successful* clear, and "none needed" held
+    // only while nothing could refill the list. The worker's bounded wait can
+    // give up on a slow write — setting the flag — and the queued clear then
+    // lands anyway; a later run refusing some entirely different code redrew
+    // the note saying those codes "have not been cleared yet", about a store
+    // that had been cleared and a refusal that postdates it.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    // A clear that reports failure: the reply comes back, storage unchanged.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
+
+    // Now a later run records a different refusal, and the listener re-reads.
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [{ vendor: 'national', code: 'XZ15J55', at: 2 }],
+    });
+    await broadcastFinishedRun();
+
+    const note = document.querySelector('#rejected-note')?.textContent ?? '';
+    expect(note).toMatch(/1 code has been refused/);
+    expect(note).not.toMatch(/not been cleared yet/);
+  });
+
   it('counts the refused note the way everything else counts it', async () => {
     // `loadRejected` accepts whatever an older build wrote and does not dedupe,
     // which is the stated premise for the two-directional `changed` check in the
