@@ -42,6 +42,10 @@ const SELECTORS = [
   '#savings',
   '#quotes',
   '#avis-captcha-btn',
+  '#budget-captcha-btn',
+  '#rejected-note',
+  '#rejected-count',
+  '#rejected-clear',
 ];
 
 /** Every message the popup sent, so a double submit is countable. */
@@ -54,11 +58,14 @@ let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
 
 /** Seeded into chrome.storage.local before the popup boots. */
 let savedForm: Record<string, unknown> | null = null;
+/** Codes a vendor has already refused, as the background would have stored them. */
+let savedRejected: Array<{ vendor: string; code: string; at: number }> | null = null;
 
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
   const local = new Map<string, unknown>();
   if (savedForm) local.set('popupForm', savedForm);
+  if (savedRejected) local.set('rejectedCodes', savedRejected);
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
@@ -87,6 +94,7 @@ beforeEach(() => {
   sentMessages = [];
   broadcastListeners = [];
   savedForm = null;
+  savedRejected = null;
   sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
   installChrome();
   document.body.innerHTML = BODY;
@@ -169,6 +177,169 @@ describe('the popup half of the double-run guard', () => {
     });
   }
 
+  it('offers a codes cap high enough to race every car code, and enforces it', async () => {
+    // 100 covers all 66 car candidates, so a car run can be exhaustive. The
+    // number matters because nothing ranks the codes — `interleaveByVendor`
+    // makes truncation *fair*, not *good*, so whatever the cap cuts is cut
+    // arbitrarily.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
+    expect(maxCodes.max).toBe('100');
+
+    // And the attribute is not the enforcement. The browser checks `max` only
+    // on submit and `.value` still reports whatever was typed, so the clamp has
+    // to live in the code that builds the plan.
+    //
+    // Asserted on **hotels**, deliberately. There are only 66 car candidates,
+    // so a 5000 cap slices nothing and the test passes with the clamp deleted —
+    // which is exactly what happened to the first version of this. Hotels have
+    // 401, so the clamp is the only thing standing between the typed number and
+    // 401 tabs.
+    document.querySelector<HTMLButtonElement>('.tab[data-category="hotel"]')?.click();
+    maxCodes.value = '5000';
+    maxCodes.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/\d/);
+    });
+    const summary = document.querySelector('#plan-summary')?.textContent ?? '';
+    // The *racing* number, not the first one in the sentence — that one is how
+    // many matched (401), which is true with or without a clamp.
+    const raced = Number(/racing (\d+) of them/.exec(summary)?.[1] ?? '0');
+    // Well past the car total, so this can only be satisfied by the clamp.
+    expect(raced).toBe(100);
+  });
+
+  it('stops racing a code the vendor has refused, and says it is doing so', async () => {
+    // Racing a refused code costs a real tab on a real vendor site and can only
+    // fail. National refuses several of the contract ids in the workbook.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: 'XZ15J55', at: 1 },
+    ];
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const summary = () => document.querySelector('#plan-summary')?.textContent ?? '';
+    await vi.waitFor(() => expect(summary()).toMatch(/Racing|codes match/));
+    // Named, not silent: a code that vanishes with no explanation is
+    // indistinguishable from one the database never had.
+    expect(summary()).toMatch(/2 refused codes are being skipped/);
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/2 codes have been/);
+  });
+
+  it('puts refused codes back when asked to try them again', async () => {
+    // The undo half. A cache of somebody else's answer that cannot be dropped is
+    // a permanent, invisible edit to the user's own code list.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    await vi.waitFor(() =>
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/),
+    );
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/refused/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
+    // The popup usually stays open across a run. Loaded once at boot,
+    // `ui.rejected` would still be empty afterwards and pressing Run again
+    // would re-race codes the vendor refused a moment ago — a real tab spent
+    // rediscovering a refusal, which is the one thing this feature avoids.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
+
+    // What the background would have written while the run was in flight.
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [{ vendor: 'national', code: '5666666', at: 1 }],
+    });
+    for (const listener of broadcastListeners) {
+      listener({
+        type: 'RUN_STATE',
+        state: {
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes: [],
+          finishedAt: Date.now(),
+        },
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/);
+    });
+  });
+
+  it('keeps the recovery button reachable when every code has been refused', async () => {
+    // The one state that needs "try them again" was the one that hid it:
+    // `renderRejectedNote` ran only on refreshPlan's success path, and an
+    // all-refused selection returns early.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    savedForm = {
+      category: 'car',
+      vendors: ['national'],
+      companies: ['ibm'],
+    };
+    installChrome();
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/No codes left to race/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+  });
+
+  it('labels a company with a vendor it only reaches through alsoTryAs', async () => {
+    // Reported from a loaded extension: "the codes-to-race list doesn't have
+    // any that say National. It has ones that say avis or hertz or sixt and
+    // some that are blank."
+    //
+    // Both halves on one line. `vendors.includes(c.vendor)` is the exact-match
+    // rule that has now been wrong in four places — every National code is
+    // filed under Enterprise, so National could never appear — and the blanks
+    // were the previous half-fix's own fault: correcting the *filter* let those
+    // companies into the list while this line still asked the old question, so
+    // they matched and had nothing to show. The ids were raw, too.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const rows = [...document.querySelectorAll('#company-list .company')];
+    const labels = rows.map((row) => row.querySelector('.vendors')?.textContent ?? '');
+
+    // No row that made it into the list may be blank: being listed means at
+    // least one selected vendor can race one of its codes.
+    expect(labels.filter((text) => text.trim() === '')).toHaveLength(0);
+    // Labels, not internal ids.
+    expect(labels.join(' ')).not.toMatch(/\bnational\b/);
+    expect(labels.some((text) => text.includes('National'))).toBe(true);
+  });
+
   it('drops a saved vendor that can no longer be searched', async () => {
     // What an upgrading user has in chrome.storage from before Budget,
     // Enterprise and National became unsearchable. restoreForm filtered against
@@ -202,7 +373,10 @@ describe('the popup half of the double-run guard', () => {
       ),
     );
     expect(listed.size).toBeGreaterThan(0);
-    expect([...listed].sort()).toEqual(['avis', 'hertz', 'sixt']);
+    // Labels now, not raw ids — and National belongs here: it is searchable via
+    // its driver, so a saved selection naming it survives. Budget and
+    // Enterprise are what must not, which is the invariant this test is for.
+    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National', 'Sixt']);
   });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {
@@ -275,6 +449,44 @@ describe('the popup half of the double-run guard', () => {
     await Promise.resolve();
 
     expect(document.querySelector('#plan-summary')?.textContent).toMatch(/bot check/i);
+    expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
+  });
+
+  it('opens one focused Budget tab for the bot check, and no search', async () => {
+    const opened: Array<{ url?: string; active?: boolean }> = [];
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: (options: { url?: string; active?: boolean }) => {
+        opened.push(options);
+        return Promise.resolve({ id: 1 });
+      },
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
+
+    expect(opened).toHaveLength(1);
+    const url = new URL(opened[0]!.url!);
+    expect(url.host).toBe('www.budget.com');
+    // Focused and visible — the user has to interact with it, unlike a probe tab.
+    expect(opened[0]!.active).toBe(true);
+    // No code and no itinerary. Unlike Avis this cannot carry one — Budget's
+    // builder throws by design — and it must not start looking like a search.
+    expect(url.search).toBe('');
+  });
+
+  it('says so when the Budget bot-check tab cannot be opened', async () => {
+    // Same reasoning as the Avis case: the button's whole purpose is to send
+    // the user somewhere, so a failure that says nothing leaves them waiting at
+    // a tab that never opened.
+    (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
+      create: () => Promise.reject(new Error('no window')),
+    };
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+    document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
+    await Promise.resolve();
+
+    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Budget bot check/i);
     expect(document.querySelector('#plan-summary')?.classList.contains('is-warning')).toBe(true);
   });
 

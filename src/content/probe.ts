@@ -1,4 +1,6 @@
 import { extract } from '../core/extract.js';
+import { FORM_DRIVERS } from '../core/drivers/index.js';
+import { DriverError, visibleText } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
@@ -66,7 +68,21 @@ function wrongTrip(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>
     // `textContent` is the fallback because jsdom implements only the latter,
     // which is what made this check untestable — and therefore untested — when
     // it was first written.
-    const text = document.body.innerText ?? document.body.textContent ?? '';
+    //
+    // `||` rather than `??`, for the reason `textOf` records at length: a probe
+    // tab is in a minimised window with no layout, where `innerText` can be an
+    // empty *string* rather than undefined. With `??` this check would read an
+    // empty page, find no rendered airport codes, and pass every Avis quote in
+    // silence — a detector that has stopped working looks exactly like one with
+    // nothing to report.
+    //
+    // And `visibleText` rather than `textContent` for that fallback, because
+    // `renderedCodes` only reads the first 400 characters. In document order
+    // those are an inline analytics script long before they are the trip
+    // summary — so the plain fallback would either find no codes at all, or
+    // take a `(TPA)` out of a JSON payload and discard a good quote as
+    // `wrong-trip`.
+    const text = document.body.innerText || visibleText(document.body);
     const { rendered, unexpected } = checkTrip(assignment.trip, text);
     if (!unexpected) return null;
     return `page shows ${rendered.join(', ')}, which is not the trip requested`;
@@ -98,8 +114,89 @@ function fingerprint(offers: Offer[]): string {
  */
 const VERIFY_TRIP = new Set<string>(['avis']);
 
+/**
+ * How much of a quote's budget a form driver may spend before pricing starts.
+ *
+ * **A guess, and the number here most likely to be wrong.** It is live for
+ * National, and the margin is thinner than it looks. Measured in a throttled tab,
+ * its drive costs ~2s for the location and up to ~12s for the date range, which
+ * can need three verify-and-retry passes — inside the ~27s this leaves of a 45s
+ * `PROBE_TIMEOUT_MS`, but not by much.
+ *
+ * Raising `PROBE_TIMEOUT_MS` is the real answer if that margin proves too thin,
+ * and it is deliberately **not** done here: `KEEPALIVE_CEILING_MS` derives from
+ * it and five timing tests restate it, so it is a change to make on evidence
+ * from a real run rather than pre-emptively. Enterprise will force the question
+ * anyway — its widget alone took ~40s on one measured load.
+ */
+const DRIVE_SHARE = 0.6;
+
+/**
+ * Fill and submit the vendor's own search form, for vendors that need it.
+ *
+ * Live for National; `FORM_DRIVERS` decides. Returns the failure to report, or
+ * null when there is nothing to drive and nothing went wrong. Reporting rather
+ * than sending, so the caller keeps the one place that decides what a
+ * `ProbeReport` looks like.
+ *
+ * **The path gate is not an optimisation.** A content script runs from the top
+ * in every document, and the background answers a re-injected tab's
+ * `PROBE_READY` with the same quote — right for extraction, which is
+ * idempotent, and wrong for a driver, which is not. National's submit ends in a
+ * real navigation to its results page, so without this the re-injected probe
+ * drives again against a document with no search form and fails a quote whose
+ * search had already succeeded. `verifyResults` still runs there, which is the
+ * half that has to happen in whichever document holds the results.
+ */
+async function driveForm(
+  assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>,
+  start: number,
+): Promise<{ failure: DriverError['failure']; message: string } | null> {
+  const driver = FORM_DRIVERS[assignment.vendor];
+  if (!driver) return null;
+  const context = {
+    doc: document,
+    trip: assignment.trip,
+    code: assignment.code,
+    deadline: start + assignment.timeoutMs * DRIVE_SHARE,
+    now: () => Date.now(),
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  };
+  try {
+    if (location.pathname === driver.startPath) await driver.drive(context);
+    await driver.verifyResults(context);
+    return null;
+  } catch (error) {
+    if (error instanceof DriverError) return { failure: error.failure, message: error.message };
+    // Our own bug rather than the vendor's markup, but it fails at the same end
+    // — the page was never asked for a price — so `form-fill` is the honest
+    // code. Reporting `extract-threw` would point the next reader at
+    // `extract.ts`, which never ran.
+    return {
+      failure: 'form-fill',
+      message: `driver threw: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' }>) {
-  const deadline = Date.now() + assignment.timeoutMs;
+  const start = Date.now();
+  const deadline = start + assignment.timeoutMs;
+
+  const driveFailure = await driveForm(assignment, start);
+  if (driveFailure) {
+    await send({
+      type: 'PROBE_FAILED',
+      failure: driveFailure.failure,
+      message: driveFailure.message,
+      // `generic-sweep` is the branch this probe would have used had it got as
+      // far as reading prices. It never did, and the report's other fields say
+      // so — offerCount 0, and whatever path the form left us on.
+      report: report([], 'generic-sweep'),
+    });
+    return;
+  }
+
   let previous = '';
   let stableReads = 0;
   let latest: Offer[] = [];

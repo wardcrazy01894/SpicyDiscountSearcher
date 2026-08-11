@@ -111,7 +111,9 @@
           <div class="row row--tight">
             <label class="field field--narrow">
               <span>Max codes</span>
-              <input type="number" id="max-codes" min="1" max="60" value="12" />
+              <!-- max is rewritten from MAX_CODES at boot; kept here so the
+                   input is sane before the script runs. -->
+              <input type="number" id="max-codes" min="1" max="100" value="12" />
             </label>
             <label class="field field--narrow">
               <span>At a time</span>
@@ -138,6 +140,28 @@
             Open Avis to clear its bot check
           </button>
           — do this once per session before racing Avis codes.
+        </p>
+
+        <!-- Budget's check is the same idea with one difference that has to be
+             said out loud: Avis carries it on the availability page, so that
+             button lands on the check itself. Budget's only appeared on
+             submitting a search, so this lands on the form and the user has to
+             run one search to raise it. A button that opens a page where
+             nothing happens reads as broken. -->
+        <p class="hint">
+          <button type="button" class="linklike" id="budget-captcha-btn">
+            Open Budget to clear its bot check
+          </button>
+          — run one search there; complete the verification if it appears.
+        </p>
+
+        <!-- A refused code is remembered so it stops taking a lane, but the
+             list is a cache of somebody else's answer and has to be visible and
+             undoable — a code that silently stops appearing is
+             indistinguishable from one the database never had. -->
+        <p class="hint" id="rejected-note" hidden>
+          <span id="rejected-count"></span>
+          <button type="button" class="linklike" id="rejected-clear">try them again</button>
         </p>
       </form>
 

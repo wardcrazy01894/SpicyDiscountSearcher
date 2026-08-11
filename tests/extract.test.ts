@@ -443,6 +443,55 @@ describe('extractOffers', () => {
   });
 });
 
+describe("National's results container", () => {
+  // Built from the live results page, where the fix is narrower than it first
+  // looked. The old entry — `.car-class-list, [data-testid="vehicle-list"]` —
+  // was copied from Enterprise when National could not be searched, and matches
+  // **nothing** on National, so every scope fell through to `main`: 78.6k of the
+  // page's 79.4k characters, rental terms included.
+  //
+  // That is less alarming than it sounds, and the honest version is worth
+  // recording: the terms quote "$7.00 per day" and "$1 million per accident",
+  // and neither survives extraction anyway — `isFeeLine` strips the first as a
+  // charge and MIN_PLAUSIBLE rejects the second. The sweep does not scoop prose.
+  // What scoping buys is that a *price-shaped* element outside the car list —
+  // a promo tile, an upsell — cannot enter the race.
+  const PAGE = `
+    <main>
+      <div class="vehicle-list">
+        <div class="vehicle">
+          <span>Compact SUV</span>
+          <div class="vehicle__price">$ 70.30 / day $ 185.05 Est. Total</div>
+        </div>
+        <div class="vehicle">
+          <span>Full Size SUV</span>
+          <div class="vehicle__price">$ 133.00 / day $ 320.10 Est. Total</div>
+        </div>
+      </div>
+      <section class="promo">
+        <h3>Weekend deal</h3>
+        <span>From</span><span>$9.99</span><span>per day</span>
+      </section>
+    </main>`;
+
+  it('prices the cars and not the promo beside them', () => {
+    document.body.innerHTML = PAGE;
+    const amounts = extract(document, 'national').offers.map((o) => o.amount);
+    expect(amounts).toContain(70.3);
+    expect(amounts).toContain(185.05);
+    expect(amounts).not.toContain(9.99);
+  });
+
+  it('shows what the scope is worth, using a vendor whose selectors miss', () => {
+    // sixt's list matches nothing here and falls through to `main`, which is the
+    // state National shipped in. Hertz would *not* show it — its list happens to
+    // contain `.vehicle-list` too, so it scopes correctly by luck, which is why
+    // this control names a vendor deliberately.
+    document.body.innerHTML = PAGE;
+    expect(extract(document, 'sixt').offers.map((o) => o.amount)).toContain(9.99);
+  });
+});
+
 describe('the per-vendor selector path', () => {
   // No entry in VENDOR_SELECTORS defines `offer`, so this branch never runs
   // against real vendors and every ProbeReport says "generic-sweep". That

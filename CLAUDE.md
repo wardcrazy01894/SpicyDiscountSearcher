@@ -41,7 +41,7 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget, Enterprise and National throw instead of building.** They were
+  **Budget and Enterprise throw instead of building.** They were
   observed ignoring the query string entirely, and returning a URL for them was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
@@ -58,8 +58,17 @@ encode other people's websites. They will break. Both are deliberately isolated:
   default cap of twelve, and the plan line promised codes the popup already knew
   would fail. `starwood` had the same shape and the same answer for years: the
   codes stay in the database, the vendor gets no chip, no candidate, and no host
-  permission. Dropping those three hosts from the manifest is a real reduction
+  permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
+
+  **National left this group.** It has a driver now
+  (`src/core/drivers/national.ts`), so its builder returns the page the form
+  lives on rather than throwing, and it is `searchable: true` with its host back
+  in the manifest. Its confidence is `'driven'` — a third value meaning the URL
+  is not carrying the search at all, so it is not graded on the
+  reverse-engineering scale and is not counted among the popup's "unverified"
+  links. See `docs/driving-a-vendor-form.md`; the checklist there is now a
+  worked example rather than a guess.
 
   `'verified'` is a claim about the **URL shape**, not about every itinerary,
   and the difference is load-bearing. Both were proved on a US airport round
@@ -142,8 +151,15 @@ encode other people's websites. They will break. Both are deliberately isolated:
   per-vendor concurrency of one, or a longer stagger for this vendor.
 
 - Extraction supports per-vendor CSS and falls back to a generic currency sweep.
-  All nine vendors define a `container` selector, and those do run — they scope
-  the sweep away from nav and footer. **No vendor defines an `offer` selector**,
+  All nine vendors define a `container` selector — and until 2026-08-10 **none
+  of them scoped anything**, which is the opposite of what this paragraph used
+  to claim. Each container is written as a preference list ending in `main`, and
+  `querySelector('.vehicle-list, main')` returns whichever element comes first
+  in _document order_, not the first selector that matches. `<main>` wraps the
+  results, so `main` won on every vendor and every page; the narrow selectors in
+  front of it were decoration. `firstMatch` now tries each alternative in turn.
+  Found by measuring National, where `.vehicle-list` is real, present, and made
+  no difference whatsoever when added. **No vendor defines an `offer` selector**,
   though, so the per-offer branch never fires and every `ProbeReport` says
   `generic-sweep`. The selector path is kept — and tested with an injected
   config — so it works the day someone fills one in.
@@ -291,21 +307,104 @@ stays disabled after a failed send" was false until this flag existed.
 
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
-`cancelled`, `form-fill`, `form-submit`, `wrong-trip`. The popup renders a short phrase per
-code and keeps the raw message in a tooltip. Assert the **code** in tests;
-rewording a message must not change what the system believes happened.
+`cancelled`, `form-fill`, `form-submit`, `code-rejected`, `discount-missing`,
+`wrong-trip`. The popup
+renders a short phrase per code and keeps the raw message in a tooltip. Assert
+the **code** in tests; rewording a message must not change what the system
+believes happened.
 
-The last two have no emitter yet, and are deliberately not on `PROBE_FAILURES`
-either — see below. They exist for Budget, Enterprise and National, whose sites
-ignore the query string entirely: Enterprise's results page is a bare
-`#car_select`, Budget's a bare `#/vehicles`. All three now refuse to build a URL
-and are `searchable: false`, so nothing routes a run to them at all; the codes
-stay in the database waiting for something that can drive a form.
+The three form codes are **on** `PROBE_FAILURES` now, because National ships a
+registered driver at a `searchable: true` vendor — a reachable emitter, which is
+the whole test that list applies. They were held out while no reachable emitter
+existed, since a code admitted early can only ever arrive forged.
 
-Driving the form is the likely answer rather than a settled one; Enterprise's is
-a multi-step wizard whose real inputs are `display:none` behind custom controls,
-with no discount-code field on the first step, so a single fill-and-submit
-function is the wrong shape.
+They exist for the vendors whose sites ignore the query string entirely:
+Enterprise's results page is a bare `#car_select`, Budget's a bare `#/vehicles`.
+Those two still refuse to build a URL and are `searchable: false`, so nothing
+routes a run to them; their codes stay in the database waiting for a driver that
+can run. `code-rejected` is the vendor's verdict on the code rather than a fault in the
+run, and it is **the only failure this extension remembers**. A refused code is
+recorded in `chrome.storage.local` by `core/rejected-codes.ts` and skipped by
+every later plan, because racing it costs a real tab and can only fail again.
+
+`discount-missing` exists to keep that safe, and the split is the whole point.
+`code-rejected` is the vendor's own sentence ("this account number cannot be
+used online"); `discount-missing` is _our_ inference that a discount did not
+land, raised when National's results page names no account. The second is
+equally consistent with the code being silently ignored and with our check
+having rotted against a redesign — so recording it would let a broken selector
+quietly retire a working code, permanently and invisibly. Only the vendor's own
+words are durable enough to act on, and the popup says how many codes are being
+skipped and offers to try them again.
+
+Driving the form is the answer for Enterprise, and the shape of it is now
+measured rather than guessed. **The three sentences that used to sit here were
+wrong on every count** — they described a multi-step wizard whose real inputs
+were `display:none` behind custom controls, with no discount-code field on the
+first step, and concluded a single fill-and-submit was the wrong shape. Checked
+against the live site on 2026-08-08, `/en/reserve.html` is _one_ visible step:
+
+- `input[name="location-search"]`, an autocomplete; `#sameLocation` reveals a
+  second one for a one-way drop-off
+- two date controls and two time `select`s, plus `#age`
+- **`#cid`** — a plain visible `input[type=text]` labelled "Corporate Account
+  Number". That is where the `XZ…` codes go, on step one.
+
+It drives with the ordinary React recipe — native value setter plus
+`input`/`change`, `.click()` on the autocomplete option and on "Browse Vehicles"
+— and lands on `/en/reserve.html#car_select` with real inventory (71 classes,
+$46–$341 for a TPA round trip). Three things that fall out of that run and
+should shape the driver when it is written:
+
+- **The results page names the account holder.** IBM's `5666666` rendered
+  `I B M CORP (USA)` in the header. That is a per-code verification signal of
+  the same kind `verify-trip.ts` gives us for Avis, and it is the good news
+  here: it can prove the code _applied_ rather than being silently dropped.
+- **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
+  "this account number cannot be used online. Please contact your account
+  manager." A real answer, not a broken driver, and a distinct outcome from
+  "no prices" — it wants its own failure code rather than being folded into
+  `form-submit`.
+- **Hydration is slow and unreliable.** `#cid` took ~10s to appear on one load
+  and ~40s on another, and later would not appear at all: the document returns
+  200, the nav and footer render, the booking app never mounts, and the request
+  log carries a 503. That is the Avis rate-limit pattern in a different suit,
+  reached the same way — repeated loads from one profile in one afternoon.
+  Against `PROBE_TIMEOUT_MS` of 45s it is also a live risk to the driver, not
+  just a testing hazard.
+
+`?cid=XZ15J55` in the URL does **not** pre-fill the field, so none of this
+rescues a deep link. The URL findings below stand unchanged.
+
+**That driver now exists**, in `src/core/form-driver.ts` (the framework) and
+`src/core/drivers/enterprise.ts` (the vendor). `docs/driving-a-vendor-form.md`
+is the procedure, including the recon snippet to run on Budget and National and
+the checklist of everything that has to land in the same change as a
+`searchable: true`.
+
+The framework's one rule, which is the whole reason it is not just a sequence of
+`querySelector` calls: **every step verifies against what the page then
+renders**, and a step that cannot be verified fails the quote. Not "we set the
+field" but "the form now shows what we set". `fillLocation` nearly shipped with
+that wrong — it confirmed the branch name was on the page, which the suggestion
+menu guarantees whether or not the click did anything, so it now requires the
+name somewhere the menu is _not_. A test pins that distinction.
+
+**And it is deliberately unreachable.** `FORM_DRIVERS` is empty, Enterprise is
+still `searchable: false`, and `enterpriseDriver.drive` always fails — because
+the date control was never exercised. Both live runs used the form's default
+dates, and the control is custom rather than a `select`, so nothing says the
+trip's dates can be set, let alone verified after setting. `applyDates` therefore
+refuses outright, and is ordered _before_ the code fill and the submit so a form
+that cannot express the trip is never sent. A test asserts that failure; when
+the control is measured and driven, that test is replaced rather than deleted.
+
+Everything else in the driver is measured and tested: hydration (with the
+throttle case given its own message, because "back off" and "go read the DOM"
+are opposite responses), the location autocomplete, the account-number field
+with a waited read-back, and all three submit outcomes. `code-rejected` is new
+and is the vendor answering rather than anything breaking — the form worked, the
+submission worked, and Enterprise said no.
 
 (This paragraph and the matching comment in `messages.ts` were written when the
 plumbing landed first and described four vendors deep-linking to `/en/home`,
@@ -413,9 +512,11 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 - Deep-link query params are unverified against live sites for every vendor
-  except Avis and Hertz (see README). Budget, Enterprise and National are worse
-  than unverified: all three keep the search in session state, so no query
+  except Avis and Hertz (see README). Budget and Enterprise are worse
+  than unverified: both keep the search in session state, so no query
   string can express it and the builders they have today cannot ever work.
+  National keeps its search there too but is no longer in that group — it is
+  driven rather than deep-linked.
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
   settle or its 45s deadline passes, which is longer than Chrome's ~30s idle
@@ -471,15 +572,25 @@ close). Never pass it a URL or a code.
   running is dead state rather than stale, because `startKeepAlive` overwrites
   it unconditionally before creating one.
 
-- Marking Budget, Enterprise and National unsearchable removes **27 codes and
+- Marking Budget, Enterprise and National unsearchable removed **27 codes and
   six companies** from the popup entirely — `Government of Canada`, `Imaginus`,
   `Michigan State University`, `Purdue / Big TEN`, `UNION Bank/MUFG` and
-  `University of Maryland` have no code at any reachable vendor, so they vanish
-  from the company list rather than appearing greyed out. Six more drop out of
-  the car list and survive under hotels. There is precedent — twelve
+  `University of Maryland` had no code at any reachable vendor, so they vanished
+  from the company list rather than appearing greyed out. Six more dropped out of
+  the car list and survived under hotels. There is precedent — twelve
   starwood-only companies have been invisible for as long as that flag has
   existed — and the alternative is listing codes that cannot be raced, but it
-  is a real loss and the only explanation lives in the README.
+  was a real loss and the only explanation lives in the README.
+
+  **National reaching `searchable: true` gives 19 of those codes back**, and
+  every one of them arrives through `alsoTryAs`: the workbook files them all
+  under Enterprise and contains no `vendor: 'national'` record at all. Asking
+  `buildCandidates` for Enterprise therefore returns National candidates, which
+  reads oddly and is correct — `wanted` is widened by `alsoTryAs` before the
+  search, the codes are the same codes, and nothing is routed to the vendor that
+  cannot run them. The README's tally needs revisiting against what is still
+  missing.
+
 - Two Avis questions are open and cannot be answered while the test browser is
   rate-limited. Deferred deliberately rather than guessed at.
 

@@ -1,6 +1,7 @@
 import {
   allCompanies,
   buildCandidates,
+  codeReaches,
   countCodesFor,
   interleaveByVendor,
   searchCompanies,
@@ -15,6 +16,13 @@ import {
   unrankedQuotes,
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
+import {
+  clearRejected,
+  loadRejected,
+  rejectionKey,
+  rejectionSet,
+  type RejectedCode,
+} from '../core/rejected-codes.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
 import type { PopupRequest, StateMessage } from '../core/messages.js';
 import type {
@@ -55,6 +63,10 @@ const results = el<HTMLElement>('#results');
 const savingsBox = el<HTMLElement>('#savings');
 const quotesList = el<HTMLOListElement>('#quotes');
 const avisCaptchaBtn = el<HTMLButtonElement>('#avis-captcha-btn');
+const budgetCaptchaBtn = el<HTMLButtonElement>('#budget-captcha-btn');
+const rejectedNote = el<HTMLElement>('#rejected-note');
+const rejectedCount = el<HTMLElement>('#rejected-count');
+const rejectedClear = el<HTMLButtonElement>('#rejected-clear');
 
 interface UiState {
   category: Category;
@@ -86,6 +98,14 @@ interface UiState {
    * Sticky, so refreshPlan can put the message back instead of over it.
    */
   sendFailed: boolean;
+  /**
+   * Codes a vendor has refused, loaded once at boot.
+   *
+   * Held in UI state rather than read per keystroke: `refreshPlan` runs on every
+   * chip, checkbox and keypress, and a storage read on each would be a lot of
+   * async for a list that only changes when a run settles.
+   */
+  rejected: RejectedCode[];
 }
 
 const ui: UiState = {
@@ -95,10 +115,31 @@ const ui: UiState = {
   running: false,
   pendingStart: false,
   sendFailed: false,
+  rejected: [],
 };
 
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
+
+/**
+ * The most codes one run may race.
+ *
+ * Every code is a real tab on a real vendor site, so this is the run's size
+ * rather than a display limit — and there is no priority ordering underneath
+ * it. `interleaveByVendor` spreads the candidates across vendors and companies
+ * so that *truncating* is fair, not so that the best codes come first; nothing
+ * here knows which code will win. Whatever this number cuts off is cut off
+ * arbitrarily, which is the argument for it being generous.
+ *
+ * 100 covers every car code there is — 66 across Hertz, Avis, Sixt and National
+ * with all four selected — so a car run can now be exhaustive. Hotels still
+ * cannot: there are 401, and Hilton alone has 279. Raising it far enough for
+ * those is a different conversation, because it is also 401 tabs.
+ *
+ * The previous ceiling was 60, which bound even a full car run, and it carried
+ * no recorded reason anywhere in the repo.
+ */
+const MAX_CODES = 100;
 
 function money(amount: number, currency: string): string {
   try {
@@ -188,8 +229,16 @@ function syncSelectionSummary(): void {
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
+  // `codeReaches`, not `vendors.includes(code.vendor)`. The inline version was
+  // the same mistake the vendor chip's count made: a code filed under one brand
+  // can be raced at another, and every National code is filed under Enterprise.
+  // Selecting National alone therefore hid the eight companies whose only car
+  // code is an Enterprise contract id — `Michigan State University`,
+  // `Purdue / Big TEN`, `UNION Bank/MUFG` and `University of Maryland` among
+  // them, which are precisely the companies README says disappeared when these
+  // vendors went unsearchable.
   const matches = searchCompanies(query).filter((company) =>
-    company.codes.some((code) => code.code && vendors.includes(code.vendor)),
+    company.codes.some((code) => code.code && vendors.some((v) => codeReaches(code.vendor, v))),
   );
   const selected = selectionSummary();
 
@@ -229,11 +278,29 @@ function renderCompanyList(): void {
 
       const vendorList = document.createElement('span');
       vendorList.className = 'vendors';
+      // Which of the *selected* vendors this company can actually be raced at,
+      // by the same `codeReaches` rule as the filter above and the chip counts.
+      //
+      // It used to be `vendors.includes(c.vendor)`, and it was the last copy of
+      // that mistake. Two symptoms, reported together: National never appeared
+      // on any row — every National code is filed under Enterprise — and some
+      // rows were *blank*, which was this half-fix's own fault. Correcting the
+      // filter above let those eight companies into the list while this line
+      // still asked the old question, so they matched and then had nothing to
+      // show for it.
+      //
+      // Rendered as labels rather than raw ids, so a row reads
+      // "Avis · National" instead of "avis · national". The ids are internal
+      // and this is the picker.
       vendorList.textContent = [
         ...new Set(
-          company.codes.filter((c) => c.code && vendors.includes(c.vendor)).map((c) => c.vendor),
+          company.codes
+            .filter((c) => c.code)
+            .flatMap((c) => vendors.filter((vendor) => codeReaches(c.vendor, vendor))),
         ),
-      ].join(' · ');
+      ]
+        .map((id) => findVendor(id)?.label ?? id)
+        .join(' · ');
 
       row.append(box, name, vendorList);
       return row;
@@ -248,17 +315,24 @@ function renderCompanyList(): void {
   }
 }
 
-function plannedCandidates(): { all: Candidate[]; capped: Candidate[] } {
-  const max = Math.max(1, Number(maxCodesInput.value) || 1);
+function plannedCandidates(): { all: Candidate[]; capped: Candidate[]; skipped: number } {
+  // Clamped both ends. The `max` attribute is a hint the browser enforces only
+  // on submit, and `.value` still reports whatever was typed — so without this
+  // a hand-edited 5000 would race every candidate there is.
+  const max = Math.min(MAX_CODES, Math.max(1, Number(maxCodesInput.value) || 1));
   // Interleaved before the cap, so the codes we actually race are spread across
   // the selected vendors instead of being one vendor's alphabetical prefix.
-  const all = interleaveByVendor(
-    buildCandidates({
-      vendors: [...ui.vendors],
-      companySlugs: [...ui.companies],
-    }),
-  );
-  return { all, capped: all.slice(0, max) };
+  const refused = rejectionSet(ui.rejected);
+  const proposed = buildCandidates({
+    vendors: [...ui.vendors],
+    companySlugs: [...ui.companies],
+  });
+  // Dropped before the interleave and the cap, so a refused code does not take
+  // a slot from one that could be priced. Racing it can only ever fail, and it
+  // costs a real tab on a real vendor site to find that out again.
+  const usable = proposed.filter((c) => !refused.has(rejectionKey(c.vendor, c.code)));
+  const all = interleaveByVendor(usable);
+  return { all, capped: all.slice(0, max), skipped: proposed.length - usable.length };
 }
 
 /** "Hertz 4 · Avis 4 · Budget 4" — what the cap actually chose. */
@@ -284,12 +358,26 @@ function refreshPlan(): void {
     runBtn.disabled = true;
     return;
   }
-  const { all, capped } = plannedCandidates();
+  const { all, capped, skipped } = plannedCandidates();
   const scope = ui.companies.size ? `${ui.companies.size} selected companies` : 'every company';
+  // Named rather than silent. A code that vanishes from the plan with no
+  // explanation is indistinguishable from one the database never had, and this
+  // list is a cache of somebody else's answer — the user has to be able to see
+  // it and undo it.
+  const refusedNote = skipped
+    ? ` ${skipped} refused ${skipped === 1 ? 'code is' : 'codes are'} being skipped.`
+    : '';
   if (all.length === 0) {
-    planSummary.textContent = 'No codes match this selection.';
+    planSummary.textContent = skipped
+      ? `No codes left to race — all ${skipped} were refused by the vendor.`
+      : 'No codes match this selection.';
     planSummary.classList.add('is-warning');
     runBtn.disabled = true;
+    // Before the early return, not after it. `renderRejectedNote` used to live
+    // only on the success path below, so "try them again" was hidden in exactly
+    // the state that needs it — every candidate refused, nothing to race, and
+    // the one recovery control suppressed.
+    renderRejectedNote();
     return;
   }
   // Not unconditionally: refreshPlan fires on every vendor chip, company
@@ -300,10 +388,22 @@ function refreshPlan(): void {
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
-  planSummary.textContent = truncated
-    ? `${all.length} codes match ${scope} — racing ${capped.length} of them (${vendorBreakdown(capped)}). Narrow the list or raise the cap to try more.`
-    : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope} (${vendorBreakdown(capped)}).`;
+  planSummary.textContent =
+    (truncated
+      ? `${all.length} codes match ${scope} — racing ${capped.length} of them (${vendorBreakdown(capped)}). Narrow the list or raise the cap to try more.`
+      : `Racing ${capped.length} code${capped.length === 1 ? '' : 's'} across ${scope} (${vendorBreakdown(capped)}).`) +
+    refusedNote;
   planSummary.classList.toggle('is-warning', truncated);
+  renderRejectedNote();
+}
+
+/** The standing list, separate from this plan's skip count. */
+function renderRejectedNote(): void {
+  const total = ui.rejected.length;
+  rejectedNote.hidden = total === 0;
+  rejectedCount.textContent = total
+    ? `${total} ${total === 1 ? 'code has' : 'codes have'} been refused by a vendor and are no longer raced — `
+    : '';
 }
 
 function readTrip(): Trip {
@@ -468,6 +568,12 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   // Not "never returned results", which reads as a synonym for probe-empty.
   // The distinction is that the search was never run, not that it found nothing.
   'form-submit': 'submitting the search never loaded a results page',
+  // The vendor's own verdict on the code, not a fault in the run — so it says
+  // what happened to the code rather than what failed to happen to the page.
+  'code-rejected': 'the vendor refused this code',
+  // Not "refused": nothing refused it. The search ran and the discount was not
+  // on the answer, which is a different thing and a less certain one.
+  'discount-missing': 'searched, but no company discount was applied',
   'wrong-trip': 'the page priced a different trip',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
@@ -706,26 +812,41 @@ function renderRun(state: RunState | null): void {
   // `link-build` quotes are excluded: the worker stamps them `best-effort` on
   // the catch path, so counting them said "N of these search links are
   // unverified" about links that were never built, let alone followed.
-  const unverified = state.quotes.filter(
-    (q) => q.confidence === 'best-effort' && q.failure !== 'link-build',
+  // Driven vendors are excluded from *both* counts, not just from `unverified`.
+  // They have no search link to grade — the code and the itinerary are typed
+  // into the vendor's own form — so counting them among the links made the
+  // sentence claim something untrue in whichever branch it landed in: a
+  // National-only run read "these search links are checked against the live
+  // site" about a link that carries no search at all.
+  const linked = state.quotes.filter(
+    (q) => q.failure !== 'link-build' && q.confidence !== 'driven',
+  );
+  const unverified = linked.filter((q) => q.confidence === 'best-effort').length;
+  const driven = state.quotes.filter(
+    (q) => q.confidence === 'driven' && q.failure !== 'link-build',
   ).length;
-  const buildable = state.quotes.filter((q) => q.failure !== 'link-build').length;
   const note = document.createElement('li');
   note.className = 'hint';
-  if (buildable === 0) {
+  const drivenNote = driven
+    ? `${driven} ${driven === 1 ? 'code was' : 'codes were'} searched by filling the vendor's own ` +
+      'form, and dropped unless its results named the account. '
+    : '';
+  if (linked.length === 0 && driven === 0) {
     note.textContent = 'None of these codes could be turned into a search — nothing was looked up.';
-  } else if (unverified === buildable) {
-    note.textContent =
-      'Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.';
+  } else if (linked.length === 0) {
+    note.textContent = `${drivenNote}Confirm the rate before booking.`;
+  } else if (unverified === linked.length) {
+    note.textContent = `${drivenNote}Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.`;
   } else if (unverified > 0) {
     note.textContent =
-      `${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} reverse-engineered ` +
-      'and unverified — a result that looks wrong probably is. The rest are checked against the ' +
-      'live site for US airport round-trips only, and assume a driver aged 25 or over.';
+      `${drivenNote}${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} ` +
+      'reverse-engineered and unverified — a result that looks wrong probably is. The rest are ' +
+      'checked against the live site for US airport round-trips only, and assume a driver aged 25 ' +
+      'or over.';
   } else {
     note.textContent =
-      'These search links are checked against the live site for US airport round-trips only, and ' +
-      'assume a driver aged 25 or over. Confirm the rate before booking.';
+      `${drivenNote}These search links are checked against the live site for US airport ` +
+      'round-trips only, and assume a driver aged 25 or over. Confirm the rate before booking.';
   }
   quotesList.append(note);
 
@@ -1021,6 +1142,52 @@ avisCaptchaBtn.addEventListener('click', () => {
   }
 });
 
+/**
+ * Where to send someone to clear Budget's bot check.
+ *
+ * A plain constant rather than `buildDeepLink('budget', …)`, because that
+ * builder throws by design — Budget keeps its search in session state and will
+ * never have a URL. There is no driver to take a `startUrl` from yet either, so
+ * two vendors with two shapes is not a registry.
+ *
+ * The difference from Avis matters and is not cosmetic. Avis carries its check
+ * on the availability page, so its button lands on the check itself and the
+ * chore is one click. Budget's appeared only on *submitting* a search — a fully
+ * filled form, first submission from a clean page — so this lands on the form
+ * and the user has to run a search to raise it. Capturing the URL the challenge
+ * is served at would make this one-click too; nobody has recorded it.
+ */
+const BUDGET_BOT_CHECK_URL = 'https://www.budget.com/en/home';
+
+budgetCaptchaBtn.addEventListener('click', () => {
+  // Same contract as the Avis button above: one ordinary focused tab, and it
+  // answers nothing. Passing the check is the user's to do.
+  //
+  // Unlike the Avis one, this is **preparatory rather than load-bearing**, and
+  // saying so matters. Budget is `searchable: false`, has no host permission and
+  // no content-script match, so no probe tab visits budget.com and there is no
+  // later tab to ride the clearance. It exists so the open question — whether a
+  // human pass survives an automated submit — can be answered at all, which is
+  // what decides whether a Budget driver is worth writing.
+  void chrome.tabs.create({ url: BUDGET_BOT_CHECK_URL, active: true }).catch(() => {
+    // Visible, for the reason the Avis one is: the user's next move is to go and
+    // do something in a tab, so a silent failure sends them to wait at a page
+    // that never opened.
+    planSummary.textContent = 'Could not open a tab for the Budget bot check.';
+    planSummary.classList.add('is-warning');
+  });
+});
+
+rejectedClear.addEventListener('click', () => {
+  // Forgets every refusal rather than offering a per-code list. The whole point
+  // is to re-ask the vendor, and the vendors are the authority — a picker over
+  // remembered answers would be a UI for second-guessing a cache.
+  void clearRejected(chrome.storage.local).then(() => {
+    ui.rejected = [];
+    refreshPlan();
+  });
+});
+
 cancelBtn.addEventListener('click', () => {
   void send({ type: 'CANCEL_RUN' }).then(applyReply);
 });
@@ -1039,7 +1206,19 @@ companySearch.addEventListener('input', renderCompanyList);
 maxCodesInput.addEventListener('input', refreshPlan);
 
 chrome.runtime.onMessage.addListener((message: StateMessage) => {
-  if (message.type === 'RUN_STATE') renderRun(message.state);
+  if (message.type !== 'RUN_STATE') return;
+  renderRun(message.state);
+  // A run that has just finished may have refused codes, and the popup often
+  // stays open across one. Without this reload `ui.rejected` is whatever boot
+  // saw, so pressing Run again immediately re-races codes the vendor refused a
+  // moment ago — spending a real tab to rediscover a refusal, which is the one
+  // thing remembering them exists to avoid.
+  if (message.state?.finishedAt) {
+    void loadRejected(chrome.storage.local).then((entries) => {
+      ui.rejected = entries;
+      refreshPlan();
+    });
+  }
 });
 
 async function main(): Promise<void> {
@@ -1047,7 +1226,12 @@ async function main(): Promise<void> {
   // trusted to stay in step. A `max` that disagrees with the worker's clamp
   // offers the user a concurrency the background silently refuses.
   concurrencyInput.max = String(MAX_CONCURRENCY);
+  // Same reason, and the same failure if they drift: the attribute is what the
+  // user is offered, `plannedCandidates` is what actually runs.
+  maxCodesInput.max = String(MAX_CODES);
 
+  // Before restoreForm, so the first refreshPlan already knows what to skip.
+  ui.rejected = await loadRejected(chrome.storage.local);
   await restoreForm();
   setCategory(ui.category);
 

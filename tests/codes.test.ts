@@ -4,6 +4,7 @@ import {
   allCompanies,
   buildCandidates,
   codeDatabase,
+  codeReaches,
   companyBySlug,
   countCodesFor,
   interleaveByVendor,
@@ -114,11 +115,63 @@ describe('searchCompanies', () => {
 });
 
 describe('countCodesFor', () => {
-  it('agrees with a manual count', () => {
-    const manual = allCompanies()
+  it('counts what the vendor would actually race, for every searchable vendor', () => {
+    // The chip's number and the run's candidates have to be the same number.
+    // They were not, in two ways, and both made the chip a promise the race did
+    // not keep — so this is asserted against `buildCandidates` itself rather
+    // than against a hand-rolled count that could drift the same way.
+    for (const vendor of VENDORS.filter((v) => v.searchable)) {
+      const raced = buildCandidates({ vendors: [vendor.id] }).filter((c) => c.vendor === vendor.id);
+      expect(countCodesFor(vendor.id), vendor.id).toBe(raced.length);
+    }
+  });
+
+  it('counts codes a vendor only reaches through alsoTryAs', () => {
+    // The reported bug: National's chip read 0 in a loaded extension while the
+    // run priced 19 codes at it. Every National code is filed under Enterprise
+    // — there is no `vendor: 'national'` record in the workbook at all.
+    const filed = allCompanies()
       .flatMap((c) => c.codes)
-      .filter((c) => c.vendor === 'marriott' && c.code).length;
-    expect(countCodesFor('marriott')).toBe(manual);
+      .filter((c) => c.vendor === 'national' && c.code);
+    expect(filed).toHaveLength(0);
+    expect(countCodesFor('national')).toBe(19);
+  });
+
+  it('lists a company whose only car code reaches a vendor through alsoTryAs', () => {
+    // The popup filters its company list by the same rule, and got it wrong the
+    // same way. Selecting National alone hid these eight — the very companies
+    // README says vanished when these vendors went unsearchable.
+    for (const name of [
+      'Michigan State University',
+      'Purdue / Big TEN',
+      'UNION Bank/MUFG',
+      'University of Maryland',
+    ]) {
+      const company = allCompanies().find((c) => c.name === name);
+      expect(company, name).toBeDefined();
+      const reachable = company!.codes.some(
+        (code) => code.code && codeReaches(code.vendor, 'national'),
+      );
+      expect(reachable, name).toBe(true);
+      // And they have nothing at any other car vendor, which is what made the
+      // omission total rather than cosmetic.
+      const elsewhere = company!.codes.some(
+        (code) =>
+          code.code &&
+          (['hertz', 'avis', 'sixt'] as const).some((v) => codeReaches(code.vendor, v)),
+      );
+      expect(elsewhere, name).toBe(false);
+    }
+  });
+
+  it('counts a code shared by two companies once', () => {
+    // B406790 is filed under both Accenture and PwC; `buildCandidates` collapses
+    // them into one candidate crediting both, so counting the rows overstated
+    // every vendor — Avis read 27 against 23 raced.
+    const rows = allCompanies()
+      .flatMap((c) => c.codes)
+      .filter((c) => c.vendor === 'avis' && c.code).length;
+    expect(countCodesFor('avis')).toBeLessThan(rows);
   });
 });
 
@@ -138,21 +191,29 @@ describe('buildCandidates', () => {
   });
 
   it('proposes nothing for Enterprise, whose search cannot be reached', () => {
-    // Enterprise and National are `searchable: false` — their sites ignore the
-    // query string, so no deep link can express a search for them. Their codes
-    // stay in the database and are still listed under their companies; they
-    // simply cannot be raced.
+    // Enterprise is still `searchable: false` — its site ignores the query
+    // string and its driver cannot set the trip's dates yet.
     //
-    // This replaces a test asserting an Enterprise contract id also produced a
-    // National candidate. That fan-out (`alsoTryAs`) is intact and still
-    // filters on `searchable`, but with both ends unsearchable it is dormant,
-    // so there is nothing left to assert about it here. It wakes up if either
-    // vendor becomes reachable again.
-    expect(buildCandidates({ vendors: ['enterprise'] })).toEqual([]);
-    expect(buildCandidates({ vendors: ['national'] })).toEqual([]);
-    // The fan-out itself is dormant, not deleted, and deleting it currently
-    // fails nothing — so pin the registry fact it depends on. Whoever makes
-    // either brand reachable again needs this edge to still exist.
+    // "Nothing" means no *Enterprise* candidate, not an empty list. Asking for
+    // Enterprise now returns National ones, because `wanted` is widened by
+    // `alsoTryAs` before the search: a contract id filed under Enterprise is
+    // worth trying at National, and National can be reached. That is the
+    // intended behaviour rather than a leak — the codes are the same codes, and
+    // nothing is routed to the vendor that cannot run them.
+    const candidates = buildCandidates({ vendors: ['enterprise'] });
+    expect(candidates.some((c) => c.vendor === 'enterprise')).toBe(false);
+  });
+
+  it('races an Enterprise contract id at National, which can be reached', () => {
+    // The `alsoTryAs` fan-out, awake again now that National has a driver. This
+    // is the only route by which National gets any codes at all: the workbook
+    // files every one of them under Enterprise, and there is not a single
+    // record with `vendor: 'national'`.
+    const candidates = buildCandidates({ vendors: ['national'] });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((c) => c.vendor === 'national')).toBe(true);
+    // IBM's, the one the driver was proved against on the live site.
+    expect(candidates.map((c) => c.code)).toContain('5666666');
     expect(getVendor('enterprise').alsoTryAs).toEqual(['national']);
   });
 

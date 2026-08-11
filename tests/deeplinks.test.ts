@@ -198,9 +198,25 @@ describe('buildDeepLink', () => {
     //
     // Belt and braces: they are `searchable: false` too, so nothing routes a
     // plan here in the first place. This pins the inner guard on its own.
-    for (const vendor of ['budget', 'enterprise', 'national'] as const) {
+    for (const vendor of ['budget', 'enterprise'] as const) {
       expect(() => buildDeepLink(vendor, 'X1', CAR), vendor).toThrow(/session state/);
     }
+  });
+
+  it('opens the form page for a vendor whose driver does the searching', () => {
+    // National left the list above when it got a driver. Its URL is not a deep
+    // link and is not graded as one: it carries no itinerary and no code,
+    // because `drivers/national.ts` types those into the form and verifies each
+    // against what the form renders back.
+    const link = buildDeepLink('national', '5666666', CAR);
+    expect(link.confidence).toBe('driven');
+    const url = new URL(link.url);
+    expect(url.host).toBe('www.nationalcar.com');
+    expect(url.search).toBe('');
+    // The code must not leak into the address bar, where any script on the page
+    // could read it — the whole reason the driver payload goes to the content
+    // script's isolated world instead.
+    expect(link.url).not.toContain('5666666');
   });
 
   it('carries hotel corporate codes and dates', () => {
@@ -222,14 +238,22 @@ describe('buildDeepLink', () => {
     // plan either. Pinned by count so a vendor silently dropping out of the
     // registry fails here rather than shrinking the loop unnoticed.
     const built = searchableVendors();
-    expect(built.filter((v) => v.category === 'car')).toHaveLength(3);
+    expect(built.filter((v) => v.category === 'car')).toHaveLength(4);
     for (const vendor of built) {
       const trip = vendor.category === 'car' ? CAR : HOTEL;
-      const { url } = buildDeepLink(vendor.id, 'TESTCODE', trip);
+      const { url, confidence } = buildDeepLink(vendor.id, 'TESTCODE', trip);
       const parsed = new URL(url);
       expect(parsed.protocol).toBe('https:');
       expect(parsed.host).toBe(vendor.host);
-      expect(url).toContain('TESTCODE');
+      if (confidence === 'driven') {
+        // The opposite requirement, and the stronger one. A driven vendor's URL
+        // is only where the form lives; the code goes to the content script's
+        // isolated world, not into an address bar every script on the page can
+        // read.
+        expect(url).not.toContain('TESTCODE');
+      } else {
+        expect(url).toContain('TESTCODE');
+      }
     }
   });
 

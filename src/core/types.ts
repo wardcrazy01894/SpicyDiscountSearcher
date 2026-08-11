@@ -32,6 +32,24 @@ export interface Vendor {
    * "Enterprise / National" column because the two brands share contract ids.
    */
   alsoTryAs?: VendorId[];
+  /**
+   * How many tabs may be open at this vendor at once, if fewer than the run's
+   * own concurrency.
+   *
+   * For sites that keep the search in session state rather than in the URL.
+   * National is the measured case: reloading its form showed the previous
+   * search's location, dates *and* account number still in place, and tabs in
+   * one profile share that state — so two lanes racing two codes can settle on
+   * one, and the result is one company's price reported under another's code.
+   *
+   * A cap rather than a boolean because "one" is the only value anyone needs
+   * today but is not obviously the only value anyone will ever need, and a
+   * number costs nothing extra to honour.
+   *
+   * Absent means no vendor-specific limit; the run's concurrency is the only
+   * bound.
+   */
+  maxLanes?: number;
 }
 
 /** One discount code for one company at one vendor, as parsed from the workbook. */
@@ -160,6 +178,34 @@ export type QuoteFailure =
   | 'form-fill'
   /** The form was filled, but submitting it never produced a results page. */
   | 'form-submit'
+  /**
+   * The vendor read the code and refused it, in its own words.
+   *
+   * Distinct from every other failure here because nothing is broken: the
+   * search form worked, the submission worked, and the answer was no. National
+   * and Enterprise both return "this account number cannot be used online.
+   * Please contact your account manager" for some corporate accounts.
+   *
+   * **The only failure treated as durable.** It is a fact about the code rather
+   * than about the run, and it is the vendor's own sentence rather than
+   * anything this extension inferred — which is what makes it safe to remember
+   * and stop retrying. See `rejected-codes.ts`.
+   */
+  | 'code-rejected'
+  /**
+   * The search ran, and came back without the corporate account applied.
+   *
+   * Deliberately *not* `code-rejected`, though a user might reasonably read the
+   * two the same way. That one is the vendor speaking; this one is us failing
+   * to find evidence the discount landed — National's results page naming no
+   * account — which is equally consistent with the vendor silently ignoring the
+   * code and with our own check having rotted against a redesign.
+   *
+   * The distinction is load-bearing precisely because rejections are
+   * remembered: recording this one would let a broken selector quietly retire a
+   * working code, permanently and invisibly.
+   */
+  | 'discount-missing'
   /**
    * The page priced a different trip from the one asked for.
    *

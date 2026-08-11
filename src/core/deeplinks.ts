@@ -18,7 +18,19 @@ import type { CarTrip, HotelTrip, Trip, VendorId } from './types.js';
  * change is deliberate rather than accidental.
  */
 
-export type LinkConfidence = 'verified' | 'best-effort';
+/**
+ * How much to trust the URL a builder produced.
+ *
+ * `driven` is not a third grade of the same scale — it says the URL is not
+ * carrying the search at all. The page it opens is just where the form lives,
+ * and a driver types the itinerary and the code in, verifying each field against
+ * what the form then renders. It is deliberately **not** counted among the
+ * popup's "reverse-engineered and unverified" links: there is no reverse
+ * engineering in it, and a driven vendor checks more than a verified deep link
+ * does — National's driver refuses the quote outright unless its results page
+ * names the account the code belongs to.
+ */
+export type LinkConfidence = 'verified' | 'best-effort' | 'driven';
 
 export interface DeepLink {
   url: string;
@@ -340,10 +352,38 @@ const BUILDERS: Record<VendorId, Builder> = {
    * be searched. That is the same trade this file makes for a malformed date
    * and a one-way trip: a visible failure beats an invisible wrong price. They
    * come back when something drives their forms.
+   *
+   * For Enterprise that is now closer than this comment used to imply, and the
+   * detail is in CLAUDE.md rather than repeated here. In short: `/en/reserve.html`
+   * is a single visible step carrying `#cid`, "Corporate Account Number", and it
+   * drives to a priced `#car_select` with synthetic events. Its results page
+   * even names the account holder, which is a per-code check Avis's does not
+   * offer. What is still missing is the date control — both live runs used the
+   * form's defaults — so a driver today would price whatever dates Enterprise
+   * felt like, which is the failure this file exists to refuse. `?cid=` does not
+   * pre-fill the field either, so none of it makes a URL work and this builder
+   * stays as it is.
    */
   budget: unsearchable('budget'),
   enterprise: unsearchable('enterprise'),
-  national: unsearchable('national'),
+
+  /**
+   * National is the exception, because it has a driver.
+   *
+   * The URL carries no itinerary and no code — it is only where the form lives,
+   * and `drivers/national.ts` fills the form in. That is why it is `driven`
+   * rather than graded on the reverse-engineering scale the other builders use.
+   *
+   * Written out rather than read from `nationalDriver.startUrl()` because that
+   * module imports this one for `clock12` and `isoParts`, so reaching back the
+   * other way is a cycle. `tests/deeplinks.test.ts` asserts the two agree, which
+   * is the same trick `tests/manifest.test.ts` uses to pin the manifest against
+   * `vendors.ts`.
+   */
+  national: () => ({
+    confidence: 'driven',
+    url: 'https://www.nationalcar.com/en/home.html',
+  }),
 
   /**
    * Reaches no search, measured: `/php/reservation` 302s to

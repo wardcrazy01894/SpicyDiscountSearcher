@@ -35,14 +35,50 @@ export function searchCompanies(query: string): Company[] {
   });
 }
 
+/**
+ * Can a code filed under `filedUnder` be raced at `vendor`?
+ *
+ * The one place that answers it, because three callers need the same answer and
+ * two of them once disagreed with `buildCandidates` in ways the user could see:
+ * National's chip read 0, and its company list hid the eight companies whose
+ * only car code is an Enterprise contract id — `Michigan State University`,
+ * `Purdue / Big TEN` and `UNION Bank/MUFG` among them. Both were the same
+ * mistake, comparing `record.vendor` to the target and forgetting that a brand
+ * can honour another brand's codes.
+ */
+export function codeReaches(filedUnder: VendorId, vendor: VendorId): boolean {
+  if (filedUnder === vendor) return true;
+  return (getVendor(filedUnder).alsoTryAs ?? []).includes(vendor);
+}
+
+/**
+ * How many codes this vendor would actually race.
+ *
+ * Must agree with `buildCandidates`, because the number goes on the vendor's
+ * chip and the candidates are what the run does. It disagreed in two ways, and
+ * both made the chip a promise the race did not keep:
+ *
+ * - **`alsoTryAs` was ignored.** The workbook files every Enterprise/National
+ *   contract id under Enterprise and contains no `vendor: 'national'` record at
+ *   all, so National's chip read **0** while a run really did price 19 codes at
+ *   it. Reported from a loaded extension: "National still has a 0 next to it
+ *   even though it is searching codes."
+ * - **Records were counted, not codes.** Two companies often share one code —
+ *   the workbook lists B406790 under both Accenture and PwC — and
+ *   `buildCandidates` collapses those into a single candidate crediting both.
+ *   Counting the rows overstated every vendor: Avis showed 27 against 23 raced,
+ *   Hilton 287 against 279. Pre-existing and much smaller than the National
+ *   case, but the same fault, so it is fixed by the same set.
+ */
 export function countCodesFor(vendor: VendorId): number {
-  let total = 0;
+  const codes = new Set<string>();
   for (const company of DB.companies) {
     for (const record of company.codes) {
-      if (record.vendor === vendor && record.code) total += 1;
+      if (!record.code) continue;
+      if (codeReaches(record.vendor, vendor)) codes.add(record.code);
     }
   }
-  return total;
+  return codes.size;
 }
 
 export interface CandidateQuery {
