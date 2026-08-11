@@ -89,6 +89,8 @@ interface FormOptions {
   disabledDays?: string[];
   /** Which months the calendar renders. */
   months?: string[];
+  /** Show two months at a time with working Previous/Next, as the live one does. */
+  pagedCalendar?: boolean;
   onSubmit?: 'results-with-account' | 'results-no-account' | 'results-no-interstitial' | 'nothing';
 }
 
@@ -115,6 +117,7 @@ function renderForm(options: FormOptions = {}): void {
     refuseRange = false,
     disabledDays = [],
     months = ['September 2026', 'October 2026'],
+    pagedCalendar = false,
     onSubmit = 'results-with-account',
   } = options;
 
@@ -241,6 +244,18 @@ function renderForm(options: FormOptions = {}): void {
   if (widgetMountsAfterMs === 0) input.addEventListener('input', suggest);
 
   const host = form.querySelector<HTMLElement>('#calendar-host')!;
+  // The live calendar shows two months starting at today's and pages one at a
+  // time; `months` is the window it currently shows.
+  let window0 = 0;
+  const ALL_MONTHS = [
+    'August 2026',
+    'September 2026',
+    'October 2026',
+    'November 2026',
+    'December 2026',
+  ];
+  const visibleMonths = (): string[] =>
+    pagedCalendar ? ALL_MONTHS.slice(window0, window0 + 2) : months;
   const pickupToggle = form.querySelector<HTMLElement>('#date-time__pickup-toggle')!;
   const returnToggle = form.querySelector<HTMLElement>('#date-time__return-toggle')!;
   if (existingRange) {
@@ -278,7 +293,21 @@ function renderForm(options: FormOptions = {}): void {
       const months_ = document.createElement('div');
       months_.className = 'date-selector__months';
       host.append(months_);
-      for (const monthYear of months) {
+      if (pagedCalendar) {
+        for (const dir of ['Previous', 'Next'] as const) {
+          const ctl = document.createElement('button');
+          ctl.className = 'date-selector__control-btn';
+          ctl.textContent = dir;
+          ctl.disabled = dir === 'Previous' && window0 === 0;
+          ctl.addEventListener('click', () => {
+            window0 += dir === 'Next' ? 1 : -1;
+            toggle.click();
+            toggle.click();
+          });
+          months_.append(ctl);
+        }
+      }
+      for (const monthYear of visibleMonths()) {
         const wrapper = document.createElement('div');
         wrapper.className = 'date-selector__month-wrapper';
         // Leading space, exactly as the live site emits it.
@@ -632,6 +661,29 @@ describe('applyDates', () => {
     const error = await failureOf(applyDates(realTimerContext({ deadline: Date.now() + 12_000 })));
     expect(error.failure).toBe('form-fill');
     expect(error.message).toMatch(/instead of Sep 4 to Sep 6/);
+  }, 25_000);
+
+  it('pages the calendar forward to a month that is not on screen', async () => {
+    // Reported from a real run, and the reason it looked like every other
+    // `form-fill`: the popup renders one phrase for all of them. The live
+    // calendar shows two months starting at today's — August and September —
+    // and pages one at a time, so an October rental is simply not there. The
+    // first version waited for a wrapper that would never appear.
+    renderForm({ pagedCalendar: true });
+    const october = { ...TRIP, pickupDate: '2026-10-14', dropoffDate: '2026-10-17' };
+    await applyDates(realTimerContext({ trip: october, deadline: Date.now() + 12_000 }));
+    expect(document.querySelector('#date-time__pickup-toggle')!.textContent).toBe('Oct 14');
+    expect(document.querySelector('#date-time__return-toggle')!.textContent).toBe('Oct 17');
+  }, 25_000);
+
+  it('says so when the calendar cannot page far enough', async () => {
+    renderForm({ pagedCalendar: true });
+    const far = { ...TRIP, pickupDate: '2027-06-02', dropoffDate: '2027-06-04' };
+    const error = await failureOf(
+      applyDates(realTimerContext({ trip: far, deadline: Date.now() + 12_000 })),
+    );
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/June 2027/);
   }, 25_000);
 
   it('says so when the calendar refuses that day', async () => {

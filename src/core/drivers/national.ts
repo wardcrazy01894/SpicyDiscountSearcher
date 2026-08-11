@@ -404,28 +404,106 @@ async function openCalendar(ctx: DriveContext, toggleId: string, which: string):
   );
 }
 
-/** Click one day in whichever calendar is open. */
+/** "Calendar - September 2026" as a sortable number, or null if unreadable. */
+function monthKey(label: string): number | null {
+  const match = /^Calendar - ([A-Za-z]+) (\d{4})$/.exec(label.replace(/\s+/g, ' ').trim());
+  if (!match) return null;
+  const index = MONTHS.indexOf(match[1] ?? '');
+  if (index < 0) return null;
+  return Number(match[2]) * 12 + index;
+}
+
+/** The months the calendar is currently showing, as sortable numbers. */
+function shownMonths(ctx: DriveContext): number[] {
+  return [...ctx.doc.querySelectorAll<HTMLElement>('.date-selector__month-wrapper')]
+    .map((el) => monthKey(el.getAttribute('aria-label') ?? ''))
+    .filter((key): key is number => key !== null);
+}
+
+function monthControl(ctx: DriveContext, want: 'Previous' | 'Next'): HTMLButtonElement | null {
+  const controls = [...ctx.doc.querySelectorAll<HTMLButtonElement>('.date-selector__control-btn')];
+  return (
+    controls.find((el) =>
+      new RegExp(want, 'i').test(`${textOf(el)} ${el.getAttribute('aria-label') ?? ''}`),
+    ) ?? null
+  );
+}
+
+/**
+ * How many months the calendar may be paged before giving up.
+ *
+ * Two years, which is past any rental anyone books and far short of clicking
+ * forever if the control stops advancing.
+ */
+const MAX_MONTH_STEPS = 24;
+
+/**
+ * Click one day, paging the calendar to its month first.
+ *
+ * **The calendar shows two months and starts on today's.** Measured: it opens
+ * on August + September, "Next" advances one month at a time, and "Previous" is
+ * disabled at the current month. So a rental in October — an entirely ordinary
+ * trip to plan — is simply not on screen, and the first version of this waited
+ * for a month wrapper that was never going to appear until the whole drive
+ * budget was gone. Reported from a real run, and the reason every `form-fill`
+ * looked identical is that the popup renders one phrase for all of them; only
+ * the tooltip named the step.
+ *
+ * Paging is driven by comparing the target against what is displayed rather
+ * than by counting clicks, so it works from whatever month the calendar happens
+ * to have been left on — including by a previous quote in the same session.
+ */
 async function clickDay(
   ctx: DriveContext,
   labels: { month: string; day: string },
   which: string,
 ): Promise<void> {
-  const cell = await waitFor(ctx, `the calendar to offer ${labels.day} ${labels.month}`, () => {
-    const wrappers = [...ctx.doc.querySelectorAll<HTMLElement>('.date-selector__month-wrapper')];
-    const wrapper = wrappers.find(
-      (el) =>
-        (el.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim() ===
-        `Calendar - ${labels.month}`,
-    );
-    if (!wrapper) return null;
-    return wrapper.querySelector<HTMLButtonElement>(
-      `button.date-selector__day[aria-label="${labels.day}"]`,
-    );
-  });
-  if (cell.disabled) {
-    throw new DriverError('form-fill', `national will not accept the ${which} date ${labels.day}`);
+  const want = monthKey(`Calendar - ${labels.month}`);
+  if (want === null) throw new DriverError('form-fill', `cannot read the month ${labels.month}`);
+
+  for (let step = 0; step <= MAX_MONTH_STEPS; step += 1) {
+    const wrapper = [
+      ...ctx.doc.querySelectorAll<HTMLElement>('.date-selector__month-wrapper'),
+    ].find((el) => monthKey(el.getAttribute('aria-label') ?? '') === want);
+    if (wrapper) {
+      const cell = wrapper.querySelector<HTMLButtonElement>(
+        `button.date-selector__day[aria-label="${labels.day}"]`,
+      );
+      if (cell) {
+        if (cell.disabled) {
+          throw new DriverError(
+            'form-fill',
+            `national will not accept the ${which} date ${labels.day}`,
+          );
+        }
+        cell.click();
+        return;
+      }
+    }
+
+    const shown = shownMonths(ctx);
+    if (shown.length > 0) {
+      const direction =
+        want > Math.max(...shown) ? 'Next' : want < Math.min(...shown) ? 'Previous' : null;
+      if (direction) {
+        const control = monthControl(ctx, direction);
+        if (!control || control.disabled) {
+          throw new DriverError(
+            'form-fill',
+            `national's calendar will not page ${direction.toLowerCase()} to ${labels.month}`,
+          );
+        }
+        control.click();
+      }
+    }
+
+    if (ctx.now() >= ctx.deadline) break;
+    await ctx.sleep(POLL_MS);
   }
-  cell.click();
+  throw new DriverError(
+    'form-fill',
+    `timed out reaching ${labels.day} ${labels.month} in the ${which} calendar`,
+  );
 }
 
 /** Both toggles reading the trip back, which is the only success signal. */

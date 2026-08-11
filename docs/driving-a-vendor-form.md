@@ -88,6 +88,13 @@ budget. Open the page, switch to another tab, and drive it from there. National'
 whole fill takes about 5 s that way — comfortably inside its share of the probe
 deadline, but only because it was measured rather than assumed.
 
+**Drive a date the calendar is not already showing.** A two-month calendar
+opening on today's month makes every test date next week work and every real
+booking fail. National's shows August and September and pages one month at a
+time; a perfectly ordinary October trip found nothing and burned the whole
+drive budget waiting. Test with a date far enough out to need paging, and check
+whether "Previous" is disabled at the current month.
+
 Then, for each field the trip needs, answer three questions:
 
 1. **How is it set?** Try `setNativeValue` first — it works on anything backed
