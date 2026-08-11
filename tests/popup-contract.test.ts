@@ -433,13 +433,13 @@ describe('the popup half of the double-run guard', () => {
     await boot();
 
     // Nothing selected in storage means the popup fills it in, so untick by
-    // hand — the state only a user can reach.
+    // hand — the state only a user can reach. Nothing else is dispatched: this
+    // used to poke `#company-search` to force a re-render, which meant the test
+    // passed against a popup that never redrew the list when the selection
+    // changed. The chip's own handler has to do it.
     for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
       if (box.checked) box.click();
     }
-    document
-      .querySelector<HTMLInputElement>('#company-search')
-      ?.dispatchEvent(new Event('input', { bubbles: true }));
 
     await vi.waitFor(() => {
       expect(document.querySelector('#company-list .empty:not(.selection)')?.textContent).toMatch(
@@ -500,6 +500,30 @@ describe('the popup half of the double-run guard', () => {
     });
     await broadcastFinishedRun();
     await vi.waitFor(() => expect(row()).not.toBe(before));
+  });
+
+  it('redraws the company list when a vendor chip is toggled', async () => {
+    // The list is a function of the vendor selection — which companies match,
+    // which vendors each row is labelled with, and which empty-state message
+    // applies — and the chip handler never redrew it. Unticking Avis and Hertz
+    // to leave only National is this PR's own motivating scenario, and it left
+    // every Avis and Hertz row on screen with its old labels.
+    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    await boot();
+
+    const labels = () =>
+      [...document.querySelectorAll('#company-list .vendors')]
+        .map((el) => el.textContent ?? '')
+        .join(' ');
+    expect(labels()).toMatch(/Hertz/);
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      const chip = box.closest('label')?.textContent ?? '';
+      if (!chip.includes('National') && box.checked) box.click();
+    }
+
+    expect(labels()).not.toMatch(/Hertz/);
+    expect(labels()).toMatch(/National/);
   });
 
   it('notices a same-sized change to the refused set', async () => {

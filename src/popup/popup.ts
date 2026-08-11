@@ -202,6 +202,14 @@ function renderVendorChips(): void {
         if (box.checked) ui.vendors.add(vendor.id);
         else ui.vendors.delete(vendor.id);
         label.classList.toggle('is-on', box.checked);
+        // The company list is a function of the vendor selection — which
+        // companies match, which vendors each row is labelled with, and which
+        // of the three empty-state messages applies — and none of it redrew
+        // when the selection changed. Unticking Avis and Hertz to leave only
+        // National, which is this PR's own motivating scenario, left every Avis
+        // and Hertz company on screen with their old labels until some
+        // unrelated trigger rebuilt the list.
+        renderCompanyList();
         refreshPlan();
         void saveForm();
       });

@@ -121,6 +121,20 @@ interface ActiveRun {
    * as every other stranded-teardown bug in this file.
    */
   laneWaiters: Set<() => void>;
+  /**
+   * Storage writes started by a settling quote, awaited before the run is
+   * announced finished.
+   *
+   * Only `recordRejected` today. It is fire-and-forget because `finishQuote` is
+   * synchronous and called from a dozen places, but the final `RUN_STATE`
+   * broadcast is what makes the popup re-read the refusal list — so a refusal
+   * recorded by the *last* quote of a run raced its own announcement, and the
+   * popup could read storage before the write landed. It would then see no
+   * change, skip the redraw, and keep counting a code the vendor had just
+   * refused, with no later broadcast to correct it. Re-racing that code on the
+   * next click is precisely what this store exists to prevent.
+   */
+  pendingWrites: Set<Promise<void>>;
 }
 
 /** Release every parked lane, so each can re-check the queue and the cancel flag. */
@@ -232,12 +246,19 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
-    void recordRejected(
+    // Tracked rather than merely fired: teardown awaits it before announcing
+    // the run finished, so the popup's reload cannot beat the write. Still not
+    // awaited *here* — a lane must not block on storage — and still not allowed
+    // to reject, since a lost refusal costs a wasted tab next run and nothing
+    // more.
+    const write = recordRejected(
       chrome.storage.local,
       quote.candidate.vendor,
       quote.candidate.code,
       Date.now(),
     ).catch((error: unknown) => warn('could not remember a refused code', error));
+    run.pendingWrites.add(write);
+    void write.finally(() => run.pendingWrites.delete(write));
   }
   // A settled quote is progress, and the keepalive ceiling measures the absence
   // of it rather than elapsed time. Without this, a race longer than the
@@ -882,6 +903,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     waiters: new Map(),
     vendorInFlight: new Map(),
     laneWaiters: new Set(),
+    pendingWrites: new Set(),
   };
   active = run;
   startKeepAlive();
@@ -917,6 +939,9 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
         stopKeepAlive();
         run.state.finishedAt = Date.now();
         await closeWindow(run);
+        // Before the broadcast, because the broadcast is what tells the popup
+        // to re-read the refusal list. These cannot reject.
+        await Promise.all([...run.pendingWrites]);
         await publish();
       }
     }
@@ -958,6 +983,11 @@ async function cancelRun(): Promise<void> {
   await closeWindow(run);
 
   run.state.finishedAt ??= Date.now();
+  // Same reason as in teardown: this publish carries `finishedAt`, so it is
+  // what sends the popup back to storage. A cancel settles every quote as
+  // `cancelled` and records nothing itself, but a refusal from earlier in the
+  // run can still be in flight.
+  await Promise.all([...run.pendingWrites]);
   await publish();
   // Last, after the closes and the final publish, so teardown itself is still
   // covered by a resident worker.

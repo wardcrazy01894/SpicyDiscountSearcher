@@ -797,6 +797,69 @@ describe('remembering a code the vendor refused', () => {
     await settleWith('probe-empty');
     expect(chromeMock.local.get('rejectedCodes')).toBeUndefined();
   });
+
+  it('lands the write before it announces the run finished', async () => {
+    // `recordRejected` is started fire-and-forget by a settling quote, while
+    // the run's finished broadcast is exactly what sends the popup back to
+    // storage to re-read the list. Unordered, a refusal from the *last* quote
+    // of a run lost that race: the popup read the old list, saw no change,
+    // skipped its redraw, and went on counting a code the vendor had just
+    // refused — with no later broadcast to correct it, so the next click raced
+    // it again. Re-racing a refused code is the one thing this store exists to
+    // prevent.
+    chromeMock = installChromeMock();
+    // Longer than the lane's 750ms stagger, deliberately. At 50ms the write
+    // landed *during* the stagger that follows the last quote, so teardown was
+    // already behind it and the test passed with the await deleted — it was
+    // measuring nothing.
+    chromeMock.delayLocalWrites(2_000);
+
+    // What storage held at the instant each finished-broadcast went out. The
+    // ordering is the whole assertion, and it is invisible afterwards: by the
+    // end of the run the write has landed either way.
+    const atFinish: unknown[] = [];
+    const fake = (globalThis as { chrome: typeof chrome }).chrome;
+    const sendMessage = fake.runtime.sendMessage.bind(fake.runtime);
+    fake.runtime.sendMessage = (message: unknown) => {
+      if ((message as { state?: { finishedAt?: number } }).state?.finishedAt) {
+        atFinish.push(chromeMock.local.get('rejectedCodes'));
+      }
+      return sendMessage(message);
+    };
+
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+
+    // One lane, two candidates, and the refusal is the *last* quote to settle —
+    // which is the case that races. Its write and the run's finished broadcast
+    // are started within the same turn.
+    const answer = async (failure: string): Promise<void> => {
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure,
+        message: 'whatever the page said',
+        report: REPORT,
+      });
+      await settle(1_000);
+    };
+    await answer('probe-empty');
+    await answer('code-rejected');
+    // Past the write, so the finished broadcast has certainly gone out by now
+    // whichever order it went in.
+    await settle(5_000);
+
+    // The broadcast the popup acts on is the one carrying `finishedAt`, and it
+    // did go out — otherwise the assertion below would hold vacuously.
+    expect(atFinish).toHaveLength(1);
+    // By the time it went out, the write had landed. That is what makes the
+    // popup's re-read see the refusal it is being told about.
+    expect(atFinish[0]).toHaveLength(1);
+  });
 });
 
 describe('a probe reporting something unexpected', () => {
