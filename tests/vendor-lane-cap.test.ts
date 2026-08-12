@@ -203,9 +203,18 @@ describe('the caps that actually ship', () => {
   });
 
   it('leaves every other vendor uncapped', () => {
-    // Including Avis, which CLAUDE.md records as *suspected* of the same
-    // problem and never measured. Capping it would halve its throughput on a
-    // hunch; this is a one-line change the day someone checks.
+    // Including Avis, which CLAUDE.md recorded as *suspected* of the same
+    // problem. Somebody checked, on 2026-08-11, and the answer is no: the AWD
+    // reaches the page through sessionStorage, which is per-tab, so two lanes
+    // cannot see each other's code. Two Avis tabs loaded concurrently with
+    // different AWDs each held only their own in `reservation.store` and
+    // `REACT_QUERY_OFFLINE_CACHE`. `booking-widget.store` — the shared
+    // localStorage key the suspicion was actually about — is 65 bytes and
+    // carries no code at all, which is the part the earlier truncated dump
+    // could not settle. See the comment on the vendor entry.
+    //
+    // So this stays uncapped on evidence rather than on a shrug. Capping it
+    // would have halved Avis's throughput to prevent nothing.
     const uncapped = VENDORS.filter((v) => v.maxLanes === undefined).map((v) => v.id);
     expect(uncapped).toContain('avis');
     expect(uncapped).toContain('hertz');

@@ -16,6 +16,25 @@ export const VENDORS: Vendor[] = [
     codeLabel: 'AWD',
     host: 'www.avis.com',
     searchable: true,
+    // Deliberately **no `maxLanes`**, and now on evidence rather than on the
+    // absence of it. Avis looked like national and enterprise: probe tabs share
+    // one profile, `reset-widget-state.ts` clears a localStorage key on every
+    // one of them, and if that key carried the AWD then tab A could price tab
+    // B's code — which `verify-trip.ts` is structurally blind to, since it only
+    // compares locations and both tabs ask for the same trip.
+    //
+    // Measured on 2026-08-11, two tabs loaded concurrently with different AWDs
+    // against the same TPA round trip. The AWD reaches the page through
+    // **sessionStorage**, which is per-tab: each tab's `reservation.store` and
+    // `REACT_QUERY_OFFLINE_CACHE` held its own code and not the other's. The
+    // only localStorage keys carrying an AWD are a bot-detection event log and
+    // an mParticle analytics batch queue — write-side telemetry, not read back
+    // to price a search. And `booking-widget.store`, the key the suspicion was
+    // actually about and the one we clear, is 65 bytes and carries no code at
+    // all. That last fact is what an earlier truncated dump could not settle.
+    //
+    // The clear itself is still needed: that store holds the *location*, which
+    // is the Tampa/Philadelphia bug it was written for.
   },
   {
     id: 'budget',

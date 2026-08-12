@@ -643,19 +643,27 @@ close). Never pass it a URL or a code.
   cannot run them. The README's tally needs revisiting against what is still
   missing.
 
-- Two Avis questions are open and cannot be answered while the test browser is
-  rate-limited. Deferred deliberately rather than guessed at.
+- **Concurrent Avis tabs do _not_ share the AWD — answered, 2026-08-11.** This
+  was the open question: probe tabs share one profile, each clears
+  `booking-widget.store`, and if that store carried the AWD then tab A could
+  render tab B's code — the same trip at a different discount, which
+  `verify-trip` is structurally blind to because it only compares locations.
 
-  **Concurrent Avis tabs share one `localStorage`.** At concurrency two or more,
-  each probe tab clears `booking-widget.store` while Avis rewrites it from its
-  own URL. If that store carries the AWD, tab A could render tab B's code — the
-  same trip at a different discount, which `verify-trip` is structurally blind
-  to because it only compares locations. A dump of the store showed location
-  data and no code, but it was truncated, so this is unresolved rather than
-  ruled out. Capping Avis to one lane is the conservative answer if it turns out
-  to be real.
+  Measured with two tabs loaded concurrently on different AWDs against one TPA
+  round trip. The AWD reaches the page through **sessionStorage**, which is
+  per-tab: each tab's `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held
+  its own code and not the other's. The only localStorage keys carrying an AWD
+  are a bot-detection event log and an mParticle analytics batch queue, both
+  write-side telemetry. `booking-widget.store` is 65 bytes and carries no code —
+  the fact the earlier truncated dump could not establish.
 
-  **The gate could be made ours rather than merely narrow.** `awd_number` is
+  So Avis stays uncapped, on evidence rather than on the absence of it, and
+  `tests/vendor-lane-cap.test.ts` records why. Note what this does _not_ say: the
+  clearing of `booking-widget.store` is still needed, because that store holds
+  the **location**, which is the Tampa/Philadelphia bug it was written for.
+
+- One Avis question is still open. **The gate could be made ours rather than
+  merely narrow.** `awd_number` is
   produced by Avis's own search flow too, so the reset can still fire on a
   user's hand-run search. A URL fragment never reaches the server and only we
   would emit one, which would close it — but whether Avis's router tolerates a
