@@ -43,6 +43,13 @@ for source in icon.svg icon-small.svg; do
     exit 1
   fi
 done
+# The rounding step is an input too, and the one that is easiest to lose: it is
+# a separate file, and without it the icons revert to the opaque corners this
+# pipeline exists to fix.
+if [ ! -r "$root/scripts/round-icon-corners.py" ]; then
+  echo "make-icons: cannot read scripts/round-icon-corners.py" >&2
+  exit 1
+fi
 
 # Rasterise each source once, at 512, and downsample from that.
 for source in icon.svg icon-small.svg; do
@@ -77,9 +84,15 @@ sys.exit(0 if root == "{http://www.w3.org/2000/svg}svg" else 1)' "$src/$source" 
   fi
 done
 
+# Built in the temp dir and only moved into place once every step has
+# succeeded. Writing `sips` output straight into `public/icons/` meant a
+# failure *after* it — the rounding below — left the committed icons replaced
+# by opaque-cornered ones, which is the exact regression this pipeline exists
+# to prevent, sitting in the working tree with nothing marking it. There is no
+# CI freshness gate to catch that.
 emit() {
   local source="$1" size="$2" name="$3"
-  sips -z "$size" "$size" "$work/$source.png" --out "$out/$name" >/dev/null
+  sips -z "$size" "$size" "$work/$source.png" --out "$work/$name" >/dev/null
 }
 
 emit icon.svg 128 icon128.png
@@ -91,6 +104,10 @@ emit icon-small.svg 16 icon16.png
 # rounding them there produced opaque *white* corners rather than transparent
 # ones; the rounding happens here instead, on the rendered pixels.
 python3 "$root/scripts/round-icon-corners.py" \
-  "$out/icon128.png" "$out/icon48.png" "$out/icon32.png" "$out/icon16.png"
+  "$work/icon128.png" "$work/icon48.png" "$work/icon32.png" "$work/icon16.png"
+
+for name in icon128.png icon48.png icon32.png icon16.png; do
+  mv "$work/$name" "$out/$name"
+done
 
 echo "wrote icon16 icon32 icon48 icon128 to public/icons"
