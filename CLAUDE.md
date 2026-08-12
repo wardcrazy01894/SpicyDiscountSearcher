@@ -76,19 +76,33 @@ else.
   remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
   for every command that is not a PR creation.
 
-  Three things about that script are load-bearing and were all wrong in its
-  first version, found by reviewing #66 after it had already merged:
+  Three things about that script are load-bearing, all found by reviewing #66
+  after it had already merged:
 
-  - It matches `gh pr create` as a **command**, not as a substring. That phrase
-    appears in prose — in this file, in the script's own header — so a substring
-    test refused `grep -rn "gh pr create"` and ran a full build to do it.
-  - It verifies the tree named by the payload's **`cwd`**, not the one the
-    script lives in. Agents run in worktrees here, and deriving the root from
-    `BASH_SOURCE` checked the main checkout instead: clean `main` passes, the
-    gate allows, the worktree's broken branch ships.
-  - It **fails closed**. A missing `jq` used to leave `command` empty, fall
-    through the match, and allow every PR silently. A gate that fails open is
-    worse than no gate, because it reports nothing.
+  - **It matches the phrase as a substring, and that is the second answer.** The
+    first attempt anchored it to a command position so a `grep` mentioning the
+    phrase would not trigger a build. That worked, and it also stopped matching
+    `gh pr create; echo done`, `(gh pr create)`, and a newline-separated
+    `git push` / `gh pr create` — the shape the `pr` skill itself documents. No
+    regex separates running the command from mentioning it, so the question is
+    only which way to be wrong. A needless build beats an unverified PR.
+  - It verifies the tree named by the payload's **`cwd`**, walking up to the
+    nearest `package.json`, and refuses to run anything unless that package is
+    `spicy-discount-searcher`. Agents run in worktrees here, and deriving the
+    root from `BASH_SOURCE` checked the main checkout instead: clean `main`
+    passes, the gate allows, the worktree's broken branch ships. Testing `cwd`
+    alone was not enough either — `<worktree>/src` holds no `package.json` and
+    fell straight back to the same bug.
+  - It **fails closed**, structurally rather than by covering known cases. An
+    `ERR` trap denies on any unexpected exit, because a hook that exits
+    non-zero is treated as a _non-blocking_ error and the command proceeds. A
+    missing `jq`, and a payload `jq` cannot parse, are both denials for the same
+    reason: each used to leave `command` empty and allow every PR silently.
+
+  `verify` includes `npm audit`, so it needs the network — which costs nothing,
+  since `gh pr create` posts to GitHub and could not have run offline anyway. An
+  unreachable registry is reported as a network problem rather than a failing
+  check, because `npm audit` exits 1 for both.
 
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
   `scripts/extract_codes.py` or the workbook and re-run `npm run codes`. CI
