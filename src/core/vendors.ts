@@ -16,6 +16,62 @@ export const VENDORS: Vendor[] = [
     codeLabel: 'AWD',
     host: 'www.avis.com',
     searchable: true,
+    // Capped, and the route to that answer is worth keeping because it went the
+    // other way first. Avis looked like national and enterprise: probe tabs
+    // share one profile, `reset-widget-state.ts` clears a localStorage key on
+    // every one of them, and if that key carried the AWD then tab A could price
+    // tab B's code — which `verify-trip.ts` cannot catch, since it compares only
+    // locations and both tabs ask for the same trip.
+    //
+    // Measured on 2026-08-11, one TPA round trip, tabs loaded concurrently. Two
+    // tabs on different AWDs: the code travels in sessionStorage, per-tab by the
+    // platform's own rules, and each tab's `reservation.store` and
+    // `REACT_QUERY_OFFLINE_CACHE` held its own code and not the other's, found
+    // by enumerating every key in both stores. The only localStorage keys
+    // carrying an AWD are a bot-detection event log and an mParticle analytics
+    // batch queue — write-side telemetry. And `booking-widget.store`, the key
+    // this worry named and the one we clear, is 65 bytes carrying no code at
+    // all, which an earlier truncated dump could not establish.
+    //
+    // That was read as "no cap needed" for two rounds. It does not support that,
+    // and the gap is the whole reason this comment is long. What it closes is
+    // the *client-side* worry. What it leaves open is a cookie-identified
+    // backend session pricing both tabs off one code — and no experiment can
+    // close that one, because nothing observable varies with the code at all:
+    // identical cheapest six with two real AWDs, with the nonsense `Z9Z9Z9Z`,
+    // and with no code. The tempting counter-evidence, that a coded tab renders
+    // "Your savings are reflected below" and an uncoded one does not, is worth
+    // nothing: `Z9Z9Z9Z` renders it too, so it echoes our own request rather
+    // than reporting a server verdict.
+    //
+    // So the risk that matters is unfalsifiable rather than absent. That alone
+    // would justify capping every vendor in this file, which is not an argument;
+    // what makes it one is specific to Avis. **This vendor has already been
+    // caught preferring remembered state to the URL** — the Tampa/Philadelphia
+    // bug, where a saved booking widget outranked the query string and priced a
+    // journey nobody asked for, which is why `reset-widget-state.ts` exists.
+    //
+    // Be precise about what that does and does not transfer, because a first
+    // draft of this comment was not. The location leaked through
+    // `booking-widget.store`, in **localStorage**; the code lives in
+    // `reservation.store` and `REACT_QUERY_OFFLINE_CACHE`, in **sessionStorage**.
+    // Different stores, and the demonstrated leak vector provably does not carry
+    // the code — that is the measurement above. What transfers is not the vector
+    // but the vendor's disposition: Avis is a site that has been observed
+    // letting remembered state beat an explicit URL parameter, which is exactly
+    // the shape of the one risk left untestable here. Hertz has never been
+    // observed doing anything of the kind.
+    //
+    // Sharpening it: "no Avis code has been shown to move a price" (CLAUDE.md)
+    // is itself consistent with a shared session overriding the URL's
+    // `awd_number`, which would make an uncapped Avis actively wrong rather than
+    // merely unproven. Halved throughput is a cost the user can see; one
+    // company's price under another's code is not. `enterprise` below takes the
+    // same cap on thinner grounds — analogy to National, no measurement at all.
+    maxLanes: 1,
+    //
+    // The widget clear is still needed and is a separate thing: that store holds
+    // the *location*, which is the Tampa/Philadelphia bug it was written for.
   },
   {
     id: 'budget',

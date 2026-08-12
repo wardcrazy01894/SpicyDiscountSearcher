@@ -276,10 +276,25 @@ const BUILDERS: Record<VendorId, Builder> = {
    *
    * Captured from a real search run by hand, then proved to *replay* rather
    * than read a session: changing only `pickup_location_code` moved the results
-   * page from Philadelphia to "Tampa Intl Airport (TPA)", 24 vehicles, with
-   * "Your savings are reflected below" confirming the AWD had applied. That
+   * page from Philadelphia to "Tampa Intl Airport (TPA)", 24 vehicles. That
    * second step is the one that matters — Enterprise's URL looked plausible too
    * and turned out to carry nothing.
+   *
+   * The replay is the whole of the evidence, and `verified` claims exactly what
+   * it supports: **the URL carries the search**. An earlier version of this
+   * paragraph also cited "Your savings are reflected below" as confirming the
+   * AWD had applied. It confirms no such thing, measured on 2026-08-11: the
+   * deliberate nonsense `Z9Z9Z9Z` earns the same banner, at the same prices,
+   * with no error. It echoes the fact that our own request carried an
+   * `awd_number` and reports nothing about the code.
+   *
+   * The Hertz builder below states the rule this trips over — driving the search
+   * and applying the discount are two claims, and for a discount-code racer the
+   * second is the load-bearing one — and for Avis the second has nothing behind
+   * it at all: no Avis code has been shown to move a price. Two real AWDs, the
+   * nonsense one and no code priced identically on the trip tested. A question
+   * about the codes rather than about this builder, recorded in CLAUDE.md's
+   * known gaps.
    *
    * What `verified` does and does not cover — the flag is a claim about the URL
    * shape, not about every itinerary:
