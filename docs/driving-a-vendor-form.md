@@ -111,6 +111,11 @@ and what "nothing happened" looks like.
 
 ## Vendor state
 
+The three car vendors marked **yes** below are **finished** — Hertz, Avis and
+National return real prices and are not work in progress. Car work means Sixt,
+Budget and Enterprise. See the top of `CLAUDE.md` for why that boundary is
+written down rather than assumed.
+
 | Vendor                    | Searchable | Where it stands                                                                                                                                |
 | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                 |

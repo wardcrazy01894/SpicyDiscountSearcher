@@ -4,6 +4,38 @@ MV3 browser extension (Chrome/Brave) that races corporate discount codes to find
 the cheapest rental car or hotel rate. Read `README.md` first — this file only
 covers things that aren't obvious from the code.
 
+## Where the work actually is
+
+**Hertz, Avis and National are done. Leave them alone.** They run and they
+return real prices. The remaining rental-car work is **Sixt, Budget and
+Enterprise** — the three that cannot run at all. If someone asks what is left to
+do on cars, that list is the answer, and it does not include re-measuring a
+container, tightening an extraction rule or capping a lane on a vendor that
+works.
+
+Changes to a working vendor are **reactive only**, triggered by a symptom
+somebody actually saw: prices stopped coming back, or an obviously wrong number
+reached the popup. "I measured it and the config claims something untrue" is not
+a symptom.
+
+That rule was bought expensively on 2026-08-11. Three PRs landed against the
+working vendors — a container measurement, a filter-bound extraction guard, and
+an Avis lane cap — and two of them broke production: Hertz priced **every quote
+at $20,000** (a marketing line, reachable only when the container misses and the
+sweep falls back to `doc.body`) and Avis returned one price for every code. All
+reverted in #62. None had been prompted by a user-visible problem; the strongest
+case any of them had was that a comment was inaccurate.
+
+The measurements behind them were wrong for a reason worth repeating: **a
+foreground browser tab is not the probe.** The probe runs at `document_idle`, in
+a minimised unfocused window where `setTimeout` is throttled to roughly once a
+second, in a profile that may never have cleared Avis's bot check. Selectors
+that match nothing in a settled devtools tab are not selectors that match
+nothing there. Before changing extraction, get the evidence from `Quote.report`
+— landed path, title, offer count, extraction branch — out of a real run. If the
+fact you need is not in that report, add it to the report and change nothing
+else.
+
 ## Ground rules
 
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
@@ -581,9 +613,12 @@ close). Never pass it a URL or a code.
 
 ## Known gaps
 
-- Deep-link query params are unverified against live sites for every vendor
-  except Avis and Hertz (see README). Beyond that there are now three distinct
-  states, and the difference decides what would fix each:
+Read the top of this file first: **none of what follows is a reason to touch
+Hertz, Avis or National.** Those three work. The open rental-car work is Sixt,
+Budget and Enterprise, and the entries below describe what each of those needs.
+
+- **The three car vendors that cannot run**, and the difference decides what
+  would fix each:
 
   - **Budget and Enterprise** are worse than unverified: both keep the search in
     session state, so no query string can express it and the builders they have
@@ -593,9 +628,14 @@ close). Never pass it a URL or a code.
     stops spending a lane, and it returns the day someone captures a URL that
     reaches a real search. `unsearchable()` takes its reason as a whole sentence
     precisely so its refusal does not borrow the other two's "cannot be
-    searched by URL".
-  - **National** keeps its search in session state like Budget and Enterprise,
-    and is searchable anyway — it is driven rather than deep-linked.
+    searched by URL". **The only one of the three available right now** —
+    Enterprise's booking app 503s rather than mounting, and Budget raises a bot
+    check on submit.
+
+  National keeps its search in session state exactly like Budget and Enterprise
+  and is searchable anyway, because it is driven rather than deep-linked. It is
+  listed here only as the worked example the other two should follow, not as
+  work outstanding.
 
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
