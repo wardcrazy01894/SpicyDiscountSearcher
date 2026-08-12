@@ -281,6 +281,15 @@ const BUILDERS: Record<VendorId, Builder> = {
    * second step is the one that matters — Enterprise's URL looked plausible too
    * and turned out to carry nothing.
    *
+   * That banner says **less than it was read as saying**, and the difference was
+   * measured on 2026-08-11: a tab with `A120590` and a tab with no code at all,
+   * same trip, same moment, priced identically — 53, 54, 54, 58, 59, 61 — while
+   * only the coded one carried the banner. So it is evidence the code was
+   * *accepted*, not that it *saved anything*. That is still exactly what a
+   * builder needs to prove, since the question here is whether the URL carries
+   * the code at all; a code that is accepted and worth nothing on one trip is
+   * the vendor's answer, not a broken link.
+   *
    * What `verified` does and does not cover — the flag is a claim about the URL
    * shape, not about every itinerary:
    * - Tested: a US airport, round trip, corporate AWD. An explicit

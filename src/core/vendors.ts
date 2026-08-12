@@ -23,15 +23,31 @@ export const VENDORS: Vendor[] = [
     // B's code — which `verify-trip.ts` is structurally blind to, since it only
     // compares locations and both tabs ask for the same trip.
     //
-    // Measured on 2026-08-11, two tabs loaded concurrently with different AWDs
-    // against the same TPA round trip. The AWD reaches the page through
-    // **sessionStorage**, which is per-tab: each tab's `reservation.store` and
-    // `REACT_QUERY_OFFLINE_CACHE` held its own code and not the other's. The
-    // only localStorage keys carrying an AWD are a bot-detection event log and
-    // an mParticle analytics batch queue — write-side telemetry, not read back
-    // to price a search. And `booking-widget.store`, the key the suspicion was
+    // Measured on 2026-08-11, on one TPA round trip, tabs loaded concurrently.
+    //
+    // The settling evidence is *rendered*, not introspected: a tab carrying an
+    // AWD and a tab carrying none, side by side, produced different pages — only
+    // the coded one said "Your savings are reflected below". Two concurrent tabs
+    // disagreeing on screen rules out every shared-state vector at once, cookies
+    // and IndexedDB included, neither of which had to be enumerated.
+    //
+    // The mechanism, from a second pair on two *different* AWDs: the code
+    // travels in sessionStorage, which is per-tab. Each tab's
+    // `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and
+    // not the other's, found by enumerating every key in both stores. The only
+    // localStorage keys carrying an AWD are a bot-detection event log and an
+    // mParticle analytics batch queue — write-side telemetry, not read back to
+    // price a search. And `booking-widget.store`, the key the suspicion was
     // actually about and the one we clear, is 65 bytes and carries no code at
     // all. That last fact is what an earlier truncated dump could not settle.
+    //
+    // Both halves are needed. The banner separates a coded tab from an uncoded
+    // one, not code A from code B; the storage partition is what covers two
+    // tabs both carrying codes, which is what a real run produces.
+    //
+    // Prices did *not* discriminate: identical cheapest six with either code and
+    // with none. So the banner proves the code was accepted, not that it saved
+    // anything — worth knowing, and not a fact about lanes.
     //
     // The clear itself is still needed: that store holds the *location*, which
     // is the Tampa/Philadelphia bug it was written for.

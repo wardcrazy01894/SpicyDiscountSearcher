@@ -649,13 +649,38 @@ close). Never pass it a URL or a code.
   render tab B's code — the same trip at a different discount, which
   `verify-trip` is structurally blind to because it only compares locations.
 
-  Measured with two tabs loaded concurrently on different AWDs against one TPA
-  round trip. The AWD reaches the page through **sessionStorage**, which is
-  per-tab: each tab's `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held
-  its own code and not the other's. The only localStorage keys carrying an AWD
-  are a bot-detection event log and an mParticle analytics batch queue, both
-  write-side telemetry. `booking-widget.store` is 65 bytes and carries no code —
-  the fact the earlier truncated dump could not establish.
+  Two experiments, both on one TPA round trip with the tabs loaded concurrently.
+
+  **The rendered discriminator, which is the one that settles it.** One tab
+  carrying `A120590` against one carrying no `awd_number` at all. The coded tab
+  rendered "Your savings are reflected below"; the uncoded tab did not. Two
+  concurrent tabs, visibly different pages — so nothing shared is carrying the
+  AWD between them, and that rules out every vector at once rather than one at a
+  time. Cookies and IndexedDB were never enumerated and did not need to be: a
+  shared session bleeding the code into the second tab would have put the savings
+  banner on it.
+
+  **The mechanism, from the first experiment**, two tabs on _different_ AWDs. The
+  AWD travels in **sessionStorage**, which is per-tab: each tab's
+  `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and not
+  the other's, found by enumerating every key in both stores and testing each
+  value against both codes. The only localStorage keys carrying an AWD are a
+  bot-detection event log and an mParticle analytics batch queue, both write-side
+  telemetry. `booking-widget.store` is 65 bytes and carries no code — the fact
+  the earlier truncated dump could not establish.
+
+  The two are load-bearing in different places, and neither is sufficient alone.
+  The banner discriminates a coded tab from an uncoded one, not code A from code
+  B; the storage partition is what covers two tabs both carrying codes, which is
+  the case a real run actually produces.
+
+  **Prices did not discriminate, in either experiment**, and that is worth
+  stating rather than omitting. The cheapest six were identical — 53, 54, 54, 58,
+  59, 61 — with `A120590`, with `B771000`, and with no code at all. The
+  interesting half of that is not about lanes: the savings banner appears while
+  the prices do not move, so **the banner is evidence the code was accepted, not
+  evidence it saved anything.** CLAUDE.md previously cited that banner as proof
+  "the AWD had applied", which is true only in the weaker sense.
 
   So Avis stays uncapped, on evidence rather than on the absence of it, and
   `tests/vendor-lane-cap.test.ts` records why. Note what this does _not_ say: the

@@ -209,11 +209,13 @@ the lane parks on a waiter rather than spinning or returning — returning would
 drop those quotes with the run reported complete. National and Enterprise are
 both `maxLanes: 1`.
 
-This is the same hazard CLAUDE.md records as an open question for Avis
-("Concurrent Avis tabs share one `localStorage`"), except at National it is
-observed rather than suspected. Avis is deliberately left uncapped: capping it
-would halve its throughput on a hunch, and it is now a one-line change the day
-someone measures it.
+Avis was suspected of the same hazard and turns out not to have it. Measured on
+2026-08-11: its AWD reaches the page through sessionStorage, which is per-tab,
+and two concurrent tabs — one carrying a code, one carrying none — rendered
+visibly different pages, the coded one alone showing "Your savings are reflected
+below". So it stays uncapped on evidence rather than on a hunch. CLAUDE.md has
+the full result; National's cap is unaffected, because what National shares is
+form state that survives into a fresh tab, which is a different mechanism.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.
