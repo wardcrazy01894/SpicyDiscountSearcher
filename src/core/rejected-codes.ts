@@ -96,6 +96,17 @@ export async function readRejected(storage: RejectionStore): Promise<RejectedCod
         // filtered out of the chips, the list and the plan for the session.
         // Dropping it here rather than special-casing it there, because this is
         // the function whose job is not trusting what it reads.
+        //
+        // Dropping is *repair*, and the only lossy path in this module —
+        // everything else treats an unrecognised value as empty rather than
+        // rewriting it. Two consequences, both accepted: the next write deletes
+        // such an entry permanently, and `MAX_ENTRIES` is measured against what
+        // survives the filter rather than what is stored. Neither is reachable,
+        // because `at` has been required and written since this file was added,
+        // and both are self-limiting anyway — the first write rewrites the
+        // filtered list, so a padded store cannot stay padded. An entry with no
+        // usable timestamp cannot be compared against a clear, which is the one
+        // thing this list is asked to do.
         typeof (entry as RejectedCode).at === 'number',
     );
   } catch {

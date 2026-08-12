@@ -107,6 +107,22 @@ interface UiState {
    */
   clearFailed: boolean;
   /**
+   * A clear asked for whose new list the popup does not have yet.
+   *
+   * Run is gated on it. `plannedCandidates` reads `ui.rejected` synchronously
+   * at submit, and the CLEAR_REJECTED reply is deliberately not prompt — it
+   * queues behind every in-flight `recordRejected` and is bounded at the
+   * ceiling — so pressing Run a second after "try them again" built the plan
+   * from the *pre-clear* list: the codes the user had just been told were being
+   * cleared were skipped again, under a plan line still saying "5 refused codes
+   * are being skipped".
+   *
+   * Distinct from `clearInFlight`, which is released a step earlier so the
+   * clear's own read is entitled to judge the flag. This one lives until the
+   * counts on screen are the new ones.
+   */
+  clearPending: boolean;
+  /**
    * Codes a vendor has refused, loaded once at boot.
    *
    * Held in UI state rather than read per keystroke: `refreshPlan` runs on every
@@ -124,6 +140,7 @@ const ui: UiState = {
   pendingStart: false,
   sendFailed: false,
   clearFailed: false,
+  clearPending: false,
   rejected: [],
 };
 
@@ -609,7 +626,7 @@ function refreshPlan(): void {
   // checkbox and max-codes keystroke, all reachable mid-run, and re-arming the
   // button let a second submit silently cancel the race in flight and discard
   // the quotes it had already collected.
-  runBtn.disabled = ui.running || ui.pendingStart;
+  runBtn.disabled = ui.running || ui.pendingStart || ui.clearPending;
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
@@ -668,7 +685,19 @@ let clearInFlight = false;
  * the caller must not act on it either, since it is describing a state the
  * popup has already moved past.
  */
-async function reloadRejected(): Promise<RejectedCode[] | null> {
+/**
+ * What a reload did, for callers that must tell "no answer" from "no refusals".
+ *
+ * `null` for both was enough while the only two outcomes were "read it" and
+ * "someone else read it later" — but an unreadable store is a third, and on the
+ * clear path it is the one that owes the user an answer at the moment of the
+ * click. Collapsed, that click rendered nothing at all, and the warning it
+ * should have produced surfaced minutes later attached to a finished run.
+ */
+type Reload =
+  { ok: true; entries: RejectedCode[] } | { ok: false; reason: 'superseded' | 'unreadable' };
+
+async function reloadRejected(): Promise<Reload> {
   const mine = ++rejectedRead;
   // `readRejected`, so an unreadable store is not mistaken for an empty one.
   // Collapsing the two here made a *failed* clear report success: `ui.rejected`
@@ -677,7 +706,8 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // nothing to explain them, which is the outcome `rejected-codes.ts` calls
   // unacceptable for a clear.
   const entries = await readRejected(chrome.storage.local);
-  if (mine !== rejectedRead || entries === null) return null;
+  if (mine !== rejectedRead) return { ok: false, reason: 'superseded' };
+  if (entries === null) return { ok: false, reason: 'unreadable' };
   ui.rejected = entries;
   // Judged here rather than by each caller, which is the third attempt at this
   // flag and the first that cannot drift. Setting it `false` here and relying
@@ -708,7 +738,7 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
   // codes have not been cleared yet" about a clear that demonstrably worked and
   // a refusal that postdates it.
   if (attempted !== null && !ui.clearFailed) clearAttempt = null;
-  return entries;
+  return { ok: true, entries };
 }
 
 /**
@@ -1584,6 +1614,10 @@ rejectedClear.addEventListener('click', () => {
   // every later waiter sizes its own bound from) and overwrites `clearAttempt`,
   // so the first press's answer would be judged against the last press's list.
   clearInFlight = true;
+  ui.clearPending = true;
+  // Disables Run before anything async happens, for the same reason the submit
+  // path latches `pendingStart` synchronously.
+  refreshPlan();
   rejectedClear.disabled = true;
   // And say so. Disabling removes the second click but not the silence that
   // invites it — the worker can hold this reply for the length of its ceiling
@@ -1594,8 +1628,11 @@ rejectedClear.addEventListener('click', () => {
   rejectedClear.textContent = 'clearing…';
   const finish = (): void => {
     clearInFlight = false;
+    ui.clearPending = false;
     rejectedClear.disabled = false;
     rejectedClear.textContent = label;
+    // Re-arms Run, which `refreshPlan` gates on the flag above.
+    refreshPlan();
   };
   void send({ type: 'CLEAR_REJECTED' })
     .then(async (reply) => {
@@ -1622,10 +1659,19 @@ rejectedClear.addEventListener('click', () => {
       clearInFlight = false;
       return reloadRejected();
     })
-    .then((entries) => {
-      // Null means a later read is already authoritative — it has stored its
-      // own answer and rendered from it, so there is nothing to draw here.
-      if (entries) {
+    .then((result) => {
+      // An unreadable store is the one outcome that owes the user an answer at
+      // the moment of the click: nothing has been read, so nothing can be
+      // rendered, and staying silent left the button flipping back to "try them
+      // again" with the counts unchanged — and the warning it should have
+      // produced surfacing minutes later, attached to a finished run.
+      if (!result.ok && result.reason === 'unreadable') {
+        ui.clearFailed = true;
+        renderRejectedNote();
+      }
+      // Superseded means a later read is already authoritative — it has stored
+      // its own answer and rendered from it, so there is nothing to draw here.
+      if (result.ok) {
         // Chips and the company list carry the count too, so `refreshPlan`
         // alone would leave them showing the reduced numbers after putting the
         // codes back.
@@ -1679,12 +1725,14 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
     // leaves B's codes excluded from the counts until the popup is reopened.
     const before = rejectionSet(ui.rejected);
     void reloadRejected()
-      .then((entries) => {
-        // Superseded: a clear the user pressed in the meantime has already stored
-        // its answer, and this read predates it. Applying it would put the codes
-        // they just cleared back into the counts.
-        if (!entries) return;
-        const after = rejectionSet(entries);
+      .then((result) => {
+        // Superseded: a clear the user pressed in the meantime has already
+        // stored its answer, and this read predates it — applying it would put
+        // the codes they just cleared back into the counts. Unreadable: there
+        // is nothing to apply and nothing this listener owes the user, since it
+        // is reacting to a run rather than to something they pressed.
+        if (!result.ok) return;
+        const after = rejectionSet(result.entries);
         const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
         // Before boot has established a selection there is nothing to preserve and
         // no selection to draw: `restoreForm` and `setCategory` have not run, so

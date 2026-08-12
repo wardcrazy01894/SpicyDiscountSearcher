@@ -875,6 +875,61 @@ describe('the popup half of the double-run guard', () => {
     expect(inputs()).toContain(document.activeElement);
   });
 
+  it('will not start a run on the pre-clear list', async () => {
+    // `plannedCandidates` reads `ui.rejected` synchronously at submit, and the
+    // CLEAR_REJECTED reply is deliberately not prompt — it queues behind every
+    // in-flight `recordRejected` and is bounded at the ceiling. So pressing Run
+    // a second after "try them again" built the plan from the *pre-clear* list:
+    // the codes the user had just been told were being cleared were skipped
+    // again, under a plan line still saying they were being skipped.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        return new Promise((resolve) => {
+          answer = () => void fakeBackground(message).then(resolve);
+        });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+    fillCarForm();
+
+    const run = () => document.querySelector<HTMLButtonElement>('#run-btn')!;
+    expect(run().disabled).toBe(false);
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    // Synchronously, before anything async — the same latch the submit path
+    // uses for `pendingStart`.
+    expect(run().disabled).toBe(true);
+
+    answer?.();
+    await vi.waitFor(() => expect(run().disabled).toBe(false));
+    // And the plan it would now build is the post-clear one.
+    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/refused/);
+  });
+
+  it('says a clear failed at the moment of the click when the store cannot be read', async () => {
+    // `reloadRejected` returned null for "superseded" and "unreadable" alike,
+    // and the handler treated them the same: no render, no message, and the
+    // button flipping back to "try them again" with the counts unchanged. The
+    // warning then surfaced minutes later, attached to a finished run, because
+    // `clearAttempt` survives.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+
+    const chromeStub = (globalThis as { chrome: { storage: { local: { get: unknown } } } }).chrome;
+    chromeStub.storage.local.get = () => Promise.reject(new Error('no storage'));
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
+    // And the button is usable again, or the advice cannot be taken.
+    expect(document.querySelector<HTMLButtonElement>('#rejected-clear')?.disabled).toBe(false);
+  });
+
   it('does not report a clear succeeded when storage could not be read', async () => {
     // Collapsing an unreadable store into an empty one made a *failed* clear
     // report success: `ui.rejected` emptied, the note hid, the chips showed
