@@ -323,12 +323,16 @@ input:focus-visible {
   font-size: 11px;
 }
 
-/* How much this row's link is worth, on the row. Sits under the code line
-   rather than beside it: the company name already competes for width in a 420px
-   popup, and a badge that pushed it into an ellipsis would cost more than it
-   tells you. */
+/* How much this row's link is worth, on the row.
+   `display: block` rather than `inline-block`, so it takes its own line under
+   the code every time. Inline it followed `.code` in normal flow with nothing
+   forcing a break, so whether it landed beside or under the code depended on
+   the width `.who` happened to have next to the price — different from row to
+   row, and neither of the two comments describing it could be true.
+   `fit-content` keeps the border around the words rather than the line. */
 .quote .confidence {
-  display: inline-block;
+  display: block;
+  width: fit-content;
   margin-top: 3px;
   padding: 0 5px;
   border: 1px solid currentcolor;

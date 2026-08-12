@@ -939,6 +939,21 @@ function lateAnswerLine(quote: Quote): HTMLElement | null {
  * than best-effort, worse than verified" — it says the URL carries no search at
  * all and the code was typed into the vendor's own form, which is a different
  * kind of claim and, at National, a stronger one than any deep link makes.
+ *
+ * Every label says **url** or **form** rather than just "checked", because the
+ * badge sits a few pixels from a dollar amount and "checked" beside a price
+ * reads as a claim about the price. It is not one: `verified` was proved on one
+ * US airport round trip and says nothing about this itinerary, let alone about
+ * whether the discount is any good.
+ *
+ * The tooltips describe the **route**, never this row's outcome, and that is
+ * load-bearing rather than pedantic. An earlier `driven` tooltip ended "every
+ * field was checked against what the form rendered back" — which a `form-fill`
+ * failure on the same row flatly contradicts, since that code means a field
+ * could *not* be confirmed. A badge and a status contradicting each other on one
+ * line is the exact failure this popup is built to avoid. So the tooltip says
+ * what a driver does and that it fails rather than guess, and the row's status
+ * is left to say whether this one got through.
  */
 function confidenceBadge(quote: Quote): HTMLElement | null {
   if (quote.failure === 'link-build') return null;
@@ -946,18 +961,20 @@ function confidenceBadge(quote: Quote): HTMLElement | null {
   const badge = document.createElement('span');
   badge.className = `confidence is-${quote.confidence}`;
   if (quote.confidence === 'verified') {
-    badge.textContent = 'checked link';
+    badge.textContent = 'url checked';
     badge.title =
       'This vendor’s search URL was replayed against the live site and proved to carry the ' +
       'search — for a US airport round trip, driver aged 25 or over. That is a claim about the ' +
-      'URL, not about this itinerary.';
+      'URL, not about this itinerary and not about the price.';
   } else if (quote.confidence === 'driven') {
     badge.textContent = 'form filled';
     badge.title =
-      'This vendor’s URL carries no search. The trip and the code were typed into its own ' +
-      'booking form, and every field was checked against what the form rendered back.';
+      'This vendor’s URL carries no search, so the trip and the code are typed into its own ' +
+      'booking form — and each step is checked against what the form renders back, failing the ' +
+      'quote rather than guessing when a step cannot be confirmed. This row’s status says ' +
+      'whether it got through.';
   } else {
-    badge.textContent = 'unverified link';
+    badge.textContent = 'url unverified';
     badge.title =
       'This vendor’s search URL is reverse-engineered and has never been checked against the ' +
       'live site. A result that looks wrong probably is.';
@@ -1132,14 +1149,14 @@ function renderRun(state: RunState | null): void {
     const clauses: string[] = [];
     if (verified > 0) {
       clauses.push(
-        'Links marked “checked” were replayed against the live site for US airport round-trips ' +
-          'only, and assume a driver aged 25 or over.',
+        'Links marked “url checked” were replayed against the live site for US airport ' +
+          'round-trips only, and assume a driver aged 25 or over.',
       );
     }
     if (unverified > 0) {
       clauses.push(
-        'Links marked “unverified” are reverse-engineered and have never been checked — a result ' +
-          'that looks wrong probably is.',
+        'Links marked “url unverified” are reverse-engineered and have never been checked — a ' +
+          'result that looks wrong probably is.',
       );
     }
     if (driven > 0) {

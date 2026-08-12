@@ -105,14 +105,26 @@ encode other people's websites. They will break. Both are deliberately isolated:
   stronger promise.
 
   **Each row now carries its own badge**, which is what that paragraph used to
-  say was still wanted. `confidenceBadge` prints "checked link" / "unverified
-  link" / "form filled" beside the code, so a car race mixing all three — Avis
-  and Hertz verified, National driven — is legible per row rather than in
-  aggregate. The line under the list stopped counting as a result: "2 of these
-  search links are unverified" never said *which* two, and there was nothing on
-  screen to work it out from. It explains the badges that are actually present
-  instead, one clause per kind, so it can no longer describe a state the list is
-  not in.
+  say was still wanted. `confidenceBadge` prints "url checked" / "url
+  unverified" / "form filled" on its own line under the code, so a car race
+  mixing all three — Avis and Hertz verified, National driven — is legible per
+  row rather than in aggregate. The line under the list stopped counting as a
+  result: "2 of these search links are unverified" never said _which_ two, and
+  there was nothing on screen to work it out from. It explains the badges that
+  are actually present instead, one clause per kind, so it can no longer describe
+  a state the list is not in.
+
+  Every label leads with **url** or **form** rather than a bare "checked",
+  because the badge renders a few pixels from a dollar amount and "checked"
+  beside a price reads as a claim about the price. It is not one.
+
+  A tooltip describes the **route**, never the row's outcome. The `driven` one
+  once ended "every field was checked against what the form rendered back",
+  which a `form-fill` failure on the same row flatly contradicts — that code
+  means a field could not be confirmed. A badge and a status disagreeing on one
+  line is the failure this popup exists to prevent, so the tooltip now says what
+  a driver does and that it fails rather than guess, and the status is left to
+  say whether this row got through. Pinned.
 
   Two exclusions carried over from the counting version, because both were bugs
   rather than tidiness: a `link-build` quote gets no badge at all (the worker
