@@ -13,14 +13,26 @@
  * so the injection is gone and the mechanism is exercised against the shipping
  * configuration instead of a mock of it.
  *
- * `hertz` is the uncapped control, and the reason is comparative rather than
- * measured: nobody has dumped Hertz's storage the way Avis's was dumped. What
- * distinguishes them is that **Avis has demonstrably leaked between tabs**, via
- * the saved booking widget that priced the wrong journey, while Hertz never has
- * — and Hertz's deep link was replay-proved to drive the search from the query
- * string alone, differing inventory counts and all. That is evidence of a
- * stateless search rather than proof of an empty one, and the distinction is
- * worth keeping honest: if Hertz ever leaks, it earns the same cap.
+ * The three caps do not rest on equal evidence, and flattening them is the
+ * mistake this file keeps having to undo:
+ *
+ * - **National** is measured. Its form returns carrying the previous search's
+ *   account number, so a second lane really can settle on the wrong code.
+ * - **Enterprise** is analogy to National, with no measurement of its own.
+ * - **Avis** is the weakest of the three. Its one *demonstrated* cross-tab leak
+ *   — the saved booking widget that priced the wrong journey — was measured and
+ *   provably does **not** carry the code: the location sat in localStorage, the
+ *   code sits in per-tab sessionStorage. What the cap rests on is a prior about
+ *   the vendor, which has been seen letting remembered state beat an explicit
+ *   URL parameter, plus the fact that the remaining server-side route cannot be
+ *   checked while no Avis code moves a price.
+ *
+ * `hertz` is the uncapped control, comparatively rather than by measurement:
+ * nobody has dumped Hertz's storage the way Avis's was dumped. It has simply
+ * never been seen doing any of this, and its deep link was replay-proved to
+ * drive the search from the query string alone, differing inventory counts and
+ * all — evidence of a stateless search rather than proof of an empty one. If
+ * Hertz ever leaks, it earns the same cap.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -184,20 +196,20 @@ describe('a vendor capped below the run concurrency', () => {
 });
 
 describe('the caps that actually ship', () => {
-  it('holds every vendor that can leak a code between tabs to one lane', () => {
-    // National is measured: its form comes back carrying the previous search's
-    // location, dates and account number. Enterprise keeps its search the same
-    // way and is capped on that analogy alone, with no measurement of its own.
+  it('holds every vendor a second tab could settle on the wrong code to one lane', () => {
+    // Deliberately not "every vendor that leaks" — only National's leak is
+    // measured to carry the code. See this file's header for what each of the
+    // three actually rests on; they are not the same strength and an earlier
+    // version of this title said they were.
     //
-    // Avis joins them, and its route here is the one worth remembering. The
-    // client-side worry really was measured away — the AWD lives in
-    // sessionStorage, which is per-tab, and `booking-widget.store` carries no
-    // code — and for two rounds that was read as "no cap needed". It does not
-    // support that. What it leaves open is a shared server-side session, which
-    // *nothing* can close, because no Avis code was found to move a price and
-    // so no observable delta exists for a leak to show up in.
-    //
-    // Unfalsifiable is not absent. Enterprise is capped on less than this.
+    // Avis's route here is the one worth remembering. The client-side worry
+    // really was measured away — the AWD lives in per-tab sessionStorage, and
+    // `booking-widget.store` carries no code — and for two rounds that was read
+    // as "no cap needed". It does not support that: what it leaves open is a
+    // shared server-side session, which *nothing* can close, because no Avis
+    // code was found to move a price and so no observable delta exists for a
+    // leak to show up in. Unfalsifiable is not absent, and Enterprise is capped
+    // on less than this.
     const capped = VENDORS.filter((v) => v.maxLanes === 1).map((v) => v.id);
     expect(capped).toEqual(['avis', 'enterprise', 'national']);
   });
