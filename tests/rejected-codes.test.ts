@@ -77,12 +77,11 @@ describe('readRejected', () => {
         { vendor: 'national' },
         null,
         'nonsense',
-        // `at` is compared, so it has to be a number. The popup tells a refusal
-        // that survived a clear from one recorded after it by asking whether
-        // `at` predates the clear, and `undefined <= number` is `false` — so an
-        // entry an older build wrote without a timestamp read as "recorded
-        // afterwards", and a failed clear reported success while the code went
-        // on being filtered out of the chips, the list and the plan.
+        // `at` is declared `number` and every build that has written this key
+        // wrote one, so an entry without it is not a `RejectedCode` — and this
+        // is the function whose job is not trusting what it reads. Nothing
+        // compares timestamps today; the filter is about the shape being what
+        // the type says, not about any reader's arithmetic.
         { vendor: 'national', code: 'NOSTAMP' },
         { vendor: 'national', code: 'BADSTAMP', at: 'yesterday' },
       ],

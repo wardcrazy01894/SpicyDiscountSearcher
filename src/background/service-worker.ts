@@ -914,9 +914,24 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
+        // Stamped before the awaits, not between them. The `finally` and the
+        // outer `.catch` exist because those awaits are believed able to
+        // reject — and `active` is never nulled, so a run that reached this
+        // block without a `finishedAt` is reported live by `currentState()`
+        // for the life of the worker: the popup stuck on "Racing codes…" with
+        // Run disabled and no way back. It also closes the window where every
+        // quote is settled but `GET_STATE` still answers "running".
+        //
+        // Deleting this line — moving the stamp back between the awaits —
+        // passes the whole suite, and that is recorded rather than hidden:
+        // reaching it needs `closeWindow` to reject, and it is fully
+        // try/caught today, so a test would have to add a failing
+        // `windows.remove` to the chrome fake to construct a state the code
+        // cannot currently be in. The line costs nothing and restores the
+        // guarantee the original ordering had.
+        run.state.finishedAt = Date.now();
         try {
           await closeWindow(run);
-          run.state.finishedAt = Date.now();
           await publish();
         } finally {
           // Last, after the closes and the final publish, so teardown itself is
@@ -971,10 +986,10 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
 /**
  * What the popup should be shown: the live run, or the settled snapshot.
  *
- * Shared by GET_STATE and CLEAR_REJECTED so their answers cannot disagree —
- * they did, and the difference was load-bearing: the clear replied
- * `active?.state ?? null`, so after a worker restart it said "no run" about one
- * the user could still see on screen.
+ * One caller now that the clear no longer goes through the worker, and kept
+ * separate anyway: `active?.state ?? null` is the tempting shorthand and it is
+ * wrong after a restart, where it says "no run" about one the user can still
+ * see on screen.
  */
 async function currentState(): Promise<RunState | null> {
   if (active) return active.state;

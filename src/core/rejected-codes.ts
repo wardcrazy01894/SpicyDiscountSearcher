@@ -92,17 +92,6 @@ export async function readRejected(storage: RejectionStore): Promise<RejectedCod
   }
 }
 
-/**
- * The stored list, treating an unreadable store as an empty one.
- *
- * For readers only: storage being unavailable costs a wasted tab, not
- * correctness — the run simply re-asks, and it is never worth failing a race
- * over. Writers must use `readRejected` and skip the write.
- */
-export async function loadRejected(storage: RejectionStore): Promise<RejectedCode[]> {
-  return (await readRejected(storage)) ?? [];
-}
-
 /** Remember a refusal, keeping the first timestamp for one already known. */
 export async function recordRejected(
   storage: RejectionStore,
@@ -110,8 +99,8 @@ export async function recordRejected(
   code: string,
   at: number,
 ): Promise<void> {
-  // `readRejected`, not `loadRejected`: a read that failed must not become an
-  // empty list here, or this write replaces every remembered refusal with one.
+  // A read that failed must not become an empty list here, or this write
+  // replaces every remembered refusal with a single entry.
   const existing = await readRejected(storage);
   if (existing === null) return;
   if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;

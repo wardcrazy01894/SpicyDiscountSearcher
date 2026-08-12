@@ -399,3 +399,26 @@ input:focus-visible {
   color: var(--muted);
   font-size: 10px;
 }
+
+/**
+ * Text for assistive tech only.
+ *
+ * The vendor chip's reconciliation ("19 codes, 5 refused") used to ride on
+ * `aria-label`, which is wrong twice: `<label>` maps to the generic role, where
+ * ARIA prohibits naming, and where a browser honours it anyway it *replaces*
+ * the visible "National 14" — so the visible text is no longer part of the
+ * accessible name and "click National 14" stops matching for voice control.
+ * Real text in the DOM composes with the visible label instead of overriding
+ * it.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

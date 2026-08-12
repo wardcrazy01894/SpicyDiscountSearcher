@@ -238,13 +238,22 @@ function renderVendorChips(): void {
       // 14 while the plan says "Racing 1 code". Scoping the count to the
       // selection would make the chips move as companies are ticked, which is
       // a different and worse thing to read.
-      label.title =
+      const reconciliation =
         total > raceable
           ? `${total} codes at ${vendor.label} across every company, ${total - raceable} refused by the vendor and no longer raced`
           : `${total} codes at ${vendor.label} across every company`;
-      label.setAttribute('aria-label', label.title);
+      label.title = reconciliation;
+      // Real text, not `aria-label`. That attribute is wrong here twice:
+      // `<label>` maps to the generic role, where ARIA prohibits naming, and
+      // where a browser honours it anyway it *replaces* the visible "National
+      // 14" — so the number on screen stops being part of the accessible name
+      // and "click National 14" no longer matches for voice control. A hidden
+      // span composes with the visible label instead of overriding it.
+      const spoken = document.createElement('span');
+      spoken.className = 'sr-only';
+      spoken.textContent = ` — ${reconciliation}`;
 
-      label.append(box, document.createTextNode(vendor.label), count);
+      label.append(box, document.createTextNode(vendor.label), count, spoken);
       return label;
     }),
   );
@@ -549,8 +558,7 @@ function refreshPlan(): void {
     // cleared only by `renderRun`, which the clear path never calls, so a clear
     // that *worked* left this line still reading "N codes have been refused"
     // with the chips beside it already showing the restored counts. It is also
-    // the state where a clear is most likely to have failed, and where
-    // `CLEAR_FAILED_MESSAGE` could therefore never appear.
+    // the state where a clear is most likely to have failed.
     renderRejectedNote();
     return;
   }
@@ -628,7 +636,7 @@ async function reloadRejected(): Promise<RejectedCode[] | null> {
 
 /** The standing list, separate from this plan's skip count. */
 function renderRejectedNote(): void {
-  // Deduped, like every other consumer of this list. `loadRejected` accepts
+  // Deduped, like every other consumer of this list. `readRejected` accepts
   // whatever an older build wrote and does not collapse duplicates — which is
   // the stated premise for the two-directional `changed` comparison in the
   // RUN_STATE listener — so a stored `[A, A]` had this line saying "2 codes
@@ -1490,7 +1498,7 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
   // moment ago — spending a real tab to rediscover a refusal, which is the one
   // thing remembering them exists to avoid.
   if (message.state?.finishedAt) {
-    // Both directions, not `length` plus one-way containment. `loadRejected`
+    // Both directions, not `length` plus one-way containment. `readRejected`
     // does not dedupe and accepts whatever an older build wrote, so a stored
     // `[A, A]` against a held `[A, B]` compares equal on both of those and
     // leaves B's codes excluded from the counts until the popup is reopened.

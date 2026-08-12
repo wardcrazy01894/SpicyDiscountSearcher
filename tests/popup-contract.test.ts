@@ -55,20 +55,12 @@ let broadcastListeners: Array<(message: unknown) => void> = [];
 /**
  * A background that answers the way the real one does.
  *
- * `CLEAR_REJECTED` has to actually clear, because the popup no longer writes
- * that key itself — it asks the worker to, so both writers share one realm and
- * one write queue. A stub that only replied would leave the popup re-reading a
- * list nothing had emptied.
+ * Deliberately has no clear branch: "try them again" writes
+ * `chrome.storage.local` from the popup and sends nothing, so a stub that
+ * handled a clear message would be dead code inviting the next test author to
+ * wire a clear through it and get a false pass.
  */
-function fakeBackground(message: { type: string }): Promise<unknown> {
-  if (message.type === 'CLEAR_REJECTED') {
-    const { local } = (
-      globalThis as {
-        chrome: { storage: { local: { set: (items: Record<string, unknown>) => Promise<void> } } };
-      }
-    ).chrome.storage;
-    return local.set({ rejectedCodes: [] }).then(() => ({ type: 'RUN_STATE', state: null }));
-  }
+function fakeBackground(_message: { type: string }): Promise<unknown> {
   return Promise.resolve({ type: 'RUN_STATE', state: null });
 }
 
@@ -324,11 +316,16 @@ describe('the popup half of the double-run guard', () => {
     );
     expect(chip?.querySelector('.count')?.textContent).toBe('14');
     // The smaller number alone is its own confusion, so the chip carries the
-    // difference rather than swallowing it — and says it through `aria-label`
-    // too, since a `title` needs a hovering mouse and the whole point is that
-    // a bare "14" explains nothing.
+    // difference rather than swallowing it — and says it in real text as well
+    // as in a `title`, since a tooltip needs a hovering mouse and a bare "14"
+    // explains nothing without one.
     expect(chip?.getAttribute('title')).toMatch(/19 codes at National.*5 refused/);
-    expect(chip?.getAttribute('aria-label')).toBe(chip?.getAttribute('title'));
+    // Text rather than `aria-label`, which would *replace* the visible
+    // "National 14" in the accessible name instead of adding to it.
+    expect(chip?.getAttribute('aria-label')).toBeNull();
+    const spoken = chip?.querySelector('.sr-only')?.textContent ?? '';
+    expect(spoken).toMatch(/19 codes at National.*5 refused/);
+    expect(chip?.textContent).toMatch(/National/);
     // And names what it counts: a per-vendor total across every company, which
     // is not the plan's number once a company is ticked.
     expect(chip?.getAttribute('title')).toMatch(/across every company/);
@@ -728,44 +725,6 @@ describe('the popup half of the double-run guard', () => {
     expect(rows().length - strandedShown).toBeGreaterThan(40);
   });
 
-  it('does not re-arm Run from a clear while a START_RUN is outstanding', async () => {
-    // A clear's reply is not an answer to START_RUN, and `renderRun` clears
-    // `pendingStart` unconditionally. `beginRun` awaits `cancelRun` before
-    // assigning `active`, so a clear answered inside that gap reports the
-    // previous finished run — or none — and Run comes back to life with a race
-    // about to start behind it. A second press then sends the second START_RUN
-    // the latch exists to stop.
-    //
-    // The failed-send case is the same call and the same answer: a rejection
-    // does not prove non-delivery, so the message and the dead button are
-    // supposed to stay until the popup is reopened. An earlier version of this
-    // test asserted the opposite — that a clear should re-arm Run — which read
-    // as a fix for a stale plan line and was really a hole in the double-run
-    // guard.
-    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-    installChrome();
-    await boot();
-
-    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
-    fillCarForm();
-    document.querySelector<HTMLButtonElement>('#run-btn')?.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
-    });
-
-    // The worker answers the clear. The refusal list may update; the run state
-    // must not.
-    sendMessageImpl = fakeBackground;
-    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
-    });
-
-    expect(document.querySelector<HTMLButtonElement>('#run-btn')?.disabled).toBe(true);
-    expect(document.querySelector('#run-btn')?.textContent).toMatch(/Reopen the popup/);
-    expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
-  });
-
   it('counts the refused note the way everything else counts it', async () => {
     // `loadRejected` accepts whatever an older build wrote and does not dedupe,
     // which is the stated premise for the two-directional `changed` check in the
@@ -780,31 +739,6 @@ describe('the popup half of the double-run guard', () => {
     await boot();
 
     expect(document.querySelector('#rejected-count')?.textContent).toMatch(/^1 code has/);
-  });
-
-  it('does not complain when the clear worked but the reply did not arrive', async () => {
-    // The mirror of the test above, and the reason both judge storage rather
-    // than the reply. `send` retries and a rejection does not prove
-    // non-delivery — this file already reasons that way about START_RUN — so a
-    // clear that really happened while the response channel dropped must not be
-    // reported as a failure. Treating it as one left `ui.rejected` populated for
-    // the rest of the session, filtering out codes the store no longer refused.
-    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-    installChrome();
-    await boot();
-    sendMessageImpl = (message) => {
-      // Delivered and acted on; only the answer is lost.
-      void fakeBackground(message);
-      return Promise.reject(new Error('response channel closed'));
-    };
-
-    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
-    });
-    expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(
-      /not been cleared yet/,
-    );
   });
 
   it('does not let a finishing run undo a clear the user just made', async () => {
