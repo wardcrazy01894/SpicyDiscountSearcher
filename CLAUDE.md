@@ -50,6 +50,17 @@ else.
 
 ## Ground rules
 
+- **Every PR bumps the version**, in `package.json` _and_ `public/manifest.json`,
+  which `tests/manifest.test.ts` pins together. Patch by default (`0.1.1`),
+  minor for a new capability, and the judgement is yours — the rule is that the
+  number always moves, never that it moves by a particular amount.
+
+  The reason is not bookkeeping. `manifest.json`'s version is what Chrome shows
+  on the extensions page, so it is the only way to confirm that a reload picked
+  up your build rather than the one already loaded. Sitting on `0.1.0` across
+  every PR meant a rebuild and a stale cache looked identical, and a live test
+  cannot be trusted when you cannot tell which code answered.
+
 - **Run `npm run verify` before opening a PR.** It is the whole node side of CI
   in one command — typecheck, eslint, `prettier --check`, vitest, **all three**
   builds, `check-dist`, and `npm audit --audit-level=moderate`. Added on

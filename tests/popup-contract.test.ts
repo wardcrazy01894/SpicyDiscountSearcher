@@ -1326,6 +1326,62 @@ describe('the popup half of the double-run guard', () => {
     expect(box).not.toMatch(/1 other code quoted daily rates/i);
   });
 
+  it('does not describe a swept-off-the-page price as a home-page landing', async () => {
+    // The two reasons a quote is unranked share `suspect`, and the summary
+    // filtered on its *truthiness* — so the second reason inherited the first
+    // one's sentence. A Hertz quote whose $20,000 came off a Car Sales banner
+    // was announced as having landed on the home page while its own row printed
+    // `landed /us/en/book/vehicles`. Two lines, one page, contradicting.
+    const winner = quote({
+      id: 'avis:A1',
+      best: { label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 60, currency: 'USD', basis: 'per-day' }],
+    });
+    const swept = quote({
+      id: 'hertz:H1',
+      suspect: 'scope-lost',
+      best: { label: 'Economy', amount: 20000, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 20000, currency: 'USD', basis: 'per-day' }],
+      report: {
+        finalPath: '/us/en/book/vehicles',
+        title: 'Book',
+        offerCount: 1,
+        path: 'body-fallback',
+      },
+    });
+    await caveatFor([winner, swept]);
+
+    const box = document.querySelector('#savings')?.textContent ?? '';
+    expect(box).toMatch(/no results list/i);
+    expect(box).not.toMatch(/home page/i);
+  });
+
+  it('names the branch rather than claiming the page never answered', async () => {
+    // `branchText` had no `body-fallback` arm, so it fell through to the
+    // `not-reached` wording — printing "1 offer" and "no answer from the page"
+    // on the same line, about the same quote. Deleting the arm left the whole
+    // suite green until this existed.
+    const swept = quote({
+      id: 'hertz:H1',
+      suspect: 'scope-lost',
+      best: { label: 'Economy', amount: 20000, currency: 'USD', basis: 'per-day' },
+      offers: [{ label: 'Economy', amount: 20000, currency: 'USD', basis: 'per-day' }],
+      report: {
+        finalPath: '/us/en/book/vehicles',
+        title: 'Book',
+        offerCount: 1,
+        path: 'body-fallback',
+      },
+    });
+    await caveatFor([swept]);
+
+    const rows = document.querySelector('#results')?.textContent ?? '';
+    expect(rows).toMatch(/no results container found/i);
+    expect(rows).not.toMatch(/no answer from the page/i);
+    // And the row says plainly why it is not ranked.
+    expect(rows).toMatch(/outside the results list/i);
+  });
+
   it('still shows the summary when a suspect quote is the only thing to explain', async () => {
     // `savingsBox.hidden` had to learn about the second reason too, and nothing
     // pinned that half: the sibling test above has a spread, so `!spread`

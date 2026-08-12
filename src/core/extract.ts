@@ -791,7 +791,25 @@ function sweep(root: Element): Offer[] {
  */
 export interface Extraction {
   offers: Offer[];
-  path: 'vendor-selectors' | 'generic-sweep';
+  /**
+   * Which branch produced these offers, and — for `body-fallback` — a warning
+   * about where they came from.
+   *
+   * `body-fallback` means no container this vendor names was in the document,
+   * so the sweep ran over `doc.body` and the offers may have come from anywhere
+   * on the page. That is **provenance, not presence**: an earlier attempt at
+   * this reported merely whether a container existed, which is a different
+   * question and does not answer this one. A page can perfectly well render an
+   * empty `<main>` while a promo banner outside it is the only price — and then
+   * "a container exists" is true and the price is still junk.
+   *
+   * Measured on Hertz, whose results page is entirely client-rendered: the
+   * server sends ~17KB with no `<main>`, and a Car Sales promo reading
+   * "Like-new cars for under $20,000" sits outside the results container. It
+   * does not change between polls, so the probe concluded prices had settled
+   * and reported $20,000 for every code.
+   */
+  path: 'vendor-selectors' | 'generic-sweep' | 'body-fallback';
 }
 
 /**
@@ -831,8 +849,12 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
     if (found.offers.length > 0) return found;
   }
   // Nothing any named container could price. The sweep over the whole body is
-  // the honest default because it is the branch that would have run.
-  return doc.body ? extractFrom(doc.body, config) : { offers: [], path: 'generic-sweep' };
+  // still the honest default — it is the branch that would have run — but it is
+  // *labelled*, because these offers were found outside every scope this vendor
+  // trusts and the caller has to be able to weigh them differently.
+  if (!doc.body) return { offers: [], path: 'body-fallback' };
+  const swept = extractFrom(doc.body, config);
+  return { offers: swept.offers, path: 'body-fallback' };
 }
 
 function extractFrom(root: Element, config: VendorSelectors): Extraction {

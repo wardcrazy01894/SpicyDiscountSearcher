@@ -268,12 +268,20 @@ export interface ProbeReport {
    * by an allowlist at ingest. A page that could say `not-reached` could forge
    * "the background observed this".
    *
+   * `body-fallback` is `generic-sweep`'s unhappy twin and the distinction is
+   * load-bearing: the sweep ran over `doc.body` because **no container this
+   * vendor names was in the document**, so the prices below may have come from
+   * anywhere on the page — a footer, a promo banner, a cross-sell. Hertz
+   * reported $20,000 for every code that way, from a Car Sales advert outside
+   * `<main>`. `generic-sweep` means the sweep ran inside the container and is
+   * ordinary; this one means the scope was lost.
+   *
    * `not-reached`: the probe never answered, so the background described the
    * tab instead. `left-our-origins`: it could not even do that, because the tab
    * had navigated somewhere this extension holds no permission to read — which
    * is also precisely when the content script stops running.
    */
-  path: 'vendor-selectors' | 'generic-sweep' | 'not-reached' | 'left-our-origins';
+  path: 'vendor-selectors' | 'generic-sweep' | 'body-fallback' | 'not-reached' | 'left-our-origins';
 }
 
 export interface Quote {
@@ -308,8 +316,22 @@ export interface Quote {
    * too late", which are different problems with different fixes.
    */
   lateReport?: ProbeReport;
-  /** Set when the evidence says this page is not the search we asked for. */
-  suspect?: 'landed-elsewhere';
+  /**
+   * Set when the evidence says this price should not be ranked.
+   *
+   * `landed-elsewhere`: the page is not the search we asked for.
+   * `scope-lost`: the price came from outside every container the vendor
+   * names, so it may have been swept off a banner, a footer or a cross-sell
+   * rather than a results card. Hertz reported $20,000 for every code that
+   * way, from a Car Sales advert.
+   *
+   * Both keep the quote out of the ranking rather than merely badging it. That
+   * distinction is the whole lesson of the `landedElsewhere` note in
+   * CLAUDE.md — "Flagging alone was not enough", because `pricedOnly` filtered
+   * on status and price, so the bad number still won and `savings` still
+   * announced it.
+   */
+  suspect?: 'landed-elsewhere' | 'scope-lost';
   /** Paired with finishedAt to show how long a vendor took to answer. */
   startedAt?: number;
   finishedAt?: number;
