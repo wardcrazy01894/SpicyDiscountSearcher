@@ -1581,3 +1581,125 @@ describe('a rejection that did not mean non-delivery', () => {
     expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/Could not reach/);
   });
 });
+
+describe('what each row says about its own link', () => {
+  /**
+   * A car race now mixes all three confidences in one list — Avis and Hertz
+   * `verified`, National `driven`, a hotel builder `best-effort` — which is what
+   * made the counting sentence under the list insufficient. It could say how
+   * many were unverified but never which, and nothing on screen answered that.
+   */
+  function quoteWith(over: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: 'q',
+      candidate: {
+        companySlug: 'acme',
+        companyName: 'Acme',
+        vendor: 'hertz',
+        code: 'CDP1',
+        note: null,
+      },
+      url: 'https://www.hertz.com/us/en/book/vehicles?CDP=1',
+      confidence: 'verified',
+      status: 'ok',
+      offers: [],
+      best: { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' },
+      ...over,
+    };
+  }
+
+  async function render(quotes: Array<Record<string, unknown>>): Promise<void> {
+    await import('../src/popup/popup.js');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#tagline')?.textContent).toMatch(/corporate codes loaded/);
+    });
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes, finishedAt: 1 } });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  const badges = (): string[] =>
+    [...document.querySelectorAll('.quote .confidence')].map((el) => el.textContent ?? '');
+
+  it('badges each row with the kind of evidence behind it', async () => {
+    await render([
+      quoteWith({ id: 'a', confidence: 'verified' }),
+      quoteWith({ id: 'b', confidence: 'driven' }),
+      quoteWith({ id: 'c', confidence: 'best-effort' }),
+    ]);
+    expect(badges()).toEqual(['url checked', 'form filled', 'url unverified']);
+  });
+
+  it('badges no link at all when no link was built', async () => {
+    // The worker stamps a `link-build` failure `best-effort` on its catch path.
+    // Badging on confidence alone would print "url unverified" against a link
+    // that does not exist — the mistake the summary line was taught to avoid,
+    // arriving one row further down.
+    await render([
+      quoteWith({
+        id: 'a',
+        confidence: 'best-effort',
+        status: 'error',
+        failure: 'link-build',
+        best: null,
+      }),
+    ]);
+    expect(badges()).toEqual([]);
+  });
+
+  it('does not let a badge claim what the status beside it denies', async () => {
+    // A `driven` row that failed `form-fill` says "could not fill the search
+    // form" in its status. The badge tooltip used to end "every field was
+    // checked against what the form rendered back" — the precise opposite, on
+    // the same line, since that code means a field could *not* be confirmed.
+    //
+    // The fix is not to hide the badge: which route was taken is still true and
+    // still worth saying. It is that a tooltip may describe the route and must
+    // not assert this row's outcome, which the status owns.
+    await render([
+      quoteWith({
+        id: 'a',
+        confidence: 'driven',
+        status: 'error',
+        failure: 'form-fill',
+        best: null,
+      }),
+    ]);
+    expect(badges()).toEqual(['form filled']);
+    const title = document.querySelector('.quote .confidence')?.getAttribute('title') ?? '';
+    expect(title).not.toMatch(/every field was checked/);
+    // It still explains what a driver does, including that it refuses to guess.
+    expect(title).toMatch(/failing the quote rather than guessing/);
+  });
+
+  it('explains each badge it actually showed, and nothing it did not', async () => {
+    await render([quoteWith({ id: 'a', confidence: 'verified' })]);
+    const note = document.querySelector('#quotes .hint')?.textContent ?? '';
+    expect(note).toMatch(/marked “url checked”/);
+    // The clause for a badge no row is wearing must not appear. The old sentence
+    // was one of five fixed alternatives, so it described states the list was
+    // not in — a run of only verified links still spoke about the unverified.
+    expect(note).not.toMatch(/marked “url unverified”/);
+    expect(note).not.toMatch(/form filled/);
+  });
+
+  it('still says something when every link is verified', async () => {
+    // Silence reads as the stronger promise. `verified` is a claim about the URL
+    // shape, proved on one US airport round trip — not that the price is right
+    // for this trip.
+    await render([quoteWith({ id: 'a', confidence: 'verified' })]);
+    expect(document.querySelector('#quotes .hint')?.textContent).toMatch(
+      /Confirm the rate before booking/,
+    );
+  });
+
+  it('does not describe a driven row as a search link', async () => {
+    // A National-only run once read "these search links are checked against the
+    // live site" about a URL that carries no search whatsoever.
+    await render([quoteWith({ id: 'a', confidence: 'driven' })]);
+    const note = document.querySelector('#quotes .hint')?.textContent ?? '';
+    expect(note).toMatch(/form filled/);
+    expect(note).not.toMatch(/marked “url checked”/);
+  });
+});

@@ -323,6 +323,37 @@ input:focus-visible {
   font-size: 11px;
 }
 
+/* How much this row's link is worth, on the row.
+   `display: block` rather than `inline-block`, so it takes its own line under
+   the code every time. Inline it followed `.code` in normal flow with nothing
+   forcing a break, so whether it landed beside or under the code depended on
+   the width `.who` happened to have next to the price — different from row to
+   row, and neither of the two comments describing it could be true.
+   `fit-content` keeps the border around the words rather than the line. */
+.quote .confidence {
+  display: block;
+  width: fit-content;
+  margin-top: 3px;
+  padding: 0 5px;
+  border: 1px solid currentcolor;
+  border-radius: 8px;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  /* Outlined rather than filled, on purpose. A filled badge reads as a status —
+     good news or bad — and none of these three is either. They say what kind of
+     evidence is behind the row. */
+  color: var(--muted);
+}
+
+/* Only the unverified one gets a colour, and it is the warning colour rather
+   than the error one: the link may well be fine, and nothing about the row has
+   failed. The other two stay grey, because a green "checked" would promise the
+   price is right when the claim is only about the URL. */
+.quote .confidence.is-best-effort {
+  color: var(--warn);
+}
+
 .quote .price {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
