@@ -66,6 +66,16 @@ export const VENDORS: Vendor[] = [
     // so the same cap applies for the same reason — set now, while the evidence
     // is written down, rather than discovered again when its driver lands.
     maxLanes: 1,
+    // The booking form does not mount in a tab Chrome never paints, and a
+    // minimised window is never painted. Measured 2026-08-12; see the flag's
+    // own comment in `types.ts` for the control. This is why the first live
+    // runs reported Enterprise "not doing anything in the background" and then
+    // springing to life the moment the window was brought to the front.
+    //
+    // `maxLanes: 1` above is what keeps the cost of this bounded: at most one
+    // Enterprise tab is ever mounting, so the window is visible for one
+    // hydration at a time rather than for as many as the concurrency allows.
+    needsPaintedWindow: true,
   },
   {
     id: 'national',

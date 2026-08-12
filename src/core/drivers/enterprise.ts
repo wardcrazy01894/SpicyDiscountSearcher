@@ -912,6 +912,12 @@ export const enterpriseDriver: FormDriver = {
   verifyResults,
   async drive(ctx) {
     await awaitHydration(ctx);
+    // The form exists, so the window no longer has to be painted for this quote
+    // and the background can put it away. Reported here rather than after the
+    // whole drive: everything below this line works fine in an unpainted tab —
+    // it is only the *mount* that needs a frame — so holding the window on the
+    // user's screen for the rest of the fill would be a cost with no benefit.
+    ctx.hydrated?.();
     await fillLocation(ctx);
     // The itinerary before the code, and both before the submit: there is no
     // point typing a discount code into a form that is about to be submitted

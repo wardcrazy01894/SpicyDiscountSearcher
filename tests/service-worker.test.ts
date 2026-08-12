@@ -26,6 +26,23 @@ function plan(concurrency = 2): SearchPlan {
   };
 }
 
+/** A one-code plan at the only vendor whose form needs a painted window. */
+function enterprisePlan(): SearchPlan {
+  return {
+    trip: TRIP,
+    candidates: [
+      {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'enterprise',
+        code: '5666666',
+        note: null,
+      },
+    ],
+    concurrency: 1,
+  };
+}
+
 const OFFER: Offer = { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' };
 
 const REPORT: ProbeReport = {
@@ -602,6 +619,68 @@ describe('politeness', () => {
       .map((tab, index) => tab.at - chromeMock.tabOptions[index]!.at);
     expect(gaps.length).toBeGreaterThan(0);
     expect(Math.min(...gaps)).toBeGreaterThanOrEqual(750);
+  });
+
+  it('still opens minimised when no vendor needs the window painted', async () => {
+    // The invariant above, restated as the *default* now that an exception
+    // exists. A run of ordinary vendors must be untouched by the paint logic:
+    // minimised at creation and never raised.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    expect(chromeMock.windowOptions[0]).toMatchObject({ state: 'minimized' });
+    expect(chromeMock.windowUpdates.filter((u) => u.state === 'normal')).toHaveLength(0);
+  });
+
+  it('opens visible — never focused — for a vendor whose form needs painting', async () => {
+    // Enterprise's booking widget does not mount in a tab Chrome never paints,
+    // and a minimised window is never painted. Measured 2026-08-12: 153s hidden
+    // gave zero inputs, one forced repaint gave all five. So the window starts
+    // visible, and the politeness cost is bounded by minimising it again the
+    // moment the form reports it has mounted.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    expect(chromeMock.windowOptions).toHaveLength(1);
+    expect(chromeMock.windowOptions[0]).toMatchObject({ state: 'normal', focused: false });
+  });
+
+  it('minimises as soon as the form reports it has mounted', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+
+    await chromeMock.fromTab(tabId, { type: 'PROBE_HYDRATED' });
+    await settle();
+
+    const minimised = chromeMock.windowUpdates.filter((u) => u.state === 'minimized');
+    expect(minimised).toHaveLength(1);
+    // And still never focused, on the way down as well as the way up.
+    expect(minimised[0]).toMatchObject({ focused: false });
+  });
+
+  it('minimises even when the quote dies before the form ever mounts', async () => {
+    // The case the user is most likely to see, since a paint-gated vendor that
+    // cannot mount is exactly what this flag exists for. Without `finishQuote`
+    // releasing the quote, a failed Enterprise quote leaves the window sitting
+    // on the user's screen for the rest of the run.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'form-fill',
+      message: 'timed out waiting for the booking widget',
+      report: REPORT,
+    });
+    await settle();
+
+    expect(chromeMock.windowUpdates.filter((u) => u.state === 'minimized')).toHaveLength(1);
   });
 
   it('caps concurrency at six however many the popup asks for', async () => {

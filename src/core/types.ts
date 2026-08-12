@@ -74,6 +74,28 @@ export interface Vendor {
    * bound.
    */
   maxLanes?: number;
+  /**
+   * This vendor's form does not mount unless Chrome actually paints the tab.
+   *
+   * The probe window is minimised, and a minimised window is never painted — so
+   * for a vendor with this flag the window is opened *visible* (never focused)
+   * and minimised again as soon as the driver reports the form has mounted, via
+   * `DriveContext.hydrated`.
+   *
+   * Enterprise is the measured case, and it is not throttling or
+   * `visibilityState`. A hidden tab left for 153 seconds had **zero `<input>`
+   * elements** while the page shell rendered normally; one forced repaint
+   * produced all five and `#cid` immediately, with `visibilityState` still
+   * `hidden` and timers running at the documented ~1/s throughout. The standard
+   * "hydrate when scrolled into view" pattern does exactly this, and no
+   * content-script API can force a frame in a window Chrome is not drawing.
+   *
+   * Deliberately per-vendor and deliberately narrow. It is the one thing in
+   * this file that puts a window on the user's screen, so it costs politeness
+   * and must be paid only where it buys a vendor that otherwise cannot run at
+   * all. Do not set it to make a slow vendor faster.
+   */
+  needsPaintedWindow?: boolean;
 }
 
 /** One discount code for one company at one vendor, as parsed from the workbook. */

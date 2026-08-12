@@ -18,7 +18,16 @@ export type ProbeRequest =
   // Both carry a report: the facts that separate a real quote from a deep link
   // that quietly landed on the vendor's home page are the same either way.
   | { type: 'PROBE_RESULT'; offers: Offer[]; report: ProbeReport }
-  | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport };
+  | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport }
+  /**
+   * The vendor's form has mounted, so its window need not stay painted.
+   *
+   * Only paint-gated vendors ever cause a visible window (see
+   * `Vendor.needsPaintedWindow`), and this is what ends that. It settles
+   * nothing and carries no evidence — a forged one costs at most a window
+   * minimised early, which is the direction that is safe.
+   */
+  | { type: 'PROBE_HYDRATED' };
 
 export type BackgroundRequest = PopupRequest | ProbeRequest;
 

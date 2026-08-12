@@ -162,6 +162,11 @@ async function driveForm(
     deadline: start + assignment.timeoutMs * DRIVE_SHARE,
     now: () => Date.now(),
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    // Fire-and-forget: the window state is the background's business and there
+    // is nothing useful to do here if the message is lost. A dropped one costs
+    // a window that stays visible until the quote settles, which `finishQuote`
+    // cleans up anyway.
+    hydrated: () => void send({ type: 'PROBE_HYDRATED' }),
   };
   try {
     if (location.pathname === driver.startPath) await driver.drive(context);

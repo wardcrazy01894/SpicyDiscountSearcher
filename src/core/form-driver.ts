@@ -78,6 +78,23 @@ export interface DriveContext {
   deadline: number;
   now(): number;
   sleep(ms: number): Promise<void>;
+  /**
+   * Tell the background the vendor's form has mounted. Optional; may be absent.
+   *
+   * Exists for one measured reason. Enterprise lazy-mounts its booking widget
+   * behind something that needs a **painted frame** — an unpainted tab renders
+   * the page shell and never the form. Measured 2026-08-12: a hidden tab left
+   * alone for 153s had zero `<input>` elements, and one forced repaint produced
+   * all five and `#cid` immediately, with `visibilityState` still `hidden`
+   * throughout. So it is not visibility state and not timer throttling (polls
+   * were running at the documented ~1/s); it is whether Chrome drew the tab.
+   *
+   * A minimised window never paints, so the probe window is opened *visible*
+   * for such a vendor and minimised again the moment this fires. Calling it is
+   * how a driver says "you can put the window away now" — the window is on the
+   * user's screen until it does.
+   */
+  hydrated?(): void;
 }
 
 export interface FormDriver {

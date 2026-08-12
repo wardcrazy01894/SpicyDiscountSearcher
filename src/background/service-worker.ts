@@ -138,6 +138,16 @@ interface ActiveRun {
   windowId: number | null;
   /** In-flight window creation, so concurrent lanes share one window. */
   windowPromise: Promise<number> | null;
+  /**
+   * Quotes whose vendor needs a painted window and whose form has not mounted.
+   *
+   * The window is visible while this is non-empty and minimised the moment it
+   * empties. A set rather than a counter so a duplicate `PROBE_HYDRATED` — the
+   * probe re-runs on every document, and a forged one is possible — cannot
+   * decrement past zero and minimise the window out from under another quote
+   * that is still mounting.
+   */
+  awaitingPaint: Set<string>;
   cancelled: boolean;
   /** Resolvers waiting on a quote to finish, keyed by quote id. */
   waiters: Map<string, () => void>;
@@ -261,6 +271,12 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // Whatever happened, this quote is no longer mounting a form. Without it a
+  // quote that fails or times out before its driver ever reports hydration
+  // leaves the window visible for the rest of the run — which is the failure
+  // the user is most likely to see, since a paint-gated vendor that cannot
+  // mount is exactly the case this flag exists for.
+  void setAwaitingPaint(run, quoteId, false);
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
@@ -563,7 +579,14 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
   const pending = (run.windowPromise ??= (async () => {
     // Minimised keeps a dozen rental-car pages out of the user's face while
     // they load. Brave and Chrome both still render and run scripts in it.
-    const created = await chrome.windows.create({ state: 'minimized', focused: false });
+    //
+    // Except that a minimised window is never *painted*, and one vendor's form
+    // will not mount without a frame — so if a paint-gated quote is already
+    // waiting when the window is created, it starts visible. Never focused
+    // either way: appearing on screen is the cost being paid, stealing the
+    // user's keyboard is not.
+    const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+    const created = await chrome.windows.create({ state, focused: false });
     // windows.create can resolve undefined — @types/chrome 0.2 says so and the
     // older typings did not, so this was a live "cannot read id of undefined"
     // waiting for the one call that failed.
@@ -590,6 +613,48 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
     if (run.windowPromise === pending) run.windowPromise = null;
     throw error;
   }
+}
+
+/**
+ * Put the window into the state the run's paint-gated quotes require.
+ *
+ * Visible while any of them is still mounting, minimised otherwise. Called on
+ * every transition rather than only on the edges, because the alternative is
+ * tracking which edge we last took and the two drift: a quote that fails before
+ * `PROBE_HYDRATED` and one that hydrates normally must both end minimised.
+ *
+ * Failures are swallowed. The window may already be gone — the user can close
+ * it, and it is a real window they can see now — and a run whose politeness
+ * nicety could not be applied is not a run worth failing. It is never *closed*
+ * from here; only `closeWindow` does that.
+ */
+async function applyWindowState(run: ActiveRun): Promise<void> {
+  const windowId = run.windowId;
+  if (windowId === null) return;
+  const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+  try {
+    await chrome.windows.update(windowId, { state, focused: false });
+  } catch {
+    // Nothing to do and nothing worth logging: `warn` is for failures that
+    // belong to no quote and cost the user something, and this costs a window
+    // left in the wrong state on a run that is otherwise fine.
+  }
+}
+
+/**
+ * Note that a quote needs the window painted, or no longer does.
+ *
+ * `finishQuote` calls this too, with `false`, and that is the half that makes it
+ * safe: a quote that fails or times out before its driver ever reports
+ * hydration would otherwise hold the window on the user's screen for the rest
+ * of the run.
+ */
+async function setAwaitingPaint(run: ActiveRun, quoteId: string, awaiting: boolean): Promise<void> {
+  const had = run.awaitingPaint.has(quoteId);
+  if (awaiting === had) return;
+  if (awaiting) run.awaitingPaint.add(quoteId);
+  else run.awaitingPaint.delete(quoteId);
+  await applyWindowState(run);
 }
 
 /** Close the run's window, if it still has one, and forget it. */
@@ -658,6 +723,13 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
 
   let tabId: number | undefined;
   try {
+    // Registered *before* the window exists, so `ensureWindow` can create it
+    // visible rather than creating it minimised and raising it a moment later —
+    // the tab starts loading immediately, and a form that has already decided
+    // not to mount is not persuaded by a later repaint.
+    if (findVendor(quote.candidate.vendor)?.needsPaintedWindow) {
+      await setAwaitingPaint(run, quote.id, true);
+    }
     const windowId = await ensureWindow(run);
     // Cancel can land while the window is still opening. Without this the run
     // goes on to load vendor pages *after* the user pressed Cancel, which is
@@ -953,6 +1025,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     state,
     tabs: new Map(),
     retiredTabs: new Map(),
+    awaitingPaint: new Set(),
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
@@ -1156,6 +1229,19 @@ chrome.runtime.onMessage.addListener(
         }
         case 'GET_STATE': {
           sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
+          return;
+        }
+        case 'PROBE_HYDRATED': {
+          // Only ever un-sets, and only for the quote that owns the sending
+          // tab. So the worst a forged one can do is minimise the window early,
+          // which costs at most the sender's own quote — a page cannot use it
+          // to keep the window on the user's screen, and cannot reach another
+          // quote's. `retiredTabs` is deliberately not consulted: a tab past
+          // its deadline has already been settled, and its entry cleared.
+          const tabId = sender.tab?.id;
+          const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
+          if (active && quoteId !== undefined) await setAwaitingPaint(active, quoteId, false);
+          sendResponse({ ok: true });
           return;
         }
         case 'PROBE_READY': {

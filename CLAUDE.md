@@ -450,6 +450,29 @@ window and close as soon as they answer, and the content script stays inert
 unless the background assigns it a quote. Keep it that way — this opens real
 tabs on real vendor sites.
 
+**One vendor is an exception, and it is a measured one rather than a
+convenience.** A minimised window is never _painted_, and Enterprise's booking
+form does not mount in a tab Chrome has not drawn — measured 2026-08-12, a
+hidden tab left for 153s had **zero `<input>` elements** while the page shell
+rendered normally, and one forced repaint produced all five and `#cid`
+immediately. It is not `visibilityState` (still `hidden` throughout) and not
+timer throttling (polls ran at the documented ~1/s); it is the standard
+"hydrate when scrolled into view" pattern, and no content-script API can force
+a frame in a window Chrome is not drawing. Without this the driver never
+reaches step one, which is what "Enterprise doesn't do anything in the
+background" was.
+
+So `Vendor.needsPaintedWindow` opens the run's window **visible — never
+focused** when such a quote is in flight, and `DriveContext.hydrated` reports
+the mount so the background minimises it again. `finishQuote` releases the hold
+too, or a quote that dies before mounting would leave the window on screen for
+the rest of the run. `maxLanes: 1` bounds the cost to one hydration at a time.
+
+The flag is the only thing in this extension that puts a window on the user's
+screen. Set it only where it buys a vendor that otherwise cannot run at all,
+never to make a slow one faster, and expect to justify it with the same kind of
+measurement. Everything else still opens minimised, and a test pins that.
+
 The 750 ms stagger is **between a lane's consecutive quotes**, not between
 concurrent tab opens: at run start every lane opens a tab at once. All four of
 these are pinned by tests in `tests/service-worker.test.ts` that fail if the
