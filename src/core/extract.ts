@@ -148,8 +148,48 @@ export interface VendorSelectors {
  * fallback keeps working in the meantime.
  */
 export const VENDOR_SELECTORS: Partial<Record<VendorId, VendorSelectors>> = {
-  hertz: { container: '[data-testid="vehicle-list"], .vehicle-list, main' },
-  avis: { container: '[data-testid="vehicle-results"], .car-results, main' },
+  /**
+   * Measured against the live results page on 2026-08-11, like National's.
+   *
+   * Neither narrow selector existed: `[data-testid="vehicle-list"]` and
+   * `.vehicle-list` match nothing on Hertz, so this entry has always been `main`
+   * wearing a testid's clothes. They are gone rather than demoted, because a
+   * selector that matches nothing is not a preference — it is a claim about the
+   * page that is false.
+   *
+   * `main` is the right scope here and is now known to be, rather than assumed:
+   * 4.3k of a 50.3k-character body, holding 70 of the page's 71 price nodes. The
+   * one it excludes is the marketing line "Like-new cars for under $20,000",
+   * which is exactly the sort of number a body-wide sweep would have ranked.
+   *
+   * Nothing narrower is available. Hertz styles with emotion, so the cards carry
+   * generated `emotion-cache-*` class names and per-card numeric ids (`#1_5`),
+   * and no element inside `main` with an id, role, `data-*` or `aria-label`
+   * holds more than four prices. A container is only worth writing when there is
+   * a stable handle to write; inventing one is how this entry got here.
+   */
+  hertz: { container: 'main' },
+  /**
+   * Measured the same day, with the same result: `[data-testid="vehicle-results"]`
+   * and `.car-results` match nothing, and `main` is a good scope — 4.7k
+   * characters holding all 50 vehicle prices, and every one of its cheapest
+   * numbers is a genuine rate ("$53.54 /day", "$160.62 Vehicle total rate").
+   *
+   * Scoping matters more here than the ratio makes it look. Avis is a Next.js
+   * app, so `document.body.textContent` runs to 464k characters — almost all of
+   * it inline RSC flight payload, which is dense with `$` sigils. That is the
+   * fallback `extract` reaches for when no container matches, and it is why the
+   * narrow-selector fiction was worth removing rather than leaving in place: a
+   * redesign that breaks `main` should be visibly a redesign, not a quiet
+   * demotion into 464k of script text.
+   *
+   * `[data-testid="aem-container"]` does match, and is tighter (3.3k, same 50
+   * prices). Deliberately not used: it is Adobe Experience Manager's generic
+   * wrapper rather than anything to do with vehicles, so it is liable to match a
+   * marketing box on some other page and scope the sweep to it. 1.4k of correct
+   * chrome beats a tighter container that can silently point somewhere else.
+   */
+  avis: { container: 'main' },
   budget: { container: '[data-testid="vehicle-results"], .car-results, main' },
   enterprise: { container: '.car-class-list, [data-testid="vehicle-list"], main' },
   /**
@@ -291,6 +331,111 @@ function isFeeLine(own: string): boolean {
 }
 
 /**
+ * The label a results page puts on a price *filter*, rather than on an offer.
+ *
+ * Anchored, exactly as `FEE_LEAD_RE` is, and for a reason that was demonstrated
+ * rather than reasoned about: unanchored, this matched the phrase anywhere in
+ * the text and suppressed real rates. `AAA Member Rate range $109` and
+ * `Weekend rate range $129` carry the words in the middle of a line that is
+ * quoting a price, and both came back as zero offers — a vendor dropped out of
+ * the race, which is strictly worse than the filter bound this guard was written
+ * to exclude. Neither carries a basis word for the rule below to save them with.
+ *
+ * A filter's label leads. An offer's does not. `Prices range $99-$180 for your
+ * dates` does lead with it and stays suppressed, which is the rule rather than
+ * an exception — though that string was invented for the test and never seen on
+ * a live page, so it is the heuristic applied to a plausible shape rather than a
+ * measurement like Hertz's `$42`.
+ *
+ * Anchoring alone left a hole too big to write off, though, and the arithmetic
+ * is worth spelling out because the first attempt to write it off got it wrong.
+ * A filter with a prefix and everything in one leaf — `Filter by price
+ * range $42-$90` — is not at position 0, and unlike Hertz's real markup there is
+ * no separate ancestor leading with the bare phrase for the inheritance walk to
+ * catch. On a page carrying **no** total-basis offer the escaped `$42` does not
+ * merely join the ranking, it *wins* it: `BASIS_PREFERENCE` is
+ * `['total', 'unknown', 'per-day']`, so `unknown` outranks every genuine daily
+ * rate on the page and nothing requires a `total` to exist. Hotel results, which
+ * this codebase has thought about least, are exactly where per-day-only pages
+ * live.
+ */
+const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?\b/i;
+
+/**
+ * The same phrase, unanchored, for the mid-string case.
+ *
+ * Paired with a count of prices rather than used alone, which is the whole
+ * difference between this and the version that suppressed real rates.
+ * `isFeeLine` has the identical companion in `priceSites` — `FEE_LEAD_RE.test(own)
+ * && prices.length > 1` — and for the identical reason: a label mid-line is
+ * ambiguous, and quoting *two* prices is what makes it a span rather than a rate.
+ *
+ * `AAA Member Rate range $109` and `Weekend rate range $129` quote one price
+ * each and survive. `Filter by price range $42-$90` quotes two ends of a range
+ * and does not.
+ */
+const RANGE_ANYWHERE_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?\b/i;
+
+/**
+ * The same, global, for stripping rather than testing.
+ *
+ * Separate constant because a `g` regex carries `lastIndex` across `.test()`
+ * calls and would make the predicate above answer differently on alternate
+ * invocations — a bug this file has no interest in rediscovering.
+ */
+const RANGE_ANYWHERE_ALL_RE = new RegExp(RANGE_ANYWHERE_RE.source, 'gi');
+
+/**
+ * Is this element a price *filter* rather than a price?
+ *
+ * Hertz's results page renders `Price range$42-$90` above the cards, and both
+ * numbers read as perfectly good prices. The lower bound is the trap: it is
+ * derived from the results, so it is at or below every real rate on the page —
+ * $42 against a cheapest genuine rate of $54/day when this was measured.
+ *
+ * On Hertz's own page it does not win, because that page also prints "$226 est.
+ * total" per card and `total` outranks `unknown`. That is one wording on one
+ * vendor's card, and it is the *only* thing standing in the way: on a page with
+ * no total-basis offer anywhere, `unknown` is next in `BASIS_PREFERENCE` and the
+ * filter bound becomes the headline price outright, beating every real rate.
+ *
+ * Two ways in, matching `isFeeLine`'s two:
+ *
+ * 1. **The phrase leads.** Then ask what is left, so a card's own copy survives
+ *    — "Savings Rate range $89/day" still says what its number means, which
+ *    makes the range words a modifier rather than the subject.
+ * 2. **The phrase appears mid-line and the text quotes more than one price.**
+ *    `Filter by price range $42-$90` is a span between two ends; `AAA Member
+ *    Rate range $109` is a rate with an awkward label.
+ *
+ * The count is a proxy, not a discriminator, and the docstring said otherwise
+ * for one round. A genuine two-tier line reusing the label — `Weekend rate range
+ * $129 $99`, a was-price beside a live one, or member beside non-member — quotes
+ * two prices and is suppressed, losing the real $99. `isFeeLine`'s identical
+ * `prices.length > 1` companion carries exactly this cost, and CLAUDE.md already
+ * takes that trade deliberately: it fails toward an empty offer list rather than
+ * a wrong headline price, which is the direction this file chooses every time.
+ * Worth knowing that here the loss is a whole *card*, not one number on it.
+ *
+ * What saves the was/now case when it is saved at all is `STRUCK_SELECTOR`, and
+ * that is semantic-only — `s`, `del`, `strike`. A was-price struck through in
+ * CSS alone, which is common, is invisible to it and takes the card with it.
+ *
+ * Suppression propagates to descendants through the existing walk, which is what
+ * catches Hertz's actual markup — `<div>Price range<span>$42-$90</span></div>`,
+ * where the leaf carrying the amount says nothing about itself at all.
+ */
+function isRangeLine(own: string, priceCount: number): boolean {
+  const leads = RANGE_LEAD_RE.test(own);
+  if (!leads && !(priceCount > 1 && RANGE_ANYWHERE_RE.test(own))) return false;
+  // Global, so a line repeating the phrase is fully stripped before the basis
+  // question. Inert today — neither PER_UNIT_RE nor TOTAL_RE matches any word
+  // inside the phrase — but correctness by construction rather than by
+  // coincidence, since either pattern could grow.
+  return classifyBasis(own.replace(RANGE_ANYWHERE_ALL_RE, ' ')) === 'unknown';
+}
+
+/**
  * Does this text describe two different kinds of number at once?
  *
  * "$29 per day, estimated total $210 for 3 days" cannot classify either one, so
@@ -411,7 +556,7 @@ interface PriceSite {
    * right — picked it up as if it were a rate. Excluding a number means making
    * sure nobody else takes it.
    */
-  suppressed: 'fee-line' | 'mixed-basis' | null;
+  suppressed: 'fee-line' | 'range-line' | 'mixed-basis' | null;
 }
 
 /**
@@ -510,9 +655,11 @@ function priceSites(root: Element): PriceSite[] {
     const suppressed =
       isFeeLine(own) || (FEE_LEAD_RE.test(own) && prices.length > 1)
         ? 'fee-line'
-        : prices.length > 1 && mixesBases(own)
-          ? 'mixed-basis'
-          : null;
+        : isRangeLine(own, prices.length)
+          ? 'range-line'
+          : prices.length > 1 && mixesBases(own)
+            ? 'mixed-basis'
+            : null;
     sites.push({ element, own, prices, suppressed });
   }
 
@@ -527,14 +674,28 @@ function priceSites(root: Element): PriceSite[] {
   // thousand hotel cards — every one of which has a fee line — that measured
   // ten times slower than the linear form. This runs on the vendor's main
   // thread, so it is their page that pays. Same shape as claimedByDescendants.
-  const feeElements = new Set(
-    sites.filter((s) => s.suppressed === 'fee-line').map((s) => s.element),
-  );
+  //
+  // `range-line` inherits for the same reason and needs it more, because the
+  // words and the number are *always* in different elements: Hertz renders
+  // `Price range<span>$42-$90</span>`, so the element that says "range" holds no
+  // bare amount of its own and the leaves that hold the amounts say nothing.
+  // Without the walk the guard would suppress only the label.
+  //
+  // `mixed-basis` is deliberately not in here. A wrapper reading "$54/day $226
+  // est. total" is suppressed precisely because its *children* are the two real
+  // prices; propagating to them would throw away the offers.
+  const inherited = new Map<Element, 'fee-line' | 'range-line'>();
+  for (const site of sites) {
+    if (site.suppressed === 'fee-line' || site.suppressed === 'range-line') {
+      inherited.set(site.element, site.suppressed);
+    }
+  }
   for (const site of sites) {
     if (site.suppressed) continue;
     for (let node = site.element.parentElement; node; node = node.parentElement) {
-      if (feeElements.has(node)) {
-        site.suppressed = 'fee-line';
+      const reason = inherited.get(node);
+      if (reason) {
+        site.suppressed = reason;
         break;
       }
     }
