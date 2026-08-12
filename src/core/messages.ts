@@ -20,14 +20,14 @@ export type ProbeRequest =
   | { type: 'PROBE_RESULT'; offers: Offer[]; report: ProbeReport }
   | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport }
   /**
-   * The vendor's form has mounted, so its window need not stay painted.
+   * This page no longer needs painting, so its window and tab can go back.
    *
    * Only paint-gated vendors ever cause a visible window (see
    * `Vendor.needsPaintedWindow`), and this is what ends that. It settles
    * nothing and carries no evidence — a forged one costs at most a window
    * minimised early, which is the direction that is safe.
    */
-  | { type: 'PROBE_HYDRATED' };
+  | { type: 'PROBE_PAINT_DONE' };
 
 export type BackgroundRequest = PopupRequest | ProbeRequest;
 

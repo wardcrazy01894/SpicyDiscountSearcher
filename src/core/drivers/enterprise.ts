@@ -912,12 +912,6 @@ export const enterpriseDriver: FormDriver = {
   verifyResults,
   async drive(ctx) {
     await awaitHydration(ctx);
-    // The form exists, so the window no longer has to be painted for this quote
-    // and the background can put it away. Reported here rather than after the
-    // whole drive: everything below this line works fine in an unpainted tab —
-    // it is only the *mount* that needs a frame — so holding the window on the
-    // user's screen for the rest of the fill would be a cost with no benefit.
-    ctx.hydrated?.();
     await fillLocation(ctx);
     // The itinerary before the code, and both before the submit: there is no
     // point typing a discount code into a form that is about to be submitted
@@ -928,5 +922,12 @@ export const enterpriseDriver: FormDriver = {
     await applyTimes(ctx);
     await fillAccountNumber(ctx);
     await submitSearch(ctx);
+    // Only now, and deliberately not straight after `awaitHydration`. What was
+    // measured is that the *mount* needs a painted tab; the autocomplete menu
+    // and the calendar are lazily-rendered popups on the same page and may want
+    // one too. Releasing at the mount would move the identical symptom one step
+    // later, and finding that out costs a live run. Held until the search is
+    // submitted, which is the last thing that touches the form.
+    ctx.releasePaint?.();
   },
 };

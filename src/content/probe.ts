@@ -164,9 +164,9 @@ async function driveForm(
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     // Fire-and-forget: the window state is the background's business and there
     // is nothing useful to do here if the message is lost. A dropped one costs
-    // a window that stays visible until the quote settles, which `finishQuote`
-    // cleans up anyway.
-    hydrated: () => void send({ type: 'PROBE_HYDRATED' }),
+    // a visible window until the quote settles, which `finishQuote` cleans up
+    // anyway.
+    releasePaint: () => void send({ type: 'PROBE_PAINT_DONE' }),
   };
   try {
     if (location.pathname === driver.startPath) await driver.drive(context);

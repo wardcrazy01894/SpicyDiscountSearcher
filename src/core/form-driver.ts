@@ -79,7 +79,7 @@ export interface DriveContext {
   now(): number;
   sleep(ms: number): Promise<void>;
   /**
-   * Tell the background the vendor's form has mounted. Optional; may be absent.
+   * Tell the background this page no longer needs to be painted. Optional.
    *
    * Exists for one measured reason. Enterprise lazy-mounts its booking widget
    * behind something that needs a **painted frame** — an unpainted tab renders
@@ -89,12 +89,20 @@ export interface DriveContext {
    * throughout. So it is not visibility state and not timer throttling (polls
    * were running at the documented ~1/s); it is whether Chrome drew the tab.
    *
-   * A minimised window never paints, so the probe window is opened *visible*
-   * for such a vendor and minimised again the moment this fires. Calling it is
-   * how a driver says "you can put the window away now" — the window is on the
-   * user's screen until it does.
+   * A window that is minimised is never painted, and — measured the same day,
+   * in a window known to be painted — neither is a tab that is not the selected
+   * one. So for such a vendor the run's window is opened visible and the probe
+   * tab is *selected*, both reverted the moment this fires. The vendor's page is
+   * on the user's screen until it does.
+   *
+   * **Call it when the driver is finished, not when the form mounts.** Only the
+   * mount was measured; a lazily-rendered popup — an autocomplete menu, a
+   * calendar — could be paint-gated too, and releasing early would move the
+   * same failure one step later and cost another round of live testing to find.
+   * Tightening this to the mount is a real saving in visible-window time and
+   * wants its own measurement first.
    */
-  hydrated?(): void;
+  releasePaint?(): void;
 }
 
 export interface FormDriver {

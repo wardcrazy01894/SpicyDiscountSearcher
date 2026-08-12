@@ -142,7 +142,7 @@ interface ActiveRun {
    * Quotes whose vendor needs a painted window and whose form has not mounted.
    *
    * The window is visible while this is non-empty and minimised the moment it
-   * empties. A set rather than a counter so a duplicate `PROBE_HYDRATED` — the
+   * empties. A set rather than a counter so a duplicate `PROBE_PAINT_DONE` — the
    * probe re-runs on every document, and a forged one is possible — cannot
    * decrement past zero and minimise the window out from under another quote
    * that is still mounting.
@@ -621,7 +621,7 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
  * Visible while any of them is still mounting, minimised otherwise. Called on
  * every transition rather than only on the edges, because the alternative is
  * tracking which edge we last took and the two drift: a quote that fails before
- * `PROBE_HYDRATED` and one that hydrates normally must both end minimised.
+ * `PROBE_PAINT_DONE` and one that hydrates normally must both end minimised.
  *
  * Failures are swallowed. The window may already be gone — the user can close
  * it, and it is a real window they can see now — and a run whose politeness
@@ -744,7 +744,19 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
     // goes on to load vendor pages *after* the user pressed Cancel, which is
     // exactly the hijacking the minimised window exists to avoid.
     if (run.cancelled || quote.finishedAt) return;
-    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: false });
+    // `active` is false for every vendor but the paint-gated one, and that
+    // exception is measured rather than defensive. A *window* being visible is
+    // not enough: a non-selected tab is `visibilityState: hidden` and Chrome
+    // draws no frames for it, so Enterprise's form does not mount in one.
+    // Measured 2026-08-12 in a window known to be painted (its sibling tab was
+    // rendering): 75s as a background tab gave zero `<input>` elements;
+    // selecting that same tab gave all five and `#cid` immediately.
+    //
+    // Selecting a tab inside our own unfocused window does not take the user's
+    // keyboard or raise the window over their work — `focused: false` is
+    // preserved everywhere — but it does mean the vendor's page is on screen
+    // until the driver releases the hold.
+    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: needsPaint });
     tabId = tab.id;
     if (tabId === undefined) throw new Error('tab did not open');
     run.tabs.set(tabId, quote.id);
@@ -1240,7 +1252,7 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
-        case 'PROBE_HYDRATED': {
+        case 'PROBE_PAINT_DONE': {
           // Only ever un-sets, and only for the quote that owns the sending
           // tab. So the worst a forged one can do is minimise the window early,
           // which costs at most the sender's own quote — a page cannot use it

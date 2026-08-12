@@ -462,22 +462,47 @@ a frame in a window Chrome is not drawing. Without this the driver never
 reaches step one, which is what "Enterprise doesn't do anything in the
 background" was.
 
-So `Vendor.needsPaintedWindow` opens the run's window **visible — never
-focused** when such a quote is in flight, and `DriveContext.hydrated` reports
-the mount so the background minimises it again. `finishQuote` releases the hold
-too, or a quote that dies before mounting would leave the window on screen for
-the rest of the run. `maxLanes: 1` bounds the cost to one hydration at a time.
+**A visible window is not sufficient, and that cost a build.** The first fix
+raised the window and left the probe tab `active: false` — but a non-selected
+tab is `visibilityState: hidden` and Chrome draws no frames for it either.
+Measured the same day in a window _known_ to be painted (its sibling tab was
+rendering): Enterprise as a background tab had zero inputs after 75s, and
+selecting that same tab mounted the form immediately.
+
+So `Vendor.needsPaintedWindow` opens the run's window **visible** _and_ creates
+that vendor's probe tab **selected**. Never `focused` — that is not relaxed for
+anyone, so the user's keyboard is never taken and the window does not come up
+over their work; but the vendor's page is on screen. `DriveContext.releasePaint`
+puts both back, and `finishQuote` releases the hold too, or a quote that dies
+before mounting would leave the window up for the rest of the run.
+
+`releasePaint` fires **after the submit, not at the mount**, and that is
+deliberate caution rather than measurement: only the mount was shown to need a
+frame, and the autocomplete menu and calendar are lazily-rendered popups that
+may need one too. Releasing early would move the identical failure one step
+later and cost another live run to find. Tightening it is a real saving and
+wants its own measurement first.
+
+`maxLanes: 1` bounds this to one Enterprise tab at a time, but **not** to one
+short flash: the hold is taken per quote, so a race over the 19 shared
+Enterprise codes raises and lowers the window 19 times, each held from tab-open
+until the search is submitted. For an Enterprise-heavy race the window is on
+screen for most of the run.
 
 The flag is the only thing in this extension that puts a window on the user's
 screen. Set it only where it buys a vendor that otherwise cannot run at all,
 never to make a slow one faster, and expect to justify it with the same kind of
-measurement. Everything else still opens minimised, and a test pins that.
+measurement. Everything else still opens minimised with inactive tabs, and
+tests pin both.
 
 The 750 ms stagger is **between a lane's consecutive quotes**, not between
 concurrent tab opens: at run start every lane opens a tab at once. All four of
 these are pinned by tests in `tests/service-worker.test.ts` that fail if the
 window becomes visible, the tabs become active, the stagger goes to zero, or the
-cap is lifted — they were unpinned until someone checked.
+cap is lifted — they were unpinned until someone checked. The first two now read
+"for a vendor that does not need painting", which is every vendor but
+Enterprise; the window is never _focused_ for anyone, so the user's keyboard is
+never taken.
 
 `START_RUN` is deliberately not retried on a failed `sendMessage`: a rejection
 doesn't prove non-delivery, and a retry starts a second race that opens real

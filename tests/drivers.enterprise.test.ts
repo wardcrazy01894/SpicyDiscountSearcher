@@ -1028,6 +1028,35 @@ describe('drive', () => {
     expect(timeOf('Return')).toBe('5:00 PM');
   });
 
+  it('holds the painted window until the search is submitted', async () => {
+    // Only the *mount* was measured as needing a painted tab. The autocomplete
+    // menu and the calendar are lazily-rendered popups on the same page and may
+    // need one too, so releasing at hydration would move the identical failure
+    // one step later — and finding that out costs a live run. Pinned by
+    // ordering rather than by a flag, since "after the mount" and "after the
+    // submit" both look like a single call site.
+    let releasedAt: string | null = null;
+    renderForm({ onSubmit: 'results' });
+    await enterpriseDriver.drive(
+      makeContext({
+        releasePaint: () => {
+          releasedAt = window.location.hash;
+        },
+      }),
+    );
+    expect(releasedAt).toBe('#car_select');
+  });
+
+  it('does not release the painted window when the drive fails', async () => {
+    // A quote that dies mid-fill must not report that it is finished with the
+    // window on its own account — `finishQuote` is what releases it then, so
+    // the two paths cannot both claim it and disagree.
+    let released = false;
+    renderForm({ onSubmit: 'results', disabledDates: ['09/04/2026'] });
+    await failureOf(enterpriseDriver.drive(makeContext({ releasePaint: () => (released = true) })));
+    expect(released).toBe(false);
+  });
+
   it('never submits a form whose trip it could not express', async () => {
     // The invariant the old test was really protecting, kept now that the dates
     // succeed: whatever fails, the search must not be sent. Ordering the

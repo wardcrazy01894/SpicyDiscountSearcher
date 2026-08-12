@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spicy Discount Searcher",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Race corporate discount codes against each other to find the cheapest rental car or hotel rate.",
   "minimum_chrome_version": "116",
   "permissions": ["storage"],

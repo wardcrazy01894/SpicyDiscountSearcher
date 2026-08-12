@@ -582,6 +582,11 @@ describe('politeness', () => {
   });
 
   it('never steals focus with a probe tab', async () => {
+    // Still `active: false` for every vendor that does not need painting, which
+    // is all of them but Enterprise — see the paint-gated test above for the
+    // exception and why it is narrow. Note this is tab *selection* within our
+    // own window; `focused: false` on the window is never relaxed for anyone,
+    // so the user's keyboard stays where it was either way.
     await bootWorker();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
     await settle();
@@ -633,6 +638,20 @@ describe('politeness', () => {
     expect(chromeMock.windowUpdates.filter((u) => u.state === 'normal')).toHaveLength(0);
   });
 
+  it('selects the tab for a paint-gated vendor, and only for that one', async () => {
+    // A visible *window* is not enough and this is the measurement that cost a
+    // build: in a window known to be painted, Enterprise as a background tab had
+    // zero inputs after 75s, and selecting that same tab mounted the form
+    // immediately. A non-selected tab is `visibilityState: hidden` and Chrome
+    // draws no frames for it.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    expect(chromeMock.tabOptions).toHaveLength(1);
+    expect(chromeMock.tabOptions[0]!.options.active).toBe(true);
+  });
+
   it('opens visible — never focused — for a vendor whose form needs painting', async () => {
     // Enterprise's booking widget does not mount in a tab Chrome never paints,
     // and a minimised window is never painted. Measured 2026-08-12: 153s hidden
@@ -653,7 +672,7 @@ describe('politeness', () => {
     await settle();
     const tabId = [...chromeMock.tabs.keys()][0]!;
 
-    await chromeMock.fromTab(tabId, { type: 'PROBE_HYDRATED' });
+    await chromeMock.fromTab(tabId, { type: 'PROBE_PAINT_DONE' });
     await settle();
 
     const minimised = chromeMock.windowUpdates.filter((u) => u.state === 'minimized');
