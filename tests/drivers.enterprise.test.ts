@@ -79,6 +79,16 @@ interface FormOptions {
   timeRevertsAsync?: boolean;
   /** Model a return click that also moves the pick-up, as a range picker can. */
   returnClickMovesPickup?: boolean;
+  /**
+   * Model the widget remounting `#cid` while we are verifying it.
+   *
+   * Deliberately a node *replacement* rather than an in-place clear, which is
+   * what `cidRejectsValue` does. The two fail differently: a cleared field is
+   * caught by any read-back, while a replaced one leaves the detached node
+   * holding the value, so a check closed over the original reference sees the
+   * code it wrote and reports success on a form that holds nothing.
+   */
+  cidRemountsAsync?: boolean;
 }
 
 const MONTH_NAMES = [
@@ -317,6 +327,21 @@ function renderForm(options: FormOptions = {}): void {
     const cid = form.querySelector<HTMLInputElement>('#cid')!;
     cid.addEventListener('input', () => {
       cid.value = '';
+    });
+  }
+
+  if (options.cidRemountsAsync) {
+    const cid = form.querySelector<HTMLInputElement>('#cid')!;
+    cid.addEventListener('input', () => {
+      void Promise.resolve().then(() => {
+        // A fresh, empty field in the same place — the ordinary result of a
+        // React section re-render. The old node keeps the value we wrote.
+        const fresh = document.createElement('input');
+        fresh.type = 'text';
+        fresh.id = 'cid';
+        cid.removeAttribute('id');
+        cid.replaceWith(fresh);
+      });
     });
   }
 
@@ -579,6 +604,24 @@ describe('applyDates', () => {
     const error = await failureOf(applyDates(makeContext({ trip })));
     expect(error.failure).toBe('form-fill');
     expect(error.message).toMatch(/will not page previous/);
+  });
+});
+
+describe('fillAccountNumber', () => {
+  it('catches a field that is remounted while we verify it', async () => {
+    // The highest-stakes field on the form, and the subtlest way to get it
+    // wrong. Reading back through the reference we wrote to verifies a node
+    // that may already be detached: it still holds the code while the live
+    // field is empty. The driver reports success, the form submits with no
+    // account number, and Enterprise answers with the *retail* rate — reported
+    // to the user as their company's discounted price.
+    //
+    // This is why the read-back re-queries `#cid` every poll rather than
+    // closing over it. Closing over it passes this test's fixture happily.
+    renderForm({ cidRemountsAsync: true });
+    const error = await failureOf(fillAccountNumber(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/account number field to keep the code/);
   });
 });
 

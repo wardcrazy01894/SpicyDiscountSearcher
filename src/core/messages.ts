@@ -34,9 +34,10 @@ export type ProbeAssignment =
        *
        * Needed by the vendors whose URL cannot express a search: Budget,
        * Enterprise and National, whose sites ignore the query string entirely.
-       * Their builders now refuse to produce a URL at all and they are
-       * `searchable: false`, so nothing routes a run to them — the fields exist
-       * for the driver that will.
+       * National and Enterprise are driven and `searchable: true`, so these
+       * fields carry real runs. Budget's builder still refuses to produce a URL
+       * and it is `searchable: false`, so nothing routes a run to it — the
+       * fields wait for the driver that will.
        *
        * Not a new exposure. `buildDeepLink` already puts the code and every
        * trip field into `location.search` for every vendor it does build for,

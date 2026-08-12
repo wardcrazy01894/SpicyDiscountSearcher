@@ -559,10 +559,22 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
   // `waitFor` reads before its first sleep, so it saw the value `setNativeValue`
   // had just written and returned on the same tick — exactly the "tests our
   // assignment rather than the page's acceptance" it warns against.
+  // **Re-queried every poll, not closed over.** Reading `cid` back through the
+  // captured reference verifies a node that may no longer be in the document:
+  // this runs straight after `applyDates` and `applyTimes` have dispatched four
+  // events into a React form, which is exactly when a section re-render is
+  // likely, and a remounted `#cid` leaves the detached node still holding the
+  // code while the live field is empty. The driver then reports success, the
+  // form submits with no account number, Enterprise answers with the *retail*
+  // rate, `#car_select` appears, and the popup prints that as the company's
+  // discounted price with a "form filled" badge beside it.
+  //
+  // `applyTimes` re-queries for this reason; this is the same fix, at the field
+  // where getting it wrong is most expensive.
   await waitForSettled(
     ctx,
     'the account number field to keep the code',
-    () => cid.value === ctx.code,
+    () => ctx.doc.querySelector<HTMLInputElement>('#cid')?.value === ctx.code,
   );
 }
 
@@ -575,14 +587,10 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
  *   this code is unusable at Enterprise however the driver behaves
  * - neither, before the deadline — the search never ran
  *
- * Not implemented here, and worth writing down because it is the most valuable
- * check available at this vendor: the results page names the account holder
- * (`I B M CORP (USA)` for IBM's code), so it can prove the discount applied
- * rather than being silently dropped. It needs a comparison between the
- * workbook's company name and the vendor's rendering of it, and those differ
- * enough — spacing, `CORP`, `(USA)` — that a naive match would fail good quotes
- * for most companies. Worth doing properly, as a peer of `verify-trip.ts`, once
- * there are enough real examples to know what the rendering looks like.
+ * The account-holder check is still absent, and the reason is at the top of
+ * this file rather than repeated here — it is *not* the workbook-name
+ * comparison this comment used to describe, which `national.ts` shows is
+ * unnecessary. The obstacle is that the label's markup was never captured.
  */
 export async function submitSearch(ctx: DriveContext): Promise<void> {
   const button = [...ctx.doc.querySelectorAll<HTMLElement>('button, input[type="submit"]')].find(
@@ -619,8 +627,10 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
  * the form again is a second search per quote.
  *
  * No account check here. Enterprise's results page names the account holder too
- * (`I B M CORP (USA)` for IBM's code), which is the check worth adding when
- * this driver becomes reachable — see the note in `submitSearch`.
+ * (`I B M CORP (USA)` for IBM's code), and it is the one gap in this driver's
+ * verification now that it *is* reachable — a code Enterprise silently ignores
+ * gives a real results page at the retail rate and nothing here notices. The
+ * file header says what would be needed to close it.
  */
 export async function verifyResults(ctx: DriveContext): Promise<void> {
   await waitFor(

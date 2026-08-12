@@ -46,9 +46,14 @@ export interface Vendor {
    * to accommodate Enterprise would be paying for one vendor's problem
    * everywhere.
    *
-   * `KEEPALIVE_CEILING_MS` is derived from the largest of these rather than
-   * from the default, since its job is to exceed the longest legitimate gap
-   * between two quotes settling.
+   * `KEEPALIVE_CEILING_MS` is **not** derived from these — it stays on the
+   * default, and that was checked rather than assumed. Its job is to exceed the
+   * longest legitimate gap between two quotes settling, and `13 x (45s + 750ms)`
+   * is 9.9 minutes against a 120s quote: five times over. Deriving it from the
+   * largest instead pushed it to 26 minutes, which is how long a *wedged* run
+   * would pin the worker with a minimised window open. See the constant's own
+   * comment; there is room for a vendor budget of about eight minutes before
+   * this stops being true.
    */
   probeTimeoutMs?: number;
   /**

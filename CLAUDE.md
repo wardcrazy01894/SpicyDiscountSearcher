@@ -473,9 +473,11 @@ existed, since a code admitted early can only ever arrive forged.
 
 They exist for the vendors whose sites ignore the query string entirely:
 Enterprise's results page is a bare `#car_select`, Budget's a bare `#/vehicles`.
-Those two still refuse to build a URL and are `searchable: false`, so nothing
-routes a run to them; their codes stay in the database waiting for a driver that
-can run. `code-rejected` is the vendor's verdict on the code rather than a fault in the
+**Budget** still refuses to build a URL and is `searchable: false`, so nothing
+routes a run to it; its codes stay in the database waiting for a driver that
+can run. Enterprise's URL is just as empty, but it no longer needs to carry
+anything — its form is driven, so it is `searchable: true` and emits all three
+of these codes for real. `code-rejected` is the vendor's verdict on the code rather than a fault in the
 run, and it is **the only failure this extension remembers**. A refused code is
 recorded in `chrome.storage.local` by `core/rejected-codes.ts` and skipped by
 every later plan, because racing it costs a real tab and can only fail again.
@@ -564,14 +566,23 @@ that wrong — it confirmed the branch name was on the page, which the suggestio
 menu guarantees whether or not the click did anything, so it now requires the
 name somewhere the menu is _not_. A test pins that distinction.
 
-**And it is deliberately unreachable.** `FORM_DRIVERS` is empty, Enterprise is
-still `searchable: false`, and `enterpriseDriver.drive` always fails — because
-the date control was never exercised. Both live runs used the form's default
-dates, and the control is custom rather than a `select`, so nothing says the
-trip's dates can be set, let alone verified after setting. `applyDates` therefore
-refuses outright, and is ordered _before_ the code fill and the submit so a form
-that cannot express the trip is never sent. A test asserts that failure; when
-the control is measured and driven, that test is replaced rather than deleted.
+**It was deliberately unreachable for months, and is not any more.**
+`applyDates` refused outright because the date control had never been exercised:
+both live runs used the form's default dates, so nothing said the trip's dates
+could be set, let alone verified after setting. That refusal was deleted on
+2026-08-12 by _measuring_ the control rather than by deciding the risk was
+acceptable, which is the only way one of these should ever go.
+
+What the calendar turned out to be is worth knowing before touching it: a range
+picker whose day cells carry `data-test-id="MM/DD/YYYY"`, where the same id
+appears twice — a disabled spillover in the previous month's grid and the live
+one — and whose paging arrows spell "disabled" as an `invisible` class rather
+than the `disabled` property. Choosing a pick-up clears the return, so the
+return needs a second pass. All three are pinned by fixtures.
+
+The ordering survives and still matters: the itinerary steps run _before_ the
+code fill and the submit, so a form that cannot express the trip is never sent,
+and the code is never typed into one. A test asserts both.
 
 Everything else in the driver is measured and tested: hydration (with the
 throttle case given its own message, because "back off" and "go read the DOM"

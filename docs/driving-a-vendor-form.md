@@ -366,11 +366,15 @@ guess:
   site, and Hertz, Avis and National answer well inside it. Paying Enterprise's
   cost everywhere would have been the lazy version of this fix.
 
-  Note `KEEPALIVE_CEILING_MS` derives from the **longest** timeout any vendor
-  asks for, not the default. Based on the default it would be shorter than a
-  single Enterprise quote is allowed to take, so a run of slow quotes would trip
-  its own inactivity guard — the exact bug that constant exists to prevent.
-  `DRIVE_SHARE` is still a guess.
+  Note `KEEPALIVE_CEILING_MS` still derives from the **default**, not from the
+  longest budget any vendor asks for — and leave it that way. This paragraph
+  said the opposite for a while, on the theory that a ceiling shorter than a
+  single quote's own budget would let slow quotes trip their own inactivity
+  guard. The arithmetic refutes it: `13 x (45s + 750ms)` is 9.9 minutes against
+  a 120s quote, five times over. Deriving from the longest pushed the ceiling to
+  26 minutes, which is how long a _wedged_ run pins the worker with a minimised
+  window open, for no benefit. There is headroom for a vendor budget of about
+  eight minutes before the reasoning changes. `DRIVE_SHARE` is still a guess.
 
 - **Admit `form-fill`, `form-submit` and `code-rejected`** to `PROBE_FAILURES`.
   Done — National's driver is a reachable emitter for all three, and each is

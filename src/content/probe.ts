@@ -118,23 +118,24 @@ const VERIFY_TRIP = new Set<string>(['avis']);
  * How much of a quote's budget a form driver may spend before pricing starts.
  *
  * **A guess, and the number here most likely to be wrong.** It is live for
- * National, and the margin is thinner than it looks. Measured in a throttled tab,
- * its drive costs ~2s for the location and up to ~12s for the date range, which
- * can need three verify-and-retry passes — inside the ~27s this leaves of a 45s
- * `PROBE_TIMEOUT_MS`, but not by much.
+ * National and Enterprise, and National's margin is thinner than it looks:
+ * measured in a throttled tab, its drive costs ~2s for the location and up to
+ * ~12s for the date range, which can need three verify-and-retry passes —
+ * inside the ~27s this leaves of the 45s default, but not by much.
  *
- * Raising `PROBE_TIMEOUT_MS` is the real answer if that margin proves too thin,
- * and it is deliberately **not** done here: `KEEPALIVE_CEILING_MS` derives from
- * it and five timing tests restate it, so it is a change to make on evidence
- * from a real run rather than pre-emptively. Enterprise will force the question
- * anyway — its widget alone took ~40s on one measured load.
+ * Enterprise did force the question, as this comment predicted, and the answer
+ * was a per-vendor `probeTimeoutMs` rather than a bigger default: its widget
+ * alone took ~40s on one measured load. That leaves the share itself untouched
+ * — 0.6 of 120s is ~68s for the drive — and it is still the number to revisit
+ * on evidence from a real run rather than pre-emptively.
  */
 const DRIVE_SHARE = 0.6;
 
 /**
  * Fill and submit the vendor's own search form, for vendors that need it.
  *
- * Live for National; `FORM_DRIVERS` decides. Returns the failure to report, or
+ * Live for National and Enterprise; `FORM_DRIVERS` decides. Returns the failure
+ * to report, or
  * null when there is nothing to drive and nothing went wrong. Reporting rather
  * than sending, so the caller keeps the one place that decides what a
  * `ProbeReport` looks like.
