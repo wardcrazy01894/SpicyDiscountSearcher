@@ -204,16 +204,19 @@ describe('the caps that actually ship', () => {
 
   it('leaves every other vendor uncapped', () => {
     // Including Avis, which CLAUDE.md recorded as *suspected* of the same
-    // problem. Somebody checked, on 2026-08-11, and the answer is no. Two
-    // concurrent tabs, one carrying an AWD and one carrying none, rendered
-    // different pages — only the coded one said "Your savings are reflected
-    // below" — which rules out anything shared carrying the code between them.
-    // And the mechanism agrees: the AWD travels in sessionStorage, which is
-    // per-tab. See the comment on the vendor entry for both halves and for what
-    // they do not cover.
+    // problem. Somebody checked, on 2026-08-11: the AWD travels in
+    // sessionStorage, which is per-tab, and `booking-widget.store` — the shared
+    // key the worry was actually about, and the one we clear — carries no code
+    // at all. That closes the question as it was posed.
     //
-    // So this stays uncapped on evidence rather than on a shrug. Capping it
-    // would have halved Avis's throughput to prevent nothing.
+    // It does not close a cookie-identified backend session, and nothing can:
+    // no Avis code was found to move a price, so there is no observable delta a
+    // leak could show up in. The vendor entry says so at length, including which
+    // tempting piece of evidence turned out to be worthless.
+    //
+    // So this stays uncapped on a measurement rather than on a shrug, and with
+    // its limits written down. Capping it would have halved Avis's throughput
+    // against a hazard nothing can currently detect either way.
     const uncapped = VENDORS.filter((v) => v.maxLanes === undefined).map((v) => v.id);
     expect(uncapped).toContain('avis');
     expect(uncapped).toContain('hertz');

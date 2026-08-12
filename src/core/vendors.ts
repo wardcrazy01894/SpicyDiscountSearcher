@@ -25,29 +25,31 @@ export const VENDORS: Vendor[] = [
     //
     // Measured on 2026-08-11, on one TPA round trip, tabs loaded concurrently.
     //
-    // The settling evidence is *rendered*, not introspected: a tab carrying an
-    // AWD and a tab carrying none, side by side, produced different pages — only
-    // the coded one said "Your savings are reflected below". Two concurrent tabs
-    // disagreeing on screen rules out every shared-state vector at once, cookies
-    // and IndexedDB included, neither of which had to be enumerated.
+    // Two tabs on different AWDs: the code travels in sessionStorage, which is
+    // per-tab by the platform's own rules. Each tab's `reservation.store` and
+    // `REACT_QUERY_OFFLINE_CACHE` held its own code and not the other's, found
+    // by enumerating every key in both stores. The only localStorage keys
+    // carrying an AWD are a bot-detection event log and an mParticle analytics
+    // batch queue — write-side telemetry, not read back to price a search. And
+    // `booking-widget.store`, the key this worry was actually about and the one
+    // we clear, is 65 bytes and carries no code at all. That last fact is what
+    // an earlier truncated dump could not settle, and it closes the question as
+    // posed.
     //
-    // The mechanism, from a second pair on two *different* AWDs: the code
-    // travels in sessionStorage, which is per-tab. Each tab's
-    // `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and
-    // not the other's, found by enumerating every key in both stores. The only
-    // localStorage keys carrying an AWD are a bot-detection event log and an
-    // mParticle analytics batch queue — write-side telemetry, not read back to
-    // price a search. And `booking-widget.store`, the key the suspicion was
-    // actually about and the one we clear, is 65 bytes and carries no code at
-    // all. That last fact is what an earlier truncated dump could not settle.
+    // What it does not close, stated because an earlier draft claimed it did: a
+    // cookie-identified backend session pricing both tabs off one code. The
+    // tempting evidence was that a coded tab renders "Your savings are reflected
+    // below" and an uncoded one does not — but a tab carrying the nonsense
+    // `Z9Z9Z9Z` renders that banner too, at the same prices and with no error,
+    // so it is a client-side echo of our own request rather than a server
+    // verdict. Two tabs differing on it follows from sessionStorage isolation
+    // alone.
     //
-    // Both halves are needed. The banner separates a coded tab from an uncoded
-    // one, not code A from code B; the storage partition is what covers two
-    // tabs both carrying codes, which is what a real run produces.
-    //
-    // Prices did *not* discriminate: identical cheapest six with either code and
-    // with none. So the banner proves the code was accepted, not that it saved
-    // anything — worth knowing, and not a fact about lanes.
+    // Nothing available settles that, because nothing observable varies with the
+    // code: identical cheapest six with two real AWDs, with the nonsense one,
+    // and with no code at all. No price delta exists to leak, so no experiment
+    // of this shape could catch a leak. See CLAUDE.md — the fact that no Avis
+    // code has been shown to move a price is its own, larger question.
     //
     // The clear itself is still needed: that store holds the *location*, which
     // is the Tampa/Philadelphia bug it was written for.

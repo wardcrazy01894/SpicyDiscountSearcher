@@ -209,13 +209,15 @@ the lane parks on a waiter rather than spinning or returning — returning would
 drop those quotes with the run reported complete. National and Enterprise are
 both `maxLanes: 1`.
 
-Avis was suspected of the same hazard and turns out not to have it. Measured on
-2026-08-11: its AWD reaches the page through sessionStorage, which is per-tab,
-and two concurrent tabs — one carrying a code, one carrying none — rendered
-visibly different pages, the coded one alone showing "Your savings are reflected
-below". So it stays uncapped on evidence rather than on a hunch. CLAUDE.md has
-the full result; National's cap is unaffected, because what National shares is
-form state that survives into a fresh tab, which is a different mechanism.
+Avis was suspected of the same hazard. Measured on 2026-08-11: its AWD reaches
+the page through sessionStorage, which is per-tab, and `booking-widget.store` —
+the shared key the worry was about — carries no code at all. So it stays uncapped
+on evidence rather than on a hunch. What that does **not** rule out is a
+cookie-identified backend session, and nothing can: no Avis code was found to
+change a price, so there is no observable delta to catch a leak with. CLAUDE.md
+has the full result. National's cap is unaffected either way, because what
+National shares is form state that survives into a fresh tab — a different
+mechanism, and one that was observed rather than reasoned about.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.

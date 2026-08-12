@@ -553,6 +553,22 @@ close). Never pass it a URL or a code.
 
 ## Known gaps
 
+- **No Avis code has been shown to save any money.** Separate from whether the
+  URL carries the search, which is what `verified` claims and what the location
+  replay proved. On a TPA round trip on 2026-08-11, `A120590`, `B771000`, the
+  deliberate nonsense `Z9Z9Z9Z` and no code at all all returned the identical
+  cheapest six — 53, 54, 54, 58, 59, 61 — and all three coded runs rendered "Your
+  savings are reflected below". So that banner tracks the presence of an
+  `awd_number` in our own request and nothing else.
+
+  Two readings, and this cannot tell them apart: these codes may genuinely be
+  worth nothing at that branch on those dates, or Avis may be ignoring
+  `awd_number` from a deep link entirely. The second would mean the whole Avis
+  lane is racing codes that do nothing, which is worth knowing before trusting
+  any Avis result. The way in is a code and an itinerary where the discount is
+  known to bite — a differential like National's, which is exactly how National's
+  driver was proved ($70.30/day with the code against $74.00 without).
+
 - Deep-link query params are unverified against live sites for every vendor
   except Avis and Hertz (see README). Beyond that there are now three distinct
   states, and the difference decides what would fix each:
@@ -649,43 +665,54 @@ close). Never pass it a URL or a code.
   render tab B's code — the same trip at a different discount, which
   `verify-trip` is structurally blind to because it only compares locations.
 
-  Two experiments, both on one TPA round trip with the tabs loaded concurrently.
-
-  **The rendered discriminator, which is the one that settles it.** One tab
-  carrying `A120590` against one carrying no `awd_number` at all. The coded tab
-  rendered "Your savings are reflected below"; the uncoded tab did not. Two
-  concurrent tabs, visibly different pages — so nothing shared is carrying the
-  AWD between them, and that rules out every vector at once rather than one at a
-  time. Cookies and IndexedDB were never enumerated and did not need to be: a
-  shared session bleeding the code into the second tab would have put the savings
-  banner on it.
-
-  **The mechanism, from the first experiment**, two tabs on _different_ AWDs. The
-  AWD travels in **sessionStorage**, which is per-tab: each tab's
-  `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and not
-  the other's, found by enumerating every key in both stores and testing each
+  **What was measured**, on one TPA round trip with the tabs loaded
+  concurrently. Two tabs on _different_ AWDs: the code travels in
+  **sessionStorage**, which is per-tab by the web platform's own rules. Each
+  tab's `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and
+  not the other's, found by enumerating every key in both stores and testing each
   value against both codes. The only localStorage keys carrying an AWD are a
   bot-detection event log and an mParticle analytics batch queue, both write-side
-  telemetry. `booking-widget.store` is 65 bytes and carries no code — the fact
-  the earlier truncated dump could not establish.
+  telemetry. And `booking-widget.store` — the shared key this worry was actually
+  about, and the one we clear — is 65 bytes and carries no code at all. That last
+  fact is what the earlier truncated dump could not establish, and it is what
+  closes the original question.
 
-  The two are load-bearing in different places, and neither is sufficient alone.
-  The banner discriminates a coded tab from an uncoded one, not code A from code
-  B; the storage partition is what covers two tabs both carrying codes, which is
-  the case a real run actually produces.
+  **What was _not_ measured, and cannot be from outside.** A third tab carrying
+  the deliberate nonsense `Z9Z9Z9Z` renders the savings banner, the same prices,
+  and no error. So the banner is a client-side echo of "my own request carried an
+  `awd_number`", not a server verdict — which means an earlier draft of this
+  section was wrong to treat a coded tab and an uncoded tab rendering differently
+  as proof that nothing shared carries the code. That difference follows from
+  sessionStorage isolation alone and adds nothing. A cookie-identified backend
+  session could still be pricing both tabs off one code with no tell.
 
-  **Prices did not discriminate, in either experiment**, and that is worth
-  stating rather than omitting. The cheapest six were identical — 53, 54, 54, 58,
-  59, 61 — with `A120590`, with `B771000`, and with no code at all. The
-  interesting half of that is not about lanes: the savings banner appears while
-  the prices do not move, so **the banner is evidence the code was accepted, not
-  evidence it saved anything.** CLAUDE.md previously cited that banner as proof
-  "the AWD had applied", which is true only in the weaker sense.
+  Nothing available can rule that out, because **nothing observable varies with
+  the code at all**: the cheapest six were identical — 53, 54, 54, 58, 59, 61 —
+  with `A120590`, with `B771000`, with `Z9Z9Z9Z`, and with no code. There is no
+  price delta to leak, so there is no experiment of this shape that could catch a
+  leak. Saying so is the honest stopping point.
 
-  So Avis stays uncapped, on evidence rather than on the absence of it, and
-  `tests/vendor-lane-cap.test.ts` records why. Note what this does _not_ say: the
-  clearing of `booking-widget.store` is still needed, because that store holds
-  the **location**, which is the Tampa/Philadelphia bug it was written for.
+  So Avis stays uncapped, on the strength of the localStorage measurement and the
+  per-tab guarantee of sessionStorage, and `tests/vendor-lane-cap.test.ts`
+  records why. Note what this does _not_ say: the clearing of
+  `booking-widget.store` is still needed, because that store holds the
+  **location**, which is the Tampa/Philadelphia bug it was written for.
+
+- **The Avis savings banner proves nothing about the code**, which is a separate
+  and worse finding than the one above. `Z9Z9Z9Z` earns the same "Your savings
+  are reflected below" as a real AWD, at the same prices. `deeplinks.ts` cited
+  that banner as "confirming the AWD had applied" — it confirms only that the URL
+  carried something in `awd_number`.
+
+  Avis's `verified` flag survives, because it is a claim about the URL carrying
+  the **search**, and that rests on the location replay (changing
+  `pickup_location_code` moved the results page to Tampa) rather than on the
+  banner. What has no evidence behind it is the other half, and CLAUDE.md's own
+  rule for Hertz names it: "driving the search and applying the discount are two
+  claims, and for a discount-code racer the second is the load-bearing one."
+  For Avis that second claim is currently unevidenced — no Avis code has been
+  shown to change a price. Worth its own investigation, and not one this section
+  can close.
 
 - One Avis question is still open. **The gate could be made ours rather than
   merely narrow.** `awd_number` is

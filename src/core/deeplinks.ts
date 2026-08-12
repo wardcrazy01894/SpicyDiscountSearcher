@@ -281,14 +281,24 @@ const BUILDERS: Record<VendorId, Builder> = {
    * second step is the one that matters — Enterprise's URL looked plausible too
    * and turned out to carry nothing.
    *
-   * That banner says **less than it was read as saying**, and the difference was
-   * measured on 2026-08-11: a tab with `A120590` and a tab with no code at all,
-   * same trip, same moment, priced identically — 53, 54, 54, 58, 59, 61 — while
-   * only the coded one carried the banner. So it is evidence the code was
-   * *accepted*, not that it *saved anything*. That is still exactly what a
-   * builder needs to prove, since the question here is whether the URL carries
-   * the code at all; a code that is accepted and worth nothing on one trip is
-   * the vendor's answer, not a broken link.
+   * **That banner is worthless as evidence, and the sentence above should not
+   * lean on it.** Measured on 2026-08-11: the deliberate nonsense `Z9Z9Z9Z`
+   * earns the same "Your savings are reflected below", at the same prices, with
+   * no error. It is a client-side echo of the fact that our own request carried
+   * an `awd_number` — not a server verdict on the code.
+   *
+   * `verified` still stands, because it is a claim about the URL carrying the
+   * **search**, and that rests entirely on the location replay above: changing
+   * `pickup_location_code` moved the results page to Tampa. Nothing about that
+   * depended on the banner.
+   *
+   * What is now unevidenced is the other half. Hertz's entry states the rule —
+   * driving the search and applying the discount are two claims, and for a
+   * discount-code racer the second is load-bearing — and for Avis that second
+   * claim has nothing behind it: no Avis code has been shown to move a price.
+   * Two real AWDs, the nonsense one and no code at all priced identically on the
+   * trip tested. That is a question about the codes rather than about this
+   * builder, and it is recorded in CLAUDE.md's known gaps.
    *
    * What `verified` does and does not cover — the flag is a claim about the URL
    * shape, not about every itinerary:
