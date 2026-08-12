@@ -726,7 +726,7 @@ describe('the popup half of the double-run guard', () => {
   });
 
   it('counts the refused note the way everything else counts it', async () => {
-    // `loadRejected` accepts whatever an older build wrote and does not dedupe,
+    // `readRejected` accepts whatever an older build wrote and does not dedupe,
     // which is the stated premise for the two-directional `changed` check in the
     // RUN_STATE listener. Under that premise this line said "2 codes have been
     // refused" while the chips, the company list and the plan all accounted for
@@ -944,7 +944,7 @@ describe('the popup half of the double-run guard', () => {
   });
 
   it('notices a same-sized change to the refused set', async () => {
-    // `loadRejected` deliberately tolerates whatever an older build wrote and
+    // `readRejected` deliberately tolerates whatever an older build wrote and
     // does not dedupe, so counting entries is not the same as comparing sets: a
     // stored `[A, A]` against a held `[A, B]` matches on length and on every
     // stored key being one we already had. B's codes would stay excluded from
