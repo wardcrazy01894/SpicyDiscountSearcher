@@ -323,6 +323,33 @@ input:focus-visible {
   font-size: 11px;
 }
 
+/* How much this row's link is worth, on the row. Sits under the code line
+   rather than beside it: the company name already competes for width in a 420px
+   popup, and a badge that pushed it into an ellipsis would cost more than it
+   tells you. */
+.quote .confidence {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 0 5px;
+  border: 1px solid currentcolor;
+  border-radius: 8px;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  /* Outlined rather than filled, on purpose. A filled badge reads as a status —
+     good news or bad — and none of these three is either. They say what kind of
+     evidence is behind the row. */
+  color: var(--muted);
+}
+
+/* Only the unverified one gets a colour, and it is the warning colour rather
+   than the error one: the link may well be fine, and nothing about the row has
+   failed. The other two stay grey, because a green "checked" would promise the
+   price is right when the claim is only about the URL. */
+.quote .confidence.is-best-effort {
+  color: var(--warn);
+}
+
 .quote .price {
   font-weight: 700;
   font-variant-numeric: tabular-nums;

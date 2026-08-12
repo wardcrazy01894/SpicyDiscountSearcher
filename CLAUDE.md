@@ -102,7 +102,23 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `if (unverified > 0)`, so the moment these two became verified a run of only
   Avis and Hertz — most of the car codes, and the obvious selection once the
   others are known unusable — printed no caveat at all. Silence reads as the
-  stronger promise. Badging per row is still the better fix.
+  stronger promise.
+
+  **Each row now carries its own badge**, which is what that paragraph used to
+  say was still wanted. `confidenceBadge` prints "checked link" / "unverified
+  link" / "form filled" beside the code, so a car race mixing all three — Avis
+  and Hertz verified, National driven — is legible per row rather than in
+  aggregate. The line under the list stopped counting as a result: "2 of these
+  search links are unverified" never said *which* two, and there was nothing on
+  screen to work it out from. It explains the badges that are actually present
+  instead, one clause per kind, so it can no longer describe a state the list is
+  not in.
+
+  Two exclusions carried over from the counting version, because both were bugs
+  rather than tidiness: a `link-build` quote gets no badge at all (the worker
+  stamps those `best-effort` on its catch path, so badging on confidence alone
+  would label a link that was never built), and `driven` is never folded in with
+  the links, since it has no link to grade.
 
   Verifying one is worth the effort because the alternative is not "a stale
   parameter" but "no search at all": Enterprise keeps its itinerary in session
@@ -671,6 +687,11 @@ close). Never pass it a URL or a code.
   import-time contract is not: `tests/popup-contract.test.ts` loads the real
   `index.html` into jsdom and imports the module, so a renamed id fails the
   suite. It used to fail nothing, while bricking the popup.
+
+  The confidence badges and the caveat line beneath them are pinned now, driven
+  through a real `RUN_STATE` broadcast rather than by calling the renderer: what
+  each confidence prints, that a `link-build` quote prints nothing, and that the
+  caveat describes only the kinds actually on screen.
 
   Neither is the popup half of the double-run guard, which the Politeness
   section above asserts as a checkable invariant. It is driven through the real

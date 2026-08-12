@@ -921,6 +921,50 @@ function lateAnswerLine(quote: Quote): HTMLElement | null {
   return line;
 }
 
+/**
+ * How much to trust *this row's* link, said on the row.
+ *
+ * A car race now mixes all three kinds in one list — Avis and Hertz `verified`,
+ * National `driven`, the hotel builders `best-effort` — and the summary line
+ * below the list cannot say which row is which. It counts. "2 of these search
+ * links are unverified" leaves the user to work out which two, and there is
+ * nothing on screen to work it out from.
+ *
+ * `link-build` gets no badge at all. The worker stamps those `best-effort` on
+ * its catch path, so badging by `confidence` alone would print "unverified link"
+ * against a link that was never built — the same mistake the summary line had to
+ * be taught to avoid, arriving one row lower down.
+ *
+ * The words are deliberately not a grade out of three. `driven` is not "better
+ * than best-effort, worse than verified" — it says the URL carries no search at
+ * all and the code was typed into the vendor's own form, which is a different
+ * kind of claim and, at National, a stronger one than any deep link makes.
+ */
+function confidenceBadge(quote: Quote): HTMLElement | null {
+  if (quote.failure === 'link-build') return null;
+
+  const badge = document.createElement('span');
+  badge.className = `confidence is-${quote.confidence}`;
+  if (quote.confidence === 'verified') {
+    badge.textContent = 'checked link';
+    badge.title =
+      'This vendor’s search URL was replayed against the live site and proved to carry the ' +
+      'search — for a US airport round trip, driver aged 25 or over. That is a claim about the ' +
+      'URL, not about this itinerary.';
+  } else if (quote.confidence === 'driven') {
+    badge.textContent = 'form filled';
+    badge.title =
+      'This vendor’s URL carries no search. The trip and the code were typed into its own ' +
+      'booking form, and every field was checked against what the form rendered back.';
+  } else {
+    badge.textContent = 'unverified link';
+    badge.title =
+      'This vendor’s search URL is reverse-engineered and has never been checked against the ' +
+      'live site. A result that looks wrong probably is.';
+  }
+  return badge;
+}
+
 function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIElement {
   const item = document.createElement('li');
   item.className = quote.id === winnerId ? 'quote is-winner' : 'quote';
@@ -944,6 +988,8 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
   const vendorLabel = vendor ? `${vendor.label} ${vendor.codeLabel}` : quote.candidate.vendor;
   code.textContent = `${vendorLabel} · ${quote.candidate.code}`;
   who.append(name, code);
+  const badge = confidenceBadge(quote);
+  if (badge) who.append(badge);
 
   const right = document.createElement('span');
   if (quote.best) {
@@ -1047,54 +1093,63 @@ function renderRun(state: RunState | null): void {
     ...ranked.map((quote) => renderQuote(quote, winner?.id ?? null, trip)),
   );
 
-  // One line for the list rather than a badge per row, which stays workable
-  // only while the verified vendors are few enough to name.
+  // The line under the list, now that every row carries its own badge.
   //
-  // This deliberately renders even when nothing is unverified. It used to be
-  // `if (unverified > 0)`, so the moment Avis and Hertz became `verified` a run
-  // containing only those two — which is most of the car codes, and the obvious
-  // selection once the others are known to be unusable — printed no caveat at
-  // all. `verified` is a claim about the URL shape, proved on one US round-trip
-  // from an airport; it is not a claim that the price is right for any
-  // itinerary, and silence reads as the stronger promise.
-  // `link-build` quotes are excluded: the worker stamps them `best-effort` on
-  // the catch path, so counting them said "N of these search links are
-  // unverified" about links that were never built, let alone followed.
-  // Driven vendors are excluded from *both* counts, not just from `unverified`.
-  // They have no search link to grade — the code and the itinerary are typed
-  // into the vendor's own form — so counting them among the links made the
-  // sentence claim something untrue in whichever branch it landed in: a
-  // National-only run read "these search links are checked against the live
-  // site" about a link that carries no search at all.
+  // It used to count — "2 of these search links are unverified" — because a
+  // count was the only per-row information there was anywhere to put. That
+  // sentence never said *which* two, and the user had nothing on screen to work
+  // it out from. `confidenceBadge` says which, so this stops counting and
+  // explains instead: one clause per kind that is actually present, and what
+  // that kind's badge means.
+  //
+  // The exclusions survive the rewrite, because both were bugs rather than
+  // tidiness. `link-build` quotes are left out entirely: the worker stamps them
+  // `best-effort` on its catch path, so counting them described links that were
+  // never built, let alone followed. And `driven` is not folded in with the
+  // links — it has no search link to grade, so a National-only run read "these
+  // search links are checked against the live site" about a link that carries no
+  // search at all.
+  //
+  // Still renders whenever anything ran, including when nothing is unverified.
+  // It was once `if (unverified > 0)`, so the moment Avis and Hertz became
+  // `verified` a run of only those two — most of the car codes, and the obvious
+  // selection once the others are known unusable — printed no caveat at all.
+  // `verified` is a claim about the URL shape, proved on one US airport round
+  // trip; silence reads as the stronger promise.
   const linked = state.quotes.filter(
     (q) => q.failure !== 'link-build' && q.confidence !== 'driven',
   );
   const unverified = linked.filter((q) => q.confidence === 'best-effort').length;
+  const verified = linked.length - unverified;
   const driven = state.quotes.filter(
     (q) => q.confidence === 'driven' && q.failure !== 'link-build',
   ).length;
   const note = document.createElement('li');
   note.className = 'hint';
-  const drivenNote = driven
-    ? `${driven} ${driven === 1 ? 'code was' : 'codes were'} searched by filling the vendor's own ` +
-      'form, and dropped unless its results named the account. '
-    : '';
   if (linked.length === 0 && driven === 0) {
     note.textContent = 'None of these codes could be turned into a search — nothing was looked up.';
-  } else if (linked.length === 0) {
-    note.textContent = `${drivenNote}Confirm the rate before booking.`;
-  } else if (unverified === linked.length) {
-    note.textContent = `${drivenNote}Vendor search links are reverse-engineered and unverified — a result that looks wrong probably is.`;
-  } else if (unverified > 0) {
-    note.textContent =
-      `${drivenNote}${unverified} of these search links ${unverified === 1 ? 'is' : 'are'} ` +
-      'reverse-engineered and unverified — a result that looks wrong probably is. The rest are ' +
-      'checked against the live site for US airport round-trips only, and assume a driver aged 25 ' +
-      'or over.';
   } else {
-    note.textContent =
-      `${drivenNote}These search links are checked against the live site for US airport ` +
-      'round-trips only, and assume a driver aged 25 or over. Confirm the rate before booking.';
+    const clauses: string[] = [];
+    if (verified > 0) {
+      clauses.push(
+        'Links marked “checked” were replayed against the live site for US airport round-trips ' +
+          'only, and assume a driver aged 25 or over.',
+      );
+    }
+    if (unverified > 0) {
+      clauses.push(
+        'Links marked “unverified” are reverse-engineered and have never been checked — a result ' +
+          'that looks wrong probably is.',
+      );
+    }
+    if (driven > 0) {
+      clauses.push(
+        'Rows marked “form filled” were searched by filling the vendor’s own form, and dropped ' +
+          'unless its results named the account.',
+      );
+    }
+    clauses.push('Confirm the rate before booking.');
+    note.textContent = clauses.join(' ');
   }
   quotesList.append(note);
 
