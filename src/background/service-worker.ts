@@ -434,11 +434,13 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
  *
  * No longer blind for avis, whose builder targets
  * /en/reservation/vehicle-availability, so a landing on the root is the same
- * unambiguous tell it is everywhere else. Budget, enterprise and sixt are out
- * of scope entirely — they build no URL and produce no candidate. National is
- * not: it builds one (`confidence: 'driven'`, the page its form lives on) and
- * races, but its driver checks the results page itself, which is a stronger
- * signal than this flag can give.
+ * unambiguous tell it is everywhere else. Budget and sixt are out of scope
+ * entirely — they build no URL and produce no candidate. National and
+ * enterprise are not: both build one (`confidence: 'driven'`, the page the
+ * form lives on) and race, so this flag *can* fire for them if the vendor ever
+ * 302s to its root. Their drivers check the results page themselves, which is
+ * a stronger signal than this flag can give — but "out of scope" would be
+ * wrong, and reading it that way would dismiss a real `suspect` badge.
  *
  * Still blind to a link that reaches a real page which is not the search we
  * asked for. Sixt used to be the live example and is `searchable: false` now;

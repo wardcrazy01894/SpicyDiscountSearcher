@@ -849,14 +849,22 @@ too, but as a closed question rather than as work.
   existed — and the alternative is listing codes that cannot be raced, but it
   was a real loss and the only explanation lives in the README.
 
-  **National reaching `searchable: true` gives 19 of those codes back**, and
+  **National reaching `searchable: true` gave 19 of those codes back**, and
   every one of them arrives through `alsoTryAs`: the workbook files them all
   under Enterprise and contains no `vendor: 'national'` record at all. Asking
   `buildCandidates` for Enterprise therefore returns National candidates, which
   reads oddly and is correct — `wanted` is widened by `alsoTryAs` before the
-  search, the codes are the same codes, and nothing is routed to the vendor that
-  cannot run them. The README's tally needs revisiting against what is still
-  missing.
+  search, and the codes are the same codes.
+
+  **Enterprise reaching `searchable: true` on 2026-08-12 changed what that
+  costs.** The sentence here used to end "nothing is routed to the vendor that
+  cannot run them", which was the point while Enterprise could not run. It can,
+  so those same 19 codes now race at _both_ ends of the shared column — 38
+  driven quotes where there were 19, each needing a real tab, and both vendors
+  capped at one lane. That is deliberate rather than a leak: they are two
+  different vendors quoting the same contract, and either may be cheaper. But
+  it is the whole race at the default concurrency of two, and worth knowing
+  before wondering why a run of Enterprise codes takes as long as it does.
 
 - **Two old Avis notes, kept as background and _not_ as work.** Both used to be
   phrased as open questions with a named fix attached, which is the shape of text

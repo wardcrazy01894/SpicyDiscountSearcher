@@ -229,7 +229,7 @@ describe('buildDeepLink', () => {
     // reading this one knows the obstacle is a business-account login and stops.
     expect(() => buildDeepLink('sixt', 'X1', CAR)).toThrow(/corporate code/);
 
-    // Still not "session state", which is budget and enterprise's reason and
+    // Still not "session state", which is Budget's reason and
     // would be the wrong diagnosis here — Sixt's query string expresses a
     // search perfectly well.
     expect(() => buildDeepLink('sixt', 'X1', CAR)).not.toThrow(/session state/);

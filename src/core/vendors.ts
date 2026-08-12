@@ -115,8 +115,10 @@ export const VENDORS: Vendor[] = [
     // single branch at all, so it needs a hand-captured lookup table that would
     // rot silently — for a rate nothing suggests beats the codes we do race.
     //
-    // Same treatment as budget and enterprise: the three codes stay in the
-    // database, the vendor gets no chip, no candidates and no host permission.
+    // Same treatment as budget: the three codes stay in the database, the
+    // vendor gets no chip, no candidates and no host permission. (Enterprise
+    // was in this sentence until it got a driver — it now has all three, set
+    // seventy lines above.)
     // Dropping sixt.com from the manifest is a real reduction in what this
     // extension may read. No company loses its car listing and none vanishes —
     // every company with a Sixt code has one at another car vendor too.

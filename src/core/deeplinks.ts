@@ -347,9 +347,10 @@ const BUILDERS: Record<VendorId, Builder> = {
   },
 
   /**
-   * Budget and Enterprise refuse rather than build.
+   * Budget refuses rather than builds.
    *
-   * All three keep the search in session state, and this is not a suspicion:
+   * Budget, Enterprise and National all keep the search in session state, and
+   * this is not a suspicion:
    * a hand-run Enterprise search ends on `/en/reserve.html#car_select` and a
    * hand-run Budget one on `/en/reservation#/vehicles` — neither carries a
    * query string, and Enterprise's URL pasted into a fresh incognito window
@@ -481,8 +482,8 @@ const BUILDERS: Record<VendorId, Builder> = {
    */
   sixt: unsearchable(
     'sixt',
-    // Still not "cannot be searched by URL" — the prefix budget and enterprise
-    // carry — but no longer for the old reason. Sixt's URL *does* search; what
+    // Still not "cannot be searched by URL" — the prefix Budget carries — but
+    // no longer for the old reason either. Sixt's URL *does* search; what
     // it cannot do is carry a code. This string reaches the user as the
     // `link-build` tooltip, so it names the actual obstacle: someone reading it
     // should not go hunting for a better URL, which is what the previous
