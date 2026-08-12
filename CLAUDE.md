@@ -48,6 +48,33 @@ else.
 
 ## Ground rules
 
+- **Run `npm run verify` before opening a PR.** It is the whole node side of CI
+  in one command — typecheck, eslint, `prettier --check`, vitest, both builds,
+  and `check-dist`. Added on 2026-08-12 because PR #65 failed the
+  `build / typecheck / lint` job **twice** on things a local run would have
+  caught in seconds: the author ran `vitest` and `tsc` by hand and simply did
+  not think of `prettier`, which then failed on a markdown table whose padding
+  no longer lined up. Picking the checks by hand is the bug; the point of one
+  command is that there is nothing to pick.
+
+  It does **not** cover the `data` job, which is Python. If you touch
+  `scripts/*.py` or the workbook, also run:
+
+  ```bash
+  pipx run ruff==0.14.2 check scripts tests
+  pipx run ruff==0.14.2 format --check scripts tests
+  python3 -m pytest tests -q
+  npm run codes && git diff --exit-code -- src/data/codes.generated.json
+  ```
+
+  Kept out of `verify` deliberately — it needs a Python toolchain that a
+  node-only change should not have to have installed.
+
+  A `PreToolUse` hook in `.claude/settings.json` runs `verify` and refuses
+  `gh pr create` if it fails, so this rule does not depend on anybody
+  remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
+  for every command that is not a PR creation.
+
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
   `scripts/extract_codes.py` or the workbook and re-run `npm run codes`. CI
   fails the `data` job if the committed JSON doesn't match a fresh run.
