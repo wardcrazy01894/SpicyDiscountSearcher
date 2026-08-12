@@ -214,11 +214,13 @@ the lane parks on a waiter rather than spinning or returning — returning would
 drop those quotes with the run reported complete. National and Enterprise are
 both `maxLanes: 1`.
 
-This is the same hazard CLAUDE.md records as an open question for Avis
-("Concurrent Avis tabs share one `localStorage`"), except at National it is
-observed rather than suspected. Avis is deliberately left uncapped: capping it
-would halve its throughput on a hunch, and it is now a one-line change the day
-someone measures it.
+Avis was once suspected of the same hazard and **is not a task**. It was capped
+on that suspicion on 2026-08-11, in a change reverted the same day, and the
+premise turned out to be wrong: the user sees different prices for different
+codes in real runs, which is the very evidence the cap's argument claimed could
+not exist. Avis works uncapped. Leave it uncapped, and do not go looking for a
+measurement that would justify revisiting it — that is the loop this file and
+`CLAUDE.md` now exist to close.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.

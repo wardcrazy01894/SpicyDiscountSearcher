@@ -18,13 +18,18 @@ somebody actually saw: prices stopped coming back, or an obviously wrong number
 reached the popup. "I measured it and the config claims something untrue" is not
 a symptom.
 
-That rule was bought expensively on 2026-08-11. Three PRs landed against the
-working vendors — a container measurement, a filter-bound extraction guard, and
-an Avis lane cap — and two of them broke production: Hertz priced **every quote
-at $20,000** (a marketing line, reachable only when the container misses and the
-sweep falls back to `doc.body`) and Avis returned one price for every code. All
-reverted in #62. None had been prompted by a user-visible problem; the strongest
-case any of them had was that a comment was inaccurate.
+That rule was bought expensively on 2026-08-11. **Two** PRs landed against the
+working vendors, carrying three changes between them — #59 bundled a container
+measurement with a filter-bound extraction guard, #60 added an Avis lane cap —
+and they broke production: Hertz priced **every quote at $20,000** (a marketing
+line, reachable only when the container misses and the sweep falls back to
+`doc.body`) and Avis returned one price for every code. Both reverted in #62.
+
+Neither was prompted by a user-visible problem. #59's case was that the config
+claimed something untrue about the page. #60's was better on its face — it closed
+an open question this very file had recorded — which is the more dangerous shape,
+because a note phrased as an open question reads as an invitation. That is why
+the Known-gaps entries below were reworded rather than left standing.
 
 The measurements behind them were wrong for a reason worth repeating: **a
 foreground browser tab is not the probe.** The probe runs at `document_idle`, in
@@ -711,26 +716,28 @@ Budget and Enterprise, and the entries below describe what each of those needs.
   cannot run them. The README's tally needs revisiting against what is still
   missing.
 
-- Two Avis questions are open and cannot be answered while the test browser is
-  rate-limited. Deferred deliberately rather than guessed at.
+- **Two old Avis notes, kept as background and _not_ as work.** Both used to be
+  phrased as open questions with a named fix attached, which is the shape of text
+  a future session acts on. One of them is precisely what PR #60 acted on, and
+  that PR broke production and was reverted. Avis works; the reactive-only rule
+  at the top of this file governs both of these.
 
-  **Concurrent Avis tabs share one `localStorage`.** At concurrency two or more,
-  each probe tab clears `booking-widget.store` while Avis rewrites it from its
-  own URL. If that store carries the AWD, tab A could render tab B's code — the
-  same trip at a different discount, which `verify-trip` is structurally blind
-  to because it only compares locations. A dump of the store showed location
-  data and no code, but it was truncated, so this is unresolved rather than
-  ruled out. Capping Avis to one lane is the conservative answer if it turns out
-  to be real.
+  _Concurrent tabs and `localStorage`._ At concurrency two or more, each probe
+  tab clears `booking-widget.store` while Avis rewrites it from its own URL, so
+  if that store carried the AWD then tab A could render tab B's code —
+  `verify-trip` would not catch it, since it compares only locations. This was
+  chased on 2026-08-11 and the cap it produced was reverted: the store carries no
+  code, and the user reports different codes returning different prices in real
+  runs, which contradicts the premise the cap rested on. **Do not cap Avis, and
+  do not go measuring for a reason to.** If two lanes ever genuinely settle on
+  one code, that is a symptom and it will show up as one.
 
-  **The gate could be made ours rather than merely narrow.** `awd_number` is
-  produced by Avis's own search flow too, so the reset can still fire on a
+  _The reset's gate could be made ours rather than merely narrow._ `awd_number`
+  is produced by Avis's own search flow too, so the reset can still fire on a
   user's hand-run search. A URL fragment never reaches the server and only we
-  would emit one, which would close it — but whether Avis's router tolerates a
-  fragment is untested, and guessing at it is how the previous version of that
-  comment came to claim something false. The other answer is
-  `chrome.scripting.registerContentScripts` for the length of a run, which needs
-  the `scripting` permission.
+  would emit one; `chrome.scripting.registerContentScripts` for the length of a
+  run is the other shape. Neither is planned. Recorded so that whoever meets the
+  behaviour knows it was understood, not so that someone implements it.
 
 - Hotel support is wired end to end but has had far less thought than cars.
 - No end-to-end test that actually loads the extension in a browser.
