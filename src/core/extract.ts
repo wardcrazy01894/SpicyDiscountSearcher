@@ -342,8 +342,19 @@ function isFeeLine(own: string): boolean {
  * to exclude. Neither carries a basis word for the rule below to save them with.
  *
  * A filter's label leads. An offer's does not. `Prices range $99-$180 for your
- * dates` does lead with it and stays suppressed, correctly: $99 is a lower bound
- * across the results, not a rate anybody can book.
+ * dates` does lead with it and stays suppressed, which is the rule rather than
+ * an exception — though that string was invented for the test and never seen on
+ * a live page, so it is the heuristic applied to a plausible shape rather than a
+ * measurement like Hertz's `$42`.
+ *
+ * The escape this buys, stated because every other guard in this file states
+ * its own: a filter with a prefix and everything in one leaf — `Filter by price
+ * range $42-$90` — no longer matches, since the phrase is not at position 0 and
+ * no ancestor's own text leads with it for the inheritance walk to catch.
+ * Hertz's real markup splits label from amount, which is why the measured case
+ * still works. Same trade as `isFeeLine`: a filter bound admitted costs one
+ * number in a bucket that usually loses to `total`, a rate suppressed costs the
+ * vendor.
  */
 const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?\b/i;
 

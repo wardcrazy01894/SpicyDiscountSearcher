@@ -627,9 +627,14 @@ describe('a price filter is not an offer', () => {
     // "Prices range $99-$180 for your dates" was offered alongside the two
     // above as a rate the anchor ought to rescue. It is not one, and the
     // difference is the whole rule rather than an exception to it: this line
-    // *does* lead with the phrase, and what it describes is the spread across
-    // the results — $99 is a lower bound exactly like Hertz's $42, not a rate
-    // anybody can book. Suppressing it is the guard working.
+    // *does* lead with the phrase, and what it describes reads as the spread
+    // across the results rather than a rate anybody can book.
+    //
+    // Held with less confidence than the two above, and the comment should say
+    // so: this string was invented for this test and has never been seen on a
+    // live page. Hertz's `$42` was measured. This is the heuristic applied to a
+    // plausible shape, which is enough to pin the behaviour and not enough to
+    // call it a finding.
     document.body.innerHTML = `<main><div>Prices range $99-$180 for your dates</div></main>`;
     expect(extract(document, 'hertz').offers).toEqual([]);
   });

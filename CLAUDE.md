@@ -202,10 +202,11 @@ encode other people's websites. They will break. Both are deliberately isolated:
   keeps that payload out of the sweep today, since the flight blob is one huge
   script node; small inline scripts are still eligible in principle.
 
-  **No vendor defines an `offer` selector**,
-  though, so the per-offer branch never fires and every `ProbeReport` says
-  `generic-sweep`. The selector path is kept — and tested with an injected
-  config — so it works the day someone fills one in.
+  **No vendor defines an `offer` selector**, though, so the per-offer branch
+  never fires and every `ProbeReport` says `generic-sweep`. The selector path is
+  kept — and tested with an injected config — so it works the day someone fills
+  one in.
+
 - A vendor redesign therefore degrades to a noisier sweep rather than nothing.
   Labels are best-effort: a card with no heading of its own inherits the
   previous card's, which markup cannot distinguish from a legitimate wrapper.
@@ -280,14 +281,27 @@ included: $57.20`, where the negation is invisible to the rule. Both surface a
   basis word for the second half of the rule to save them with, so the anchor is
   doing all the work. A filter's label leads; an offer's does not.
 
-  `Prices range $99-$180 for your dates` stays suppressed, and is the rule
-  rather than an exception to it: that line does lead with the phrase, and $99
-  is a lower bound across the results exactly like Hertz's $42 — not a rate
-  anybody can book.
+  `Prices range $99-$180 for your dates` stays suppressed, and is the rule rather
+  than an exception to it: that line does lead with the phrase, and reads as a
+  spread across the results rather than a rate anybody can book. Said with less
+  certainty than the two above, deliberately — that string was invented for the
+  test and has never been seen on a live page, so it is the heuristic applied to
+  a plausible shape, not a measurement like Hertz's `$42`.
+
+  Known escape, and it is the direct flip side of the anchor: a filter whose
+  label and amounts sit in **one** leaf behind a prefix — `Filter by price range
+$42-$90` — no longer matches, because the phrase is not at position 0 and there
+  is no separate ancestor whose own text leads with it for the inheritance walk
+  to catch. Hertz's real markup splits the two across elements, which is why the
+  measured case still works. Accepted on the same trade as `isFeeLine`: admitting
+  a filter bound costs one wrong number in a bucket that usually loses to
+  `total`, while suppressing a real rate drops the vendor out of the race
+  entirely.
 
   **This changes no answer today, and that is the interesting part.** Hertz also
   prints "$226 est. total" per card, `total` outranks `unknown` in
-  `BASIS_PREFERENCE`, and the bare `$42` classifies `unknown` — so the only thing
+  `BASIS_PREFERENCE`, and a bare `$42` falls to the unknown basis — so the only
+  thing
   between that filter bound and the headline price is one wording on one
   vendor's card. The test that matters is therefore the one with the totals
   removed; the version covering the page as it renders today passes with the
