@@ -18,6 +18,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "codes": "./scripts/extract_codes.py",
+    "icons": "./scripts/make-icons.sh",
     "build:reset": "vite build --config vite.reset.config.ts"
   },
   "devDependencies": {
