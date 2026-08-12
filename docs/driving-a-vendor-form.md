@@ -206,29 +206,14 @@ name, and nothing maps a code to the name it should produce.
 has a free slot and _skips past_ a capped one, so a single National tab in flight
 never idles a lane that could be pricing Hertz; when everything left is capped,
 the lane parks on a waiter rather than spinning or returning — returning would
-drop those quotes with the run reported complete. National, Enterprise **and
-Avis** are all `maxLanes: 1`.
+drop those quotes with the run reported complete. National and Enterprise are
+both `maxLanes: 1`.
 
-Avis is the interesting one, and the reason is not the measurement. Measured on
-2026-08-11: its AWD reaches the page through sessionStorage, which is per-tab,
-and `booking-widget.store` — the shared key the worry named — carries no code at
-all. That closes the client-side question and was twice read as "no cap needed".
-It does not support that: a cookie-identified backend session is untouched by it,
-and nothing can touch it, because no Avis code was found to change a price and so
-no observable delta exists for a leak to appear in.
-
-What decides it is that **Avis has already been caught preferring remembered
-state to the URL** — the Tampa/Philadelphia booking-widget bug that
-`reset-widget-state.ts` exists for. Note what that does not say: the location
-leaked through localStorage and the code lives in sessionStorage, so the
-demonstrated vector provably does not carry the code. What carries over is the
-vendor's disposition rather than the mechanism, and that is a narrow inference
-about one site rather than a general principle. Hertz has never been observed
-doing the same and stays uncapped. CLAUDE.md has the full result.
-
-National's cap is unaffected by any of it: what National shares is form state
-that survives into a fresh tab, a different mechanism and one that was observed
-rather than reasoned about.
+This is the same hazard CLAUDE.md records as an open question for Avis
+("Concurrent Avis tabs share one `localStorage`"), except at National it is
+observed rather than suspected. Avis is deliberately left uncapped: capping it
+would halve its throughput on a hunch, and it is now a one-line change the day
+someone measures it.
 
 Incidentally confirmed: National and Enterprise really do share a backend. The
 lookup goes to `prd.location.enterprise.com/enterprise-sls/search/location/national/…`.
