@@ -21,7 +21,13 @@ set -uo pipefail
 # held only while the script ran to completion: a crash exits non-zero, which a
 # PreToolUse hook treats as a *non-blocking* error, and the command proceeds.
 # Cleared explicitly on every intended exit path.
-trap 'printf "%s\n" "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Refused: the pre-PR gate exited unexpectedly, so npm run verify did not complete. A bug in scripts/pre-pr-verify.sh rather than a problem with the diff.\"}}"' ERR
+UNEXPECTED='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Refused: the pre-PR gate exited unexpectedly, so npm run verify did not complete. A bug in scripts/pre-pr-verify.sh rather than a problem with the diff."}}'
+# The `exit 0` is load-bearing. Without it the trap printed and *fell through*,
+# so a failing verify emitted this document and then the real deny — two JSON
+# objects on stdout, which the hook parser cannot parse, so it treats the whole
+# thing as plain text, finds no decision, and **allows the command**. A gate
+# that fails open on precisely the path it exists for. Measured, not theorised.
+trap 'printf "%s\n" "$UNEXPECTED"; exit 0' ERR
 
 allow() {
   trap - ERR
@@ -31,17 +37,33 @@ allow() {
 # `deny <reason>` — refuse the tool call and say why.
 deny() {
   trap - ERR
+  # Falls back rather than trusting jq to work. Every refusal in this script is
+  # formatted by jq, and `trap - ERR` above means a jq that exits non-zero here
+  # printed *nothing* and allowed the command — the same fail-open, reached
+  # through a present-but-broken jq instead of a missing one.
   jq -n --arg reason "$1" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: $reason
     }
-  }'
+  }' || printf '%s\n' "$UNEXPECTED"
   exit 0
 }
 
 payload=$(cat)
+
+# **Filter on the raw payload first, before jq is needed at all.** This hook is
+# registered against `Bash`, so it sees every command in the project. With the
+# jq guards ahead of the match, a machine without jq refused *every Bash call*
+# — the repo became unusable rather than merely un-PR-able. A substring test on
+# the whole JSON blob is strictly broader than the same test on the extracted
+# command, so it cannot leak a PR creation; it just costs nothing on the
+# overwhelming majority of calls.
+case "$payload" in
+*"gh pr create"*) ;;
+*) allow ;;
+esac
 
 # jq is how the payload is read at all, so a missing jq cannot be allowed to
 # mean "not a PR command". Written by hand rather than through `deny`, which
@@ -96,7 +118,12 @@ while [ -n "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
   fi
   probe=$(dirname "$probe")
 done
-[ -n "$repo_root" ] || repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# No fallback to this script's own directory. That fallback *was* the bug: in
+# the real deployment the script lives in the main checkout, whose package name
+# matches, so an unresolvable cwd quietly verified main and allowed the PR.
+if [ -z "$repo_root" ]; then
+  deny "Refused: the pre-PR gate could not find a package.json above \"$cwd\", so it does not know which tree to verify and will not guess. Run \`gh pr create\` from inside the repo."
+fi
 
 # Whatever we landed on has to be *this* project. `repo_root` comes from the
 # payload and we are about to run its npm scripts, so without this the gate is
@@ -111,6 +138,10 @@ if ! command -v npm >/dev/null 2>&1; then
   deny "Refused: \`npm\` is not on PATH for this hook, so \`npm run verify\` could not run and this PR was not opened. An environment problem, not a test failure — nothing in the diff needs fixing."
 fi
 
+# Disarmed here because a failing `verify` is the expected case, not an
+# unexpected one — leaving the trap armed over this assignment is what made the
+# gate fail open.
+trap - ERR
 output=$(cd "$repo_root" && npm run verify 2>&1)
 status=$?
 
@@ -131,7 +162,11 @@ fi
 # Told apart so the model is not sent hunting a code defect that does not
 # exist. Needing the network at all costs nothing here: `gh pr create` posts to
 # GitHub, so the command being gated could not have run offline either.
-if printf '%s' "$output" |
+# Scoped to the tail rather than the whole transcript: `verify` runs vitest and
+# eslint over this repo, and a test named for a network error — or a prettier
+# diff quoting one — would otherwise misreport a real code failure as a
+# connectivity problem. `npm audit` is the last step, so its output is the end.
+if printf '%s' "$output" | tail -15 |
   grep -qiE 'audit endpoint returned an error|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network error'; then
   deny "Refused: \`npm run verify\` failed in $repo_root, and it looks like the network rather than the diff — \`npm audit\` could not reach the registry. Check connectivity and retry.
 
