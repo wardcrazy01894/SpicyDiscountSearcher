@@ -82,29 +82,32 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Corporate code',
     host: 'www.sixt.com',
-    // Not searchable, and this reverses a close call that was recorded here as
-    // a close call. Its deep link is *measured* to reach no search:
-    // `/php/reservation` 302s to the site root with the location ignored, the
-    // dates ignored, and a marketing "$35" on the page.
+    // Not searchable, and as of 2026-08-12 **closed rather than open**. The
+    // note that stood here was the close-call version: `/php/reservation` 302s
+    // to the site root, one path measured once, so "it comes back the day
+    // someone captures a URL that reaches a real search". Someone did capture
+    // one. That is why this is rewritten rather than amended — the old text
+    // pointed at the wrong obstacle and sent a reader hunting for a URL that
+    // turned out to exist and not to help.
     //
-    // It stayed enabled on the argument that the damage was contained —
-    // `landedElsewhere` flags a home-page landing `suspect` and `compare.ts`
-    // keeps suspect quotes out of the ranking. Two things wrong with that. The
-    // containment is a measurement, not a property: it holds only while the
-    // redirect target is the bare root, and a locale split to `/en/` would put
-    // that $35 back into the ranking with nothing on screen to say so. And a
-    // vendor that cannot answer still spends a lane and a real tab on every
-    // run, now against a codes cap of 100 rather than 12.
+    // What was measured: `/betafunnel/#/offerlist` searches properly on a
+    // `BRANCH:<id>` and replays under a deliberately wrong title. But **no
+    // corporate-code field exists anywhere in Sixt's funnel**, and its
+    // corporate surface is all account login and registration, so a code like
+    // Deloitte's `19145742` appears to need a business account we do not have.
+    // A driver does not rescue it either: there is no field to drive.
+    // `deeplinks.ts` carries the parameters and the full reasoning.
+    //
+    // Racing it uncoded, for its retail rate, was considered and declined the
+    // same day: `BRANCH:<id>` is not derivable from an IATA code and LAX has no
+    // single branch at all, so it needs a hand-captured lookup table that would
+    // rot silently — for a rate nothing suggests beats the codes we do race.
     //
     // Same treatment as budget and enterprise: the three codes stay in the
     // database, the vendor gets no chip, no candidates and no host permission.
     // Dropping sixt.com from the manifest is a real reduction in what this
     // extension may read. No company loses its car listing and none vanishes —
     // every company with a Sixt code has one at another car vendor too.
-    //
-    // It comes back the day someone captures a URL that reaches a real search,
-    // or writes it a driver. Unlike budget and enterprise, nothing proves it
-    // *cannot* work — only that the one path anybody tried does not.
     searchable: false,
   },
   {

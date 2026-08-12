@@ -203,12 +203,17 @@ function unsearchable(
   // prefix, because the vendors do not share one and the difference decides
   // what would fix each. Budget and enterprise keep the search in session
   // state, so no query string can express it and no builder for them can ever
-  // work. Sixt's URL simply reaches the wrong page — one path measured once,
-  // and another may work.
+  // work. Sixt's URL searches perfectly well and has nowhere to put the code.
   //
   // A fixed "cannot be searched by URL" prefix made that distinction
-  // unsayable: it asserted the impossibility for Sixt in the one string a user
-  // actually sees, the `link-build` tooltip.
+  // unsayable, and it would now be flatly wrong for Sixt rather than merely
+  // unprovable — in the one string a user actually sees, the `link-build`
+  // tooltip. (This comment said "Sixt's URL simply reaches the wrong page —
+  // one path measured once, and another may work" until 2026-08-12, when
+  // another path was measured and the vendor closed on the code instead.)
+  //
+  // `vendor` is prepended, so a reason must read as its continuation and must
+  // not name the vendor again.
   return () => {
     throw new Error(`${vendor} ${because}`);
   };
@@ -402,29 +407,77 @@ const BUILDERS: Record<VendorId, Builder> = {
   }),
 
   /**
-   * Sixt refuses rather than building, for a reason of its own.
+   * Sixt refuses rather than building, and **not** because its URL cannot
+   * search. That version of this comment was true of `/php/reservation`, a
+   * legacy path that 302s to the site root, and it closed by inviting the next
+   * reader to capture a working URL. Someone did, on 2026-08-12. It did not
+   * help, and the invitation is what cost the afternoon — hence this rewrite.
    *
-   * Measured: `/php/reservation` 302s to `https://www.sixt.com/` with the
-   * location field empty, the dates ignored, and a marketing "$35" on the page.
-   * Returning a URL for that is the same bad trade budget and enterprise make —
-   * the landing page answers with a plausible number, the probe reads it as a
-   * price, and `compare.ts` never looks at `confidence`.
+   * The live funnel is `https://www.sixt.com/betafunnel/#/offerlist`, and it
+   * replays. Enough to reach real prices:
    *
-   * The distinction from those two is worth keeping, because it decides what
-   * would fix this. Their searches live in session state, so no query string
-   * can ever express one and a builder for them cannot exist. Here, one path
-   * was tried and does not work; another may. Capture a URL that reaches a real
-   * search — README's "Fixing a deep link", and note that replaying it is the
-   * step that matters — or give it a driver.
+   *   zen_pu_branch_id / zen_do_branch_id   BRANCH:<id>
+   *   zen_pu_time / zen_do_time             YYYY-MM-DDTHH:MM
+   *   zen_vehicle_type=car
+   *   zen_pickup_country_code=US, zen_point_of_sale=US
+   *
+   * `zen_session_id`, `zen_offer_matrix_id` and the `zen_pu_location` UUID are
+   * all optional — the app mints or derives them. Proved harder than Avis's
+   * replay: loading Miami's `BRANCH:4` under a deliberately contradictory
+   * `zen_pu_title=Tampa Int Airport` returned Miami's inventory and rewrote the
+   * title back to Miami. The branch id searches; the title is decoration.
+   *
+   * **The blocker is the code, not the URL.** No discount or corporate-code
+   * field exists anywhere in that funnel — not the home form, not the results
+   * page, not the booking-option step — and Sixt's corporate vocabulary is all
+   * account-shaped (`corporateAuthClient`, `CorporateUser`, `CorporateProfile`,
+   * `CorporateInvitations`), with "Register my business" and login the only
+   * corporate entry points on the site. A code like `19145742` appears to need
+   * an authenticated business account. That kills the driver route too: a
+   * driver needs a field, and there is none to drive.
+   *
+   * Two further findings, each of which would have to be solved even if the
+   * code problem were:
+   *
+   * - A branch id is neither an IATA code nor derivable from one (TPA is
+   *   `BRANCH:41217`, MIA is `BRANCH:4`), and not every airport has one. LAX
+   *   and MIA autocomplete only as *areas* (`GOOGLE_PLACES:…`), which route to
+   *   `#/nearbybranches` — a location picker carrying no prices at all. A
+   *   builder taking this file's `Trip` would need a branch table that does not
+   *   exist.
+   * - Every parameter lives in the **fragment**, and `finalPath` truncates at
+   *   the first `#`. So `landedElsewhere` is blind to every Sixt URL alike:
+   *   they all read as `/betafunnel/`. Same shape as the Enterprise
+   *   `reservation.html#car_select` case described in CLAUDE.md.
+   *
+   * The one thing that would reopen this is credentials for a Sixt business
+   * account — not another URL. Recon was foreground-tab, so it establishes URL
+   * shape rather than what the probe would see, and "no field exists" is a
+   * strong negative from four places rather than proof that no private
+   * corporate parameter exists anywhere. Judged not worth pursuing on
+   * 2026-08-12: obtaining a corporate login for Deloitte or Palantir is far
+   * more effort than the vendor is worth. **Sixt is closed, not paused.**
+   *
+   * *"Then race it with no code at all — its retail rate might win anyway."*
+   * A natural idea, raised and declined the same day, and it fails on the
+   * branch id rather than on the code: without a lookup table this builder
+   * still cannot turn `trip.pickUpLocation` into a `BRANCH:<id>`, and for an
+   * airport like LAX no single branch exists to look up. The table would have
+   * to be captured by hand, one airport at a time, and would go silently wrong
+   * whenever Sixt renumbered — a standing maintenance cost for a retail rate
+   * nothing suggests beats the corporate codes we already race. It would also
+   * need a codeless candidate, which `buildCandidates` and the popup's
+   * per-code rows have no concept of today.
    */
   sixt: unsearchable(
     'sixt',
-    // Not "cannot be searched by URL", which is the prefix budget and
-    // enterprise carry and is exactly the claim this vendor's whole entry
-    // refuses to make. This string reaches the user, as the `link-build`
-    // tooltip — so the one place anyone reads it must not say a Sixt URL is
-    // impossible when all that was measured is that the one we had missed.
-    'has no working search URL — the only one measured, /php/reservation, 302s to the site root',
+    // Still not "cannot be searched by URL" — the prefix budget and enterprise
+    // carry — but no longer for the old reason. Sixt's URL *does* search; what
+    // it cannot do is carry a code. This string reaches the user as the
+    // `link-build` tooltip, so it names the actual obstacle: someone reading it
+    // should not go hunting for a better URL, which is what the previous
+    // wording sent one person off to do.
+    'has no field for a corporate code — its search URL works, but corporate rates there appear to need a business account login',
   ),
 
   hilton: (code, trip) => {

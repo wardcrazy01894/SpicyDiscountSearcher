@@ -203,12 +203,21 @@ describe('buildDeepLink', () => {
     }
   });
 
-  it('refuses for sixt, but for a reason that leaves the door open', () => {
-    // Not "session state". Budget and enterprise keep their search somewhere no
-    // query string can reach, so a builder for them can never work. Sixt's URL
-    // merely lands on the wrong page — one path measured once, and another may
-    // work. The message is what tells the next reader which of those it is.
-    expect(() => buildDeepLink('sixt', 'X1', CAR)).toThrow(/302s to the site root/);
+  it('refuses for sixt, naming the code rather than the URL as the obstacle', () => {
+    // This assertion used to pin `/302s to the site root/`, back when Sixt's
+    // refusal was about a URL that missed its search. That reading was measured
+    // wrong on 2026-08-12: `/betafunnel/#/offerlist` searches fine and replays.
+    // What Sixt has no room for is the *code*.
+    //
+    // The distinction is the whole point of pinning the message. Somebody
+    // reading "no working search URL" goes hunting for a better URL — which is
+    // exactly what happened, and the URL they find does not help. Somebody
+    // reading this one knows the obstacle is a business-account login and stops.
+    expect(() => buildDeepLink('sixt', 'X1', CAR)).toThrow(/corporate code/);
+
+    // Still not "session state", which is budget and enterprise's reason and
+    // would be the wrong diagnosis here — Sixt's query string expresses a
+    // search perfectly well.
     expect(() => buildDeepLink('sixt', 'X1', CAR)).not.toThrow(/session state/);
   });
 
