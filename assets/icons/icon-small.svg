@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!--
+    The 32px and 16px artwork, deliberately not the same drawing as icon.svg.
+
+    Same 🌶 emoji, but the coin is dropped and the pepper is scaled up to fill
+    the tile. Measured by looking at the rendered tiles rather than by shrinking
+    and hoping: at 16px the coin is three pixels of noise on the pod's tip, and
+    the padding that frames the 128 is most of a 16px icon.
+    **The rounded corners are not drawn here.** `qlmanage` flattens onto an
+    opaque white ground, so an `rx` in this file left opaque *white* corners
+    rather than transparent ones. See `icon.svg` for the full note.
+    The tile therefore carries no `rx` here. The corners are masked back into
+    the alpha channel after rasterising, by `scripts/round-icon-corners.py` —
+    which an earlier version of this comment said would need "a different
+    toolchain than ships with macOS". That was wrong: the render is already a
+    PNG, make-icons.sh already needs python3 to validate these sources, and
+    rounding it needs nothing beyond `zlib` and `struct`.
+  -->
+  <rect width="128" height="128" fill="#FFF3E0" />
+  <text
+    x="64"
+    y="101"
+    font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"
+    font-size="104"
+    text-anchor="middle"
+  >🌶</text>
+</svg>
