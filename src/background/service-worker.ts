@@ -3,7 +3,7 @@ import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
 import { recordRejected } from '../core/rejected-codes.js';
-import { findVendor, VENDORS } from '../core/vendors.js';
+import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
   Offer,
@@ -90,18 +90,24 @@ const KEEPALIVE_MS = 20_000;
  * how many codes are in the run. Thirteen times that is ~10 minutes today and
  * shrinks automatically if the deadline does.
  *
- * **Derived from the longest deadline any vendor can ask for, not the default.**
- * Once `probeTimeoutMs` existed, basing this on the default would have made the
- * ceiling shorter than a single Enterprise quote is allowed to take: a run of
- * slow Enterprise quotes would trip its own inactivity guard and lose the
- * keepalive mid-race, which is the exact bug this constant was introduced to
- * prevent.
+ * **Still derived from the default, not from the longest vendor budget**, and
+ * that was checked rather than assumed. A version of this briefly used the
+ * longest, on the theory that a ceiling shorter than a single quote's own
+ * budget would let a run of slow quotes trip its own inactivity guard. The
+ * arithmetic says otherwise: `13 x (45s + 750ms)` is **9.9 minutes** against
+ * Enterprise's 120s quote — five times over, not short. Using the longest
+ * instead pushed the ceiling to 26 minutes, which is how long a *wedged* run
+ * would pin the worker and hold a minimised window open, for no benefit.
+ *
+ * The property to preserve if a slower vendor is ever added: this must exceed
+ * one lane's longest deadline plus its stagger. At 9.9 minutes there is room
+ * for a vendor budget of about eight minutes before that stops being true.
  *
  * Tripping it returns the worker to Chrome's ordinary suspension rules, which
  * is what shipped before this keepalive existed — the worst case is the old
  * behaviour, not a new failure.
  */
-const KEEPALIVE_CEILING_MS = 13 * (maxProbeTimeoutMs() + STAGGER_MS);
+const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
 /**
  * This vendor's probe deadline.
  *
@@ -111,14 +117,6 @@ const KEEPALIVE_CEILING_MS = 13 * (maxProbeTimeoutMs() + STAGGER_MS);
  */
 function probeTimeoutFor(vendor: VendorId): number {
   return findVendor(vendor)?.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
-}
-
-/** The longest any single quote may take, across every vendor. */
-function maxProbeTimeoutMs(): number {
-  return VENDORS.reduce(
-    (longest, vendor) => Math.max(longest, vendor.probeTimeoutMs ?? PROBE_TIMEOUT_MS),
-    PROBE_TIMEOUT_MS,
-  );
 }
 
 interface ActiveRun {
@@ -637,10 +635,14 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
     // Absolute, so a vendor that bounces through a consent interstitial and
     // re-injects the probe cannot hand it a fresh budget the background will
     // not honour — the tab used to be killed 5s into a "40s" probe deadline.
-    run.deadlines.set(
-      quote.id,
-      Date.now() + probeTimeoutFor(quote.candidate.vendor) - PROBE_GRACE_MS,
-    );
+    // Read once and used for *both* the probe's deadline and the kill timer
+    // below. They were allowed to disagree once: the deadline honoured the
+    // vendor's budget while the timer stayed on the default, so an Enterprise
+    // tab was closed at 45s against a 115s deadline — `PROBE_GRACE_MS`
+    // inverted by seventy seconds, and `probeTimeoutMs` with no observable
+    // effect at all. The one number is why that cannot recur.
+    const budget = probeTimeoutFor(quote.candidate.vendor);
+    run.deadlines.set(quote.id, Date.now() + budget - PROBE_GRACE_MS);
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -650,7 +652,7 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
           message: 'the tab never reported back before the deadline',
         });
         resolve();
-      }, PROBE_TIMEOUT_MS);
+      }, budget);
 
       run.waiters.set(quote.id, () => {
         clearTimeout(timer);

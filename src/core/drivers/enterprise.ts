@@ -9,6 +9,7 @@ import {
   textOf,
   textOutside,
   waitFor,
+  waitForSettled,
   waitWithRetry,
 } from '../form-driver.js';
 import type { CarTrip } from '../types.js';
@@ -37,47 +38,45 @@ import type { CarTrip } from '../types.js';
  * Two findings that shape the code below:
  *
  * - **The results page names the account holder.** IBM's `5666666` rendered
- *   `I B M CORP (USA)` in the header. That is a per-code check of a kind no
- *   other vendor here offers — it can prove the discount *applied* rather than
- *   being silently dropped. Deliberately not implemented yet: it needs a
- *   trustworthy company-name-to-rendered-name comparison, and `Accenture` vs
- *   `I B M CORP (USA)` is exactly the fuzzy match that produces false failures
- *   and throws away good quotes. See the note in `submitSearch`.
+ *   `I B M CORP (USA)` in the header. That can prove the discount *applied*
+ *   rather than being silently dropped, which is the one failure this driver
+ *   cannot otherwise see: a code Enterprise ignores rather than refuses gives a
+ *   real results page at the retail rate, reported as the company's.
+ *
+ *   **Not implemented, and the reason this comment used to give was wrong.** It
+ *   said the check needed a trustworthy comparison between the workbook's
+ *   company name and the vendor's rendering — `Accenture` against
+ *   `I B M CORP (USA)` — and that such a fuzzy match would throw away good
+ *   quotes. But `accountNamed` in `national.ts` performs no such comparison: it
+ *   asserts only that *an* account name is rendered beside the label, which is
+ *   enough to separate "a discount applied" from "the code vanished". That
+ *   check is available here and was skipped on a bad argument.
+ *
+ *   The real obstacle is narrower: National's version keys off its
+ *   `ACCOUNT NAME` label, and the equivalent markup on Enterprise's results
+ *   page was never captured — only that the holder's name appears in the
+ *   header. Writing a selector from that is a guess, and a wrong one fails good
+ *   quotes with `discount-missing`. Capture the label and its element on a live
+ *   results page and this becomes a ten-line function.
  * - **Enterprise refuses some account numbers outright.** Accenture's
  *   `XZ15J55` came back with "this account number cannot be used online.
  *   Please contact your account manager." That is the vendor answering, not the
  *   driver breaking, and it gets its own code so the popup can say so.
  *
- * ## Why this is not registered in `FORM_DRIVERS` yet
+ * ## What is measured, and what is not
  *
- * **The date control is driven now** — that sentence used to be the whole
- * reason, and on 2026-08-12 it was measured and implemented. `applyDates`
- * carries what the calendar turned out to be, `applyTimes` the dropdowns
- * beside it. Every step here is now filled *and verified against what the form
- * renders back*.
+ * Registered, `searchable: true`, and live since 2026-08-12. Every step below
+ * is filled *and verified against what the form renders back*, which is the
+ * framework's one rule.
  *
- * Three things still stand between that and `searchable: true`, and none of
- * them is code in this file:
+ * Two things are still inference rather than measurement, and both are called
+ * out where they sit: the time dropdowns' option format (only `12:00 PM` was
+ * ever seen, so both padded and bare hours are matched), and the results
+ * page's account-holder markup (seen on screen, never captured — see above).
  *
- * 1. **The probe budget.** The widget took ~40s to mount on the load that
- *    worked, against a `PROBE_TIMEOUT_MS` of 45s of which `DRIVE_SHARE` leaves
- *    the driver ~27s. It does not fit. A per-vendor timeout is the shape of the
- *    fix — the background already sets a deadline per quote — but
- *    `KEEPALIVE_CEILING_MS` derives from that constant, so it lands with the
- *    flag rather than before it.
- * 2. **A bot check.** The form carries a hidden `g-recaptcha-response` field
- *    and its reCAPTCHA loader came back empty on the load that never mounted.
- *    Whether that was Enterprise throttling or a blocker in the measuring
- *    profile is *not established* — the analytics and consent scripts were
- *    empty too, and those are ordinary blocker targets. Either way, minimised
- *    automated tabs are what bot checks exist to catch, and Budget is already
- *    stopped for exactly this.
- * 3. **One clean live run.** Nothing here has been driven end to end in a probe
- *    tab. The unit tests exercise every branch against jsdom, which is not the
- *    same claim.
- *
- * So the driver is complete and unreachable, which is a different state from
- * the one this paragraph used to describe: it no longer refuses on purpose.
+ * The timing problem this section used to list first is solved by
+ * `probeTimeoutMs: 120_000` in `vendors.ts`, since the widget can take ~40s to
+ * mount against a 45s default.
  */
 
 /** Where the form lives. Carries no itinerary — that is the whole point. */
@@ -116,11 +115,11 @@ function carTrip(ctx: DriveContext): CarTrip {
  * search form", because the two want opposite responses: one means the markup
  * moved, the other means back off and try later.
  *
- * **This is also the timing problem that has to be solved before Enterprise
- * becomes searchable.** Forty seconds of hydration against a
- * `PROBE_TIMEOUT_MS` of 45s leaves nothing for filling, submitting, or pricing.
- * Raising that constant is not free — `KEEPALIVE_CEILING_MS` is derived from it
- * — so it is a deliberate change to make with the flag, not a number to nudge.
+ * **This is why Enterprise carries its own probe budget.** Forty seconds of
+ * hydration against the 45s default leaves nothing for filling, submitting or
+ * pricing, so `vendors.ts` gives it `probeTimeoutMs: 120_000`. Per-vendor
+ * rather than a raised default, because the default also bounds how long a tab
+ * sits open on every *other* vendor's site.
  */
 export async function awaitHydration(ctx: DriveContext): Promise<HTMLInputElement> {
   return waitFor(ctx, "Enterprise's booking widget to hydrate (it may be throttling us)", () =>
@@ -533,7 +532,12 @@ export async function applyTimes(ctx: DriveContext): Promise<void> {
 
     const value = option.value;
     setNativeValue(select, value);
-    await waitFor(
+    // `waitForSettled`, not `waitFor`: the latter reads before its first sleep,
+    // and `setNativeValue` has already made `select.value` equal to `value` on
+    // this tick — so it would be checking our own assignment rather than the
+    // form's acceptance of it, and would pass on a control that reverts. That
+    // is the noon default going out as the user's trip.
+    await waitForSettled(
       ctx,
       `the ${which} time control to keep ${hhmm}`,
       () => timeSelect(ctx, which)?.value === value,
@@ -549,10 +553,17 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
   // Read back rather than trust the write, and *wait* for the read-back rather
   // than taking it immediately. A controlled input that rejected the value looks
   // identical from here otherwise, and submitting without a code prices the
-  // retail rate and reports it as the company's. The wait is not padding: a
-  // framework-backed field re-renders on its own schedule, so checking on the
-  // same tick tests our assignment rather than the page's acceptance of it.
-  await waitFor(ctx, 'the account number field to keep the code', () => cid.value === ctx.code);
+  // retail rate and reports it as the company's.
+  //
+  // This comment described the wait correctly and the code did not do it:
+  // `waitFor` reads before its first sleep, so it saw the value `setNativeValue`
+  // had just written and returned on the same tick — exactly the "tests our
+  // assignment rather than the page's acceptance" it warns against.
+  await waitForSettled(
+    ctx,
+    'the account number field to keep the code',
+    () => cid.value === ctx.code,
+  );
 }
 
 /**

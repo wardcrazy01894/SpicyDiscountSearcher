@@ -11,11 +11,13 @@
  * the point is that a change to *our* code is deliberate, not that Enterprise
  * still looks like this.
  *
- * The load-bearing test in here is the one asserting the driver **fails**:
- * `applyDates` is unimplemented, so a run today must stop before submitting
- * rather than price the form's default dates. If that test ever starts failing
- * because the driver got further, the date control had better be driven *and*
- * verified first.
+ * The load-bearing tests in here are the ones that pin *refusals*: a date the
+ * vendor disabled, a time the dropdown does not offer, a control that reverts
+ * after being set, and a return click that moves the pick-up. Each of those,
+ * unnoticed, submits a search for a trip nobody asked for and reports its price
+ * as the user's — which is worse than a failed quote, not better. The fixture
+ * models the three calendar traps measured on the live form, so a driver that
+ * stops handling one of them fails here.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -40,9 +42,13 @@ const TRIP: CarTrip = {
   pickupLocation: 'TPA',
   dropoffLocation: '',
   pickupDate: '2026-09-04',
-  pickupTime: '12:00',
+  // Deliberately NOT noon. The fixture's selects default to `12:00 PM`, which
+  // is also what the live form defaults to — so a trip at noon cannot tell
+  // "the times were driven" from "the times were never touched", and deleting
+  // `applyTimes` from `drive` left every test in this file green.
+  pickupTime: '09:30',
   dropoffDate: '2026-09-06',
-  dropoffTime: '12:00',
+  dropoffTime: '17:00',
 };
 
 /** Verbatim from the live site, minus the airport list. */
@@ -63,6 +69,16 @@ interface FormOptions {
   disabledDates?: string[];
   /** Time dropdown options. Defaults to the half-hourly list, bare-hour form. */
   timeOptions?: string[];
+  /**
+   * Model a controlled `<select>` that reverts *asynchronously*.
+   *
+   * The realistic React shape, and the one a same-tick read-back cannot see:
+   * the component re-renders from its own state a microtask later and throws
+   * the written value away.
+   */
+  timeRevertsAsync?: boolean;
+  /** Model a return click that also moves the pick-up, as a range picker can. */
+  returnClickMovesPickup?: boolean;
 }
 
 const MONTH_NAMES = [
@@ -110,7 +126,13 @@ function halfHourly(): string[] {
  *    styled out rather than disabled, so a `.disabled` test sees it as usable.
  */
 function renderDateTime(host: HTMLElement, options: FormOptions): void {
-  const { firstMonth = [2026, 7], disabledDates = [], timeOptions = halfHourly() } = options;
+  const {
+    firstMonth = [2026, 7],
+    disabledDates = [],
+    timeOptions = halfHourly(),
+    timeRevertsAsync = false,
+    returnClickMovesPickup = false,
+  } = options;
 
   const earliest = firstMonth[0] * 12 + firstMonth[1];
   let shown = earliest;
@@ -137,6 +159,13 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
       select.append(option);
     }
     select.value = '12:00 PM';
+    if (timeRevertsAsync) {
+      select.addEventListener('change', () => {
+        void Promise.resolve().then(() => {
+          select.value = '12:00 PM';
+        });
+      });
+    }
   }
 
   const calendarHost = wrap.querySelector<HTMLElement>('.calendar-host')!;
@@ -207,6 +236,9 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
             ret = '';
           } else {
             ret = cell.id;
+            // A range picker re-derives both ends from the two clicks, so
+            // choosing a return can move the pick-up underneath it.
+            if (returnClickMovesPickup) pickup = '01/01/2026';
           }
           open = null;
           paintToggles();
@@ -518,6 +550,18 @@ describe('applyDates', () => {
     ).toContain('10/15/2026');
   });
 
+  it('catches a return click that moves the pick-up underneath it', async () => {
+    // Why the final check reads *both* toggles rather than just the return.
+    // The widget re-derives the range from the two clicks, so choosing the
+    // return can move the pick-up — and a driver that verified only the end it
+    // had just set would submit a trip starting somewhere else entirely.
+    // Dropping the pick-up half of that condition left every test here green.
+    renderForm({ returnClickMovesPickup: true });
+    const error = await failureOf(applyDates(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/the trip 09\/04\/2026\.\.09\/06\/2026/);
+  });
+
   it('refuses a date the vendor has disabled, rather than paging forever', async () => {
     renderForm({ disabledDates: ['09/04/2026'] });
     const error = await failureOf(applyDates(makeContext()));
@@ -559,6 +603,19 @@ describe('applyTimes', () => {
     expect(document.querySelector<HTMLSelectElement>('select[aria-label^="Pick-Up"]')?.value).toBe(
       '09:30 AM',
     );
+  });
+
+  it('catches a control that reverts after we set it', async () => {
+    // The failure `applyTimes` exists to prevent, and the one a same-tick
+    // read-back cannot see: `setNativeValue` makes `select.value` correct
+    // immediately, so checking on that tick tests our own assignment. A React
+    // select that re-renders from its own state a microtask later then throws
+    // the value away, the check has already passed, and noon is submitted as
+    // the user's trip — a real page, a real number, the wrong rental.
+    renderForm({ timeRevertsAsync: true });
+    const error = await failureOf(applyTimes(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/time control to keep/);
   });
 
   it('refuses a time the dropdown does not offer', async () => {
@@ -649,6 +706,13 @@ describe('drive', () => {
     expect(
       document.querySelector('#pickupCalendarFocusable')?.getAttribute('aria-label'),
     ).toContain('09/04/2026');
+    // The times too, and this is the half that was missing: with the trip at
+    // noon these read the fixture's own default and passed with `applyTimes`
+    // deleted from `drive` entirely.
+    const timeOf = (which: string) =>
+      document.querySelector<HTMLSelectElement>(`select[aria-label^="${which}"]`)?.value;
+    expect(timeOf('Pick-Up')).toBe('9:30 AM');
+    expect(timeOf('Return')).toBe('5:00 PM');
   });
 
   it('never submits a form whose trip it could not express', async () => {

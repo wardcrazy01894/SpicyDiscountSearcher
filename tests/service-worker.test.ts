@@ -4,7 +4,6 @@ import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
 import { buildDeepLink } from '../src/core/deeplinks.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
-import { VENDORS } from '../src/core/vendors.js';
 
 const TRIP: CarTrip = {
   category: 'car',
@@ -85,21 +84,8 @@ const HORIZON_MS = 150_000;
 const MAX_GAP_MS = 25_000;
 /** Pokes to expect over `ms`, if no silence exceeds MAX_GAP_MS. */
 const pokesOver = (ms: number): number => Math.floor(ms / MAX_GAP_MS);
-/**
- * The longest deadline any vendor may ask for, which is what the ceiling is
- * built on rather than the default.
- *
- * Enterprise sets it today, at 120s, because its booking widget can take ~40s
- * to mount. Read from the registry rather than restated as a number: a ceiling
- * shorter than a single quote's own budget would let a run of slow quotes trip
- * its own inactivity guard, and hard-coding it here would hide exactly that.
- */
-const MAX_PROBE_TIMEOUT_MS = Math.max(
-  PROBE_TIMEOUT_MS,
-  ...VENDORS.map((vendor) => vendor.probeTimeoutMs ?? PROBE_TIMEOUT_MS),
-);
 /** src/background/service-worker.ts KEEPALIVE_CEILING_MS, same derivation. */
-const CEILING_MS = 13 * (MAX_PROBE_TIMEOUT_MS + 750);
+const CEILING_MS = 13 * (PROBE_TIMEOUT_MS + 750);
 
 describe('surviving MV3 suspension', () => {
   it('never leaves a 30s gap while a run is in flight', async () => {
@@ -1200,6 +1186,54 @@ describe('a run the browser interrupted', () => {
 
     expect(chromeMock.windows.has(orphan.id)).toBe(false);
     expect(chromeMock.session.has('runWindow')).toBe(false);
+  });
+});
+
+describe('a vendor that asks for a longer probe budget', () => {
+  // Enterprise's booking widget can take ~40s to mount, so `vendors.ts` gives
+  // it `probeTimeoutMs: 120_000`. Nothing asserted that it took effect, and it
+  // did not: the *deadline* honoured the vendor while the background's own kill
+  // timer stayed on the 45s default, so the tab was closed seventy seconds
+  // before the probe's budget expired and `probeTimeoutMs` changed nothing
+  // observable. Replacing `probeTimeoutFor`'s body with the default left all
+  // 546 tests green.
+
+  const enterprisePlan = (): SearchPlan => ({
+    trip: TRIP,
+    candidates: [
+      {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'enterprise',
+        code: '5666666',
+        note: null,
+      },
+    ],
+    concurrency: 1,
+  });
+
+  it('is still alive well past the default deadline', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    // Comfortably past 45s, comfortably short of 120s. A vendor on the default
+    // budget is long dead here.
+    await settle(PROBE_TIMEOUT_MS + 20_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.finishedAt, 'killed at the default deadline').toBeUndefined();
+    expect(chromeMock.tabs.size, 'its tab was closed early').toBe(1);
+  });
+
+  it('does time out eventually, at its own deadline', async () => {
+    // The other half: a longer budget is not an unbounded one.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    await settle(130_000);
+
+    expect((await getState())?.quotes[0]?.failure).toBe('probe-timeout');
   });
 });
 

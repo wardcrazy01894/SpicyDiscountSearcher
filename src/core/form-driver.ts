@@ -133,6 +133,36 @@ export async function waitFor<T>(
 }
 
 /**
+ * `waitFor`, but never satisfied by the state on the calling tick.
+ *
+ * **For reading a value back after writing it, where `waitFor` cannot fail.**
+ * `setNativeValue` writes through the prototype setter, so `el.value` already
+ * equals what was written by the time the next statement runs — and `waitFor`
+ * reads before its first sleep. A controlled component that rejects the value
+ * does so a microtask or a render later, which is *after* the check has
+ * returned successfully.
+ *
+ * So a read-back written as `waitFor(..., () => el.value === wanted)` tests our
+ * own assignment rather than the page's acceptance of it, and passes on a form
+ * that threw the value away. That is a wrong price rather than a failed quote:
+ * the field falls back to its default, the search runs, and the number comes
+ * back as the user's. Measured against a select that reverts in a resolved
+ * promise — the check passed and the form was back at its default.
+ *
+ * One poll of delay is the entire difference, and it is cheap: the driver is
+ * already polling at this rate for everything else.
+ */
+export async function waitForSettled<T>(
+  ctx: DriveContext,
+  describe: string,
+  read: () => T | null | undefined,
+  failure: DriverFailure = 'form-fill',
+): Promise<T> {
+  await ctx.sleep(POLL_MS);
+  return waitFor(ctx, describe, read, failure);
+}
+
+/**
  * How long to leave a page alone before prompting it a second time.
  *
  * Deliberately generous, and the number matters more than it looks. Probe tabs
