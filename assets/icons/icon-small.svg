@@ -6,15 +6,15 @@
     the tile. Measured by looking at the rendered tiles rather than by shrinking
     and hoping: at 16px the coin is three pixels of noise on the pod's tip, and
     the padding that frames the 128 is most of a 16px icon.
-    **No rounded corners, and no transparency.** `qlmanage` flattens whatever it
-    rasterises onto an opaque white ground, so an `rx` here did not round the
-    tile — it left four opaque *white* corners around a cream inset, which on a
-    dark toolbar reads as a white square with something floating in it. That was
-    a regression against the old percent-sign icons, which had genuine alpha.
-    The tile is therefore full-bleed: the cream covers every pixel, so there is
-    no ground for the flatten to show through. Restoring real transparency needs
-    a rasteriser that preserves it, which is a different toolchain than "ships
-    with macOS".
+    **The rounded corners are not drawn here.** `qlmanage` flattens onto an
+    opaque white ground, so an `rx` in this file left opaque *white* corners
+    rather than transparent ones. See `icon.svg` for the full note.
+    The tile therefore carries no `rx` here. The corners are masked back into
+    the alpha channel after rasterising, by `scripts/round-icon-corners.py` —
+    which an earlier version of this comment said would need "a different
+    toolchain than ships with macOS". That was wrong: the render is already a
+    PNG, make-icons.sh already needs python3 to validate these sources, and
+    rounding it needs nothing beyond `zlib` and `struct`.
   -->
   <rect width="128" height="128" fill="#FFF3E0" />
   <text

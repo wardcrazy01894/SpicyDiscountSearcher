@@ -91,7 +91,7 @@ else.
 - **`src/core/vendors.ts` is the source of truth for hosts.** Adding a vendor
   means adding it there, then updating `public/manifest.json` — `tests/manifest.test.ts`
   pins the two together and will fail if you forget.
-- **Two vite builds, on purpose.** MV3 content scripts aren't ES modules, so
+- **Three vite builds, on purpose.** MV3 content scripts aren't ES modules, so
   `vite.content.config.ts` bundles `src/content/probe.ts` as a single IIFE with
   `emptyOutDir: false`. Run order matters; `npm run build` handles it.
   `scripts/check-dist.mjs` parses the built content script as a _classic_

@@ -31,7 +31,7 @@ trap 'rm -rf "$work"' EXIT
 # below), and — worse — `qlmanage -t` on a file that does not exist never
 # returns at all, so a renamed source hangs the script with no output rather
 # than failing.
-for tool in qlmanage sips; do
+for tool in qlmanage sips python3; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "make-icons: needs macOS \`$tool\`; this script does not run on other platforms" >&2
     exit 1
@@ -58,6 +58,16 @@ for source in icon.svg icon-small.svg; do
     echo "make-icons: $source is not well-formed XML; refusing to render it" >&2
     exit 1
   fi
+  # Well-formed is not the same as *an SVG*. A file wrapped in the wrong root
+  # element parses fine, renders blank, and overwrites the committed icons with
+  # exit 0 — measured. The parse is already in hand, so checking the root
+  # element costs nothing.
+  if ! python3 -c 'import sys,xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot().tag
+sys.exit(0 if root == "{http://www.w3.org/2000/svg}svg" else 1)' "$src/$source" 2>/dev/null; then
+    echo "make-icons: $source parses but its root element is not <svg>" >&2
+    exit 1
+  fi
 
   rm -f "$work/$source.png"
   qlmanage -t -s 512 -o "$work" "$src/$source" >/dev/null 2>&1 || true
@@ -76,5 +86,11 @@ emit icon.svg 128 icon128.png
 emit icon.svg 48 icon48.png
 emit icon-small.svg 32 icon32.png
 emit icon-small.svg 16 icon16.png
+
+# Restore the alpha qlmanage flattened away. The SVGs carry no `rx` because
+# rounding them there produced opaque *white* corners rather than transparent
+# ones; the rounding happens here instead, on the rendered pixels.
+python3 "$root/scripts/round-icon-corners.py" \
+  "$out/icon128.png" "$out/icon48.png" "$out/icon32.png" "$out/icon16.png"
 
 echo "wrote icon16 icon32 icon48 icon128 to public/icons"

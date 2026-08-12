@@ -10,10 +10,12 @@
     emoji is a properly drawn chilli that everybody already recognises, which is
     most of the job of a 48px icon.
 
-    The car and hotel are deliberately **not** in `icon-small.svg`. They are
-    legible here and turn to specks by 32px, so the small tile drops them and
-    keeps the silhouette instead — the pepper is the only shape that survives
-    16px, and three competing marks at that size communicate nothing.
+    The car and hotel are deliberately **not** in `icon-small.svg`. They read
+    at 128 and are already indistinct at 48 — the smaller of the two sizes this
+    file drives, where they render about 10px tall — so `icon-small.svg` drops
+    them entirely rather than shrinking them further. The pepper is the only
+    shape that survives 16px, and three competing marks at that size
+    communicate nothing.
 
     These rasterise to whatever colour emoji font the machine running
     `make-icons.sh` has — Apple Color Emoji on macOS. Fine for a side-loaded
@@ -21,15 +23,18 @@
     this is ever published to the Chrome Web Store, redraw from an openly
     licensed set (Twemoji is CC-BY 4.0, Noto Emoji is OFL) rather than shipping
     these.
-    **No rounded corners, and no transparency.** `qlmanage` flattens whatever it
-    rasterises onto an opaque white ground, so an `rx` here did not round the
-    tile — it left four opaque *white* corners around a cream inset, which on a
-    dark toolbar reads as a white square with something floating in it. That was
-    a regression against the old percent-sign icons, which had genuine alpha.
-    The tile is therefore full-bleed: the cream covers every pixel, so there is
-    no ground for the flatten to show through. Restoring real transparency needs
-    a rasteriser that preserves it, which is a different toolchain than "ships
-    with macOS".
+    **The rounded corners are not drawn here.** `qlmanage` flattens whatever it
+    rasterises onto an opaque white ground, so an `rx` in this file did not
+    round the tile — it left four opaque *white* corners around a cream inset,
+    which on a dark toolbar reads as a white square with something floating in
+    it. That was a regression against the old percent-sign icons, which had
+    genuine alpha.
+    The tile therefore carries no `rx` here. The corners are masked back into
+    the alpha channel after rasterising, by `scripts/round-icon-corners.py` —
+    which an earlier version of this comment said would need "a different
+    toolchain than ships with macOS". That was wrong: the render is already a
+    PNG, make-icons.sh already needs python3 to validate these sources, and
+    rounding it needs nothing beyond `zlib` and `struct`.
   -->
   <rect width="128" height="128" fill="#FFF3E0" />
   <text
