@@ -49,8 +49,9 @@ else.
 ## Ground rules
 
 - **Run `npm run verify` before opening a PR.** It is the whole node side of CI
-  in one command — typecheck, eslint, `prettier --check`, vitest, both builds,
-  and `check-dist`. Added on 2026-08-12 because PR #65 failed the
+  in one command — typecheck, eslint, `prettier --check`, vitest, **all three**
+  builds, `check-dist`, and `npm audit --audit-level=moderate`. Added on
+  2026-08-12 because PR #65 failed the
   `build / typecheck / lint` job **twice** on things a local run would have
   caught in seconds: the author ran `vitest` and `tsc` by hand and simply did
   not think of `prettier`, which then failed on a markdown table whose padding
@@ -74,6 +75,20 @@ else.
   `gh pr create` if it fails, so this rule does not depend on anybody
   remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
   for every command that is not a PR creation.
+
+  Three things about that script are load-bearing and were all wrong in its
+  first version, found by reviewing #66 after it had already merged:
+
+  - It matches `gh pr create` as a **command**, not as a substring. That phrase
+    appears in prose — in this file, in the script's own header — so a substring
+    test refused `grep -rn "gh pr create"` and ran a full build to do it.
+  - It verifies the tree named by the payload's **`cwd`**, not the one the
+    script lives in. Agents run in worktrees here, and deriving the root from
+    `BASH_SOURCE` checked the main checkout instead: clean `main` passes, the
+    gate allows, the worktree's broken branch ships.
+  - It **fails closed**. A missing `jq` used to leave `command` empty, fall
+    through the match, and allow every PR silently. A gate that fails open is
+    worse than no gate, because it reports nothing.
 
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
   `scripts/extract_codes.py` or the workbook and re-run `npm run codes`. CI
