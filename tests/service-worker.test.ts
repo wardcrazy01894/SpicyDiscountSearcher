@@ -683,6 +683,42 @@ describe('politeness', () => {
     expect(chromeMock.windowUpdates.filter((u) => u.state === 'minimized')).toHaveLength(1);
   });
 
+  it('raises a window another lane had already created minimised', async () => {
+    // The interleaving the first version got wrong. `setAwaitingPaint` applies
+    // the state immediately, but a lane registering while `windows.create` is
+    // still in flight finds `run.windowId` null and applies nothing — and
+    // `ensureWindow` decides `state` when it *calls* create, so a Hertz lane
+    // that got there a moment earlier fixes the window minimised. Nothing then
+    // re-applied it, the Enterprise tab opened into an unpainted window, and
+    // its form never mounted: the exact production failure, reintroduced by the
+    // fix for it.
+    await bootWorker();
+    chromeMock.delayWindowCreate(50);
+    const mixed: SearchPlan = {
+      trip: TRIP,
+      candidates: [
+        { companySlug: 'acme', companyName: 'Acme', vendor: 'hertz', code: 'H1', note: null },
+        {
+          companySlug: 'ibm',
+          companyName: 'IBM',
+          vendor: 'enterprise',
+          code: '5666666',
+          note: null,
+        },
+      ],
+      concurrency: 2,
+    };
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
+    await settle(200);
+
+    // However the race fell out, the window must end up painted while the
+    // Enterprise quote is mounting — whether by being created that way or by
+    // being raised afterwards.
+    const createdNormal = chromeMock.windowOptions[0]?.state === 'normal';
+    const raised = chromeMock.windowUpdates.some((u) => u.state === 'normal');
+    expect(createdNormal || raised).toBe(true);
+  });
+
   it('caps concurrency at six however many the popup asks for', async () => {
     await bootWorker();
     const greedy = { ...plan(50) };

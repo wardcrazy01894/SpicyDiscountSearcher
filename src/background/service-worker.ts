@@ -727,10 +727,19 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
     // visible rather than creating it minimised and raising it a moment later —
     // the tab starts loading immediately, and a form that has already decided
     // not to mount is not persuaded by a later repaint.
-    if (findVendor(quote.candidate.vendor)?.needsPaintedWindow) {
-      await setAwaitingPaint(run, quote.id, true);
-    }
+    const needsPaint = findVendor(quote.candidate.vendor)?.needsPaintedWindow === true;
+    if (needsPaint) await setAwaitingPaint(run, quote.id, true);
     const windowId = await ensureWindow(run);
+    // Re-applied *after* the window exists, and this is not belt-and-braces.
+    // `setAwaitingPaint` above can only apply a state to a window that is
+    // already there, and `ensureWindow` fixes `state` at the moment it calls
+    // `windows.create` — so a lane that got there a moment earlier creates it
+    // minimised, this quote registers into the gap while that create is still
+    // in flight, and nothing ever raises it. The tab then opens into an
+    // unpainted window and the form never mounts: the production failure this
+    // whole flag exists to fix, reintroduced by the fix for it. Pinned by
+    // "raises a window another lane had already created minimised".
+    if (needsPaint) await applyWindowState(run);
     // Cancel can land while the window is still opening. Without this the run
     // goes on to load vendor pages *after* the user pressed Cancel, which is
     // exactly the hijacking the minimised window exists to avoid.
