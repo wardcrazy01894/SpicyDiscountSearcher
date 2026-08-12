@@ -791,24 +791,25 @@ function sweep(root: Element): Offer[] {
  */
 export interface Extraction {
   offers: Offer[];
-  path: 'vendor-selectors' | 'generic-sweep';
   /**
-   * Whether any container this vendor names was actually in the document.
+   * Which branch produced these offers, and — for `body-fallback` — a warning
+   * about where they came from.
    *
-   * False means the prices below — if any — came from sweeping `doc.body`
-   * because nothing matched, which is a different thing from sweeping the
-   * results container and finding no `offer` selector. The caller needs to tell
-   * those apart: on a page that has not finished rendering, the whole-body
-   * sweep reaches banners and promos that the container would have excluded.
+   * `body-fallback` means no container this vendor names was in the document,
+   * so the sweep ran over `doc.body` and the offers may have come from anywhere
+   * on the page. That is **provenance, not presence**: an earlier attempt at
+   * this reported merely whether a container existed, which is a different
+   * question and does not answer this one. A page can perfectly well render an
+   * empty `<main>` while a promo banner outside it is the only price — and then
+   * "a container exists" is true and the price is still junk.
    *
-   * Measured on Hertz. Its results page is entirely client-rendered — the
-   * server sends 17KB with no `<main>` at all — so at `document_idle` no
-   * container exists, the sweep falls to `doc.body`, and the only price on the
-   * page is a Car Sales promo reading "Like-new cars for under $20,000". It
+   * Measured on Hertz, whose results page is entirely client-rendered: the
+   * server sends ~17KB with no `<main>`, and a Car Sales promo reading
+   * "Like-new cars for under $20,000" sits outside the results container. It
    * does not change between polls, so the probe concluded prices had settled
    * and reported $20,000 for every code.
    */
-  containerFound: boolean;
+  path: 'vendor-selectors' | 'generic-sweep' | 'body-fallback';
 }
 
 /**
@@ -843,22 +844,20 @@ function containerRoots(doc: Document, selector: string | undefined): Element[] 
 
 export function extract(doc: Document, vendor: VendorId): Extraction {
   const config = VENDOR_SELECTORS[vendor] ?? {};
-  const roots = containerRoots(doc, config.container);
-  for (const root of roots) {
+  for (const root of containerRoots(doc, config.container)) {
     const found = extractFrom(root, config);
-    if (found.offers.length > 0) return { ...found, containerFound: true };
+    if (found.offers.length > 0) return found;
   }
   // Nothing any named container could price. The sweep over the whole body is
-  // the honest default because it is the branch that would have run — but the
-  // caller is told whether a container existed at all, because "the container
-  // is there and holds no prices" and "the page has not rendered its container
-  // yet" want opposite responses.
-  const containerFound = roots.length > 0;
-  if (!doc.body) return { offers: [], path: 'generic-sweep', containerFound };
-  return { ...extractFrom(doc.body, config), containerFound };
+  // still the honest default — it is the branch that would have run — but it is
+  // *labelled*, because these offers were found outside every scope this vendor
+  // trusts and the caller has to be able to weigh them differently.
+  if (!doc.body) return { offers: [], path: 'body-fallback' };
+  const swept = extractFrom(doc.body, config);
+  return { offers: swept.offers, path: 'body-fallback' };
 }
 
-function extractFrom(root: Element, config: VendorSelectors): Omit<Extraction, 'containerFound'> {
+function extractFrom(root: Element, config: VendorSelectors): Extraction {
   const offerNodes = allMatches(root, config.offer);
   if (offerNodes.length > 0) {
     const offers: Offer[] = [];

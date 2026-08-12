@@ -316,25 +316,32 @@ describe('waiting for the page to settle', () => {
 
 describe("a price outside the vendor's container", () => {
   // The Hertz regression, reproduced. Its results page is entirely
-  // client-rendered — the server sends ~17KB with no `<main>` at all — so at
-  // `document_idle` the container selector misses, `extract` sweeps `doc.body`
-  // instead, and the only price on the page is a Car Sales promo reading
-  // "Like-new cars for under $20,000". It never changes, so the settle check
-  // was satisfied on the second poll and every quote came back at $20,000.
+  // client-rendered — the server sends ~17KB with no `<main>` — and a Car Sales
+  // promo reading "Like-new cars for under $20,000" sits outside the results
+  // container. It never changes, so the settle check was satisfied on the
+  // second poll and every quote came back at $20,000.
   //
   // Note the fixture used by the tests above wraps its card in `<main>`, which
   // is why none of them saw this.
   const PROMO = '<div class="footer-promo">Like-new cars for under $20,000</div>';
 
-  it('does not report a promo found while the container is still missing', async () => {
+  it('does not settle on a promo while no container holds prices', async () => {
     document.body.innerHTML = PROMO;
     await run(POLL * 6);
     expect(sent).toEqual([]);
   });
 
+  it('does not settle on it once an empty container renders either', async () => {
+    // The case that killed the first version of this fix, which asked whether a
+    // container *existed* rather than whether the prices came from one. Hertz
+    // commits its shell before the rates arrive, so `<main>` is there and empty
+    // while the advert is still the only price on the page.
+    document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
+    await run(POLL * 6);
+    expect(sent).toEqual([]);
+  });
+
   it('reports the container price once the page finally renders it', async () => {
-    // The common case: the container is merely late. The promo is on the page
-    // throughout, and must not win once real prices exist.
     document.body.innerHTML = PROMO;
     await run(POLL * 3);
     expect(sent).toEqual([]);
@@ -346,14 +353,25 @@ describe("a price outside the vendor's container", () => {
     expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([29.99]);
   });
 
-  it('times out rather than reporting the promo, if the container never comes', async () => {
-    // The trade this makes: a vendor whose container genuinely disappears goes
-    // from a confident wrong number to a visible failure. That is the same
-    // choice `deeplinks.ts` makes when it throws on a malformed date.
-    document.body.innerHTML = PROMO;
+  it('still reports a body sweep at the deadline rather than losing it', async () => {
+    // The half that makes waiting safe. A vendor whose results page genuinely
+    // has no container we know about would otherwise go from priced to
+    // `probe-empty` — real prices thrown away to protect against somebody
+    // else's promo. Waiting gives a late container the rest of the budget to
+    // appear and win; if none ever does, this is still the answer.
+    document.body.innerHTML = '<div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>';
     await run(TIMEOUT_MS + POLL);
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.failure).toBe('probe-empty');
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([29.99]);
+  });
+
+  it('says in the report that the scope was lost', async () => {
+    // `body-fallback` is what makes the above readable afterwards: without it a
+    // sweep that reached a footer is indistinguishable from an ordinary one.
+    document.body.innerHTML = '<div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>';
+    await run(TIMEOUT_MS + POLL);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
   });
 });
 

@@ -209,12 +209,10 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
     // read has assigned it. eslint 10's no-useless-assignment spotted the dead
     // [] this used to carry.
     let offers: Offer[];
-    let containerFound: boolean;
     try {
       const extraction = extract(document, assignment.vendor);
       offers = extraction.offers;
       path = extraction.path;
-      containerFound = extraction.containerFound;
     } catch (error) {
       await send({
         type: 'PROBE_FAILED',
@@ -232,27 +230,33 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
       continue;
     }
 
-    // **A price found outside the vendor's container is not a result yet.**
-    // Hertz's results page is entirely client-rendered: the server sends 17KB
-    // with no `<main>`, so at `document_idle` no container exists, the sweep
-    // falls through to `doc.body`, and the only price on the page is a Car
-    // Sales promo — "Like-new cars for under $20,000". It is perfectly stable
-    // between polls, so the settle check below was satisfied immediately and
-    // every Hertz quote came back at $20,000. Observed in a real run.
+    // **A price found outside every container this vendor names does not settle
+    // the page.** Hertz's results page is entirely client-rendered: the server
+    // sends ~17KB with no `<main>`, and a Car Sales promo — "Like-new cars for
+    // under $20,000" — sits outside the results container. It is perfectly
+    // stable between polls, so the settle check below was satisfied on the
+    // second read and every Hertz quote came back at $20,000. Observed in a
+    // real run.
     //
-    // Waiting costs nothing when the container is merely late, which is the
-    // common case: `<main>` appears a second or two later and the very next
-    // poll reads real prices from inside it. If it never appears the quote
-    // times out with `probe-empty` instead — a visible failure rather than a
-    // confident wrong number, which is the trade this codebase makes
-    // everywhere else.
-    if (!containerFound) {
+    // It is kept in `latest` rather than discarded, and that is the half that
+    // matters. Refusing to settle is not the same as refusing to report: a
+    // vendor whose results page genuinely has no container we know would
+    // otherwise go from priced to `probe-empty`, losing real prices to fix
+    // somebody else's promo. So a body sweep waits — giving a late container
+    // the rest of the budget to appear and win — and is still what goes out at
+    // the deadline if nothing better ever arrives. `path` says which happened,
+    // so the report can be read afterwards rather than guessed at.
+    // Assigned *before* the guard below, not after, so a body sweep is still
+    // the answer at the deadline. Putting it after was the bug: the guard
+    // `continue`d, `latest` stayed empty, and a page with no container we know
+    // reported `probe-empty` while a real price sat on it.
+    latest = offers;
+
+    if (path === 'body-fallback') {
       previous = '';
       stableReads = 0;
       continue;
     }
-
-    latest = offers;
     const current = fingerprint(offers);
     stableReads = current === previous ? stableReads + 1 : 0;
     previous = current;

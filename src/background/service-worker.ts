@@ -261,7 +261,11 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
  * would be forging the background's own testimony, and the popup would print
  * "no answer from the page" about a page that had just answered.
  */
-const PROBE_PATHS = new Set<ProbeReport['path']>(['vendor-selectors', 'generic-sweep']);
+const PROBE_PATHS = new Set<ProbeReport['path']>([
+  'vendor-selectors',
+  'generic-sweep',
+  'body-fallback',
+]);
 
 /** How much of a page-supplied string is worth keeping. */
 const MAX_REPORT_TEXT = 200;

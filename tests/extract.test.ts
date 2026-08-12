@@ -1011,35 +1011,40 @@ describe('currency codes written without a space', () => {
   });
 });
 
-describe('whether the vendor container was there at all', () => {
-  // `containerFound` exists so the probe can tell "the container is present and
-  // holds no prices" from "the page has not rendered its container yet". Only
-  // the second means keep waiting — and getting it wrong shipped $20,000 Hertz
-  // quotes, because a whole-body sweep reaches banners the container excludes.
+describe('where the offers came from', () => {
+  // `path` distinguishes prices found *inside* a container this vendor names
+  // from prices swept off the whole body because none of them held any. It is
+  // provenance, not presence: an earlier attempt reported merely whether a
+  // container existed, which is a different question — an empty `<main>` beside
+  // a promo banner answers "yes" and the price is still junk.
 
-  it('is false when nothing the vendor names is in the document', () => {
-    document.body.innerHTML = '<div class="promo">Like-new cars for under $20,000</div>';
+  const PROMO = '<div class="promo">Like-new cars for under $20,000</div>';
+
+  it('is body-fallback when nothing the vendor names is in the document', () => {
+    document.body.innerHTML = PROMO;
     const result = extract(document, 'hertz');
-    expect(result.containerFound).toBe(false);
-    // The sweep still finds the promo — that is why the flag is needed rather
-    // than an empty result being enough on its own.
+    expect(result.path).toBe('body-fallback');
+    // The sweep still finds the promo, which is why labelling it matters — an
+    // empty result would need no warning.
     expect(result.offers.map((o) => o.amount)).toContain(20000);
   });
 
-  it('is true once the container renders, and the promo is then out of scope', () => {
-    document.body.innerHTML =
-      '<div class="promo">Like-new cars for under $20,000</div>' +
-      '<main><div><h3>Economy</h3><div>$48.00 per day</div></div></main>';
+  it('is body-fallback when the container is present but holds no prices', () => {
+    // The case that broke the first attempt at this fix. Hertz commits its
+    // shell — header, footer promo, empty `<main>` — before the rates arrive,
+    // so "a container exists" is true while the only price on the page is the
+    // advert.
+    document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
     const result = extract(document, 'hertz');
-    expect(result.containerFound).toBe(true);
-    expect(result.offers.map((o) => o.amount)).toEqual([48]);
+    expect(result.path).toBe('body-fallback');
+    expect(result.offers.map((o) => o.amount)).toContain(20000);
   });
 
-  it('is true when the container is present but empty', () => {
-    // Not the same as missing: this page has rendered and simply has no prices,
-    // so the probe should keep polling on its own terms rather than because the
-    // container is absent.
-    document.body.innerHTML = '<main><p>No vehicles available</p></main>';
-    expect(extract(document, 'hertz').containerFound).toBe(true);
+  it('is generic-sweep once the container holds the prices, and the promo is out of scope', () => {
+    document.body.innerHTML =
+      PROMO + '<main><div><h3>Economy</h3><div>$48.00 per day</div></div></main>';
+    const result = extract(document, 'hertz');
+    expect(result.path).toBe('generic-sweep');
+    expect(result.offers.map((o) => o.amount)).toEqual([48]);
   });
 });
