@@ -349,7 +349,10 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
     // The observations above are the probe's own and worth having; only the
     // claim about *who* made them is refused, falling back to the branch the
     // probe would have used.
-    path: PROBE_PATHS.has(report.path) ? report.path : 'generic-sweep',
+    // An unrecognised path downgrades to `body-fallback`, not `generic-sweep`:
+    // the safe default is the one that keeps the quote out of the ranking. A
+    // forged or future value should not be handed the more trusted label.
+    path: PROBE_PATHS.has(report.path) ? report.path : 'body-fallback',
   };
 }
 
@@ -418,6 +421,32 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
  * what a results page looks like" signal — which National's driver has, in
  * `verifyResults`, and no deep-linked vendor does.
  */
+/**
+ * The one place a quote is marked unrankable, so the two reasons cannot drift.
+ *
+ * Returns a spreadable partial rather than a value, because the field is
+ * optional and every caller was already spreading a conditional object.
+ *
+ * `scope-lost` outranks `landed-elsewhere` only in the sense that it is checked
+ * second and would overwrite; in practice a page that landed on the site root
+ * also has no container, so either label is honest and the ranking outcome is
+ * identical. Landing elsewhere is the more specific statement, so it wins.
+ */
+function suspectFrom(
+  quote: Quote | undefined,
+  report: ProbeReport | undefined,
+): { suspect: NonNullable<Quote['suspect']> } | Record<string, never> {
+  if (landedElsewhere(quote, report)) return { suspect: 'landed-elsewhere' };
+  // A price swept off the whole body came from outside every container this
+  // vendor names — a banner, a footer, a cross-sell. It is a real number on a
+  // real page and nothing else downstream can tell it apart, which is exactly
+  // how $20,000 was ranked as Hertz's cheapest rate.
+  if (report?.path === 'body-fallback' && report.offerCount > 0) {
+    return { suspect: 'scope-lost' };
+  }
+  return {};
+}
+
 function landedElsewhere(quote: Quote | undefined, report: ProbeReport | undefined): boolean {
   // A content script runs in a page we do not control, so treat its message as
   // input rather than as a promise kept.
@@ -1147,7 +1176,7 @@ chrome.runtime.onMessage.addListener(
               offers,
               best,
               ...(reported ? { report: reported } : {}),
-              ...(landedElsewhere(quote, reported) ? { suspect: 'landed-elsewhere' } : {}),
+              ...suspectFrom(quote, reported),
               // bestOffer only returns null for an empty list, and the probe
               // never sends one — it reports PROBE_FAILED instead. Kept as a
               // real guard rather than a message describing a state it cannot
@@ -1185,7 +1214,7 @@ chrome.runtime.onMessage.addListener(
               // "no price because the link missed its search" and "no price
               // because the results page was empty" is exactly the distinction
               // this is for, and the evidence is already in hand.
-              ...(landedElsewhere(failed, reported) ? { suspect: 'landed-elsewhere' } : {}),
+              ...suspectFrom(failed, reported),
             });
             await publish();
           }

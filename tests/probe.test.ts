@@ -325,13 +325,25 @@ describe("a price outside the vendor's container", () => {
   // is why none of them saw this.
   const PROMO = '<div class="footer-promo">Like-new cars for under $20,000</div>';
 
-  it('does not settle on a promo while no container holds prices', async () => {
+  it('does not settle early on a promo while no container holds prices', async () => {
     document.body.innerHTML = PROMO;
     await run(POLL * 6);
     expect(sent).toEqual([]);
   });
 
-  it('does not settle on it once an empty container renders either', async () => {
+  it('still labels it body-fallback when the deadline arrives', async () => {
+    // Run to the *deadline*, not for six polls. The six-poll version of this
+    // asserted only that the promo does not settle early, and read as though
+    // the regression were reproduced — it was not. At the deadline the promo
+    // does go out, and what stops it being ranked is the label plus the
+    // `scope-lost` marking the background applies from it.
+    document.body.innerHTML = PROMO;
+    await run(TIMEOUT_MS + POLL);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
+  });
+
+  it('does not settle early once an empty container renders either', async () => {
     // The case that killed the first version of this fix, which asked whether a
     // container *existed* rather than whether the prices came from one. Hertz
     // commits its shell before the rates arrive, so `<main>` is there and empty
@@ -339,6 +351,12 @@ describe("a price outside the vendor's container", () => {
     document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
     await run(POLL * 6);
     expect(sent).toEqual([]);
+  });
+
+  it('labels the empty-container case body-fallback at the deadline too', async () => {
+    document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
+    await run(TIMEOUT_MS + POLL);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
   });
 
   it('reports the container price once the page finally renders it', async () => {

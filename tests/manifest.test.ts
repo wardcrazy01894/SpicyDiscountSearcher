@@ -7,6 +7,7 @@ import { vendorHosts } from '../src/core/vendors.js';
 
 interface Manifest {
   manifest_version: number;
+  version: string;
   permissions: string[];
   host_permissions: string[];
   content_scripts: Array<{ matches: string[]; js: string[]; run_at?: string }>;
@@ -19,11 +20,30 @@ const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL('../public/manifest.json', import.meta.url)), 'utf8'),
 ) as Manifest;
 
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+) as { version: string };
+
 const expected = vendorHosts().map((host) => `https://${host}/*`);
 
 describe('manifest.json', () => {
   it('is MV3', () => {
     expect(manifest.manifest_version).toBe(3);
+  });
+
+  it('carries the same version as package.json', () => {
+    // The manifest's version is the one Chrome shows on the extensions page,
+    // so it is what tells you a reload actually picked up your build. The two
+    // drifting would make that check quietly meaningless — you would read
+    // package.json's number in the diff and Chrome would show the other.
+    expect(manifest.version).toBe(pkg.version);
+  });
+
+  it('uses a plain three-part version Chrome will accept', () => {
+    // Chrome requires one to four dot-separated integers, each 0-65535, and
+    // refuses to load the extension otherwise — a suffix like `-rc1` or
+    // `0.1.1+build` is a hard failure at load time, not a warning.
+    expect(manifest.version).toMatch(/^\d{1,5}(\.\d{1,5}){0,3}$/);
   });
 
   it('requests exactly the hosts the vendor registry needs', () => {

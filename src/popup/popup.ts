@@ -868,6 +868,11 @@ function branchText(path: ProbeReport['path']): string {
   // `about:blank` that hung, or a `chrome-error://` page after a DNS or TLS
   // failure. Naming only the first would be the same mistake as the "never
   // navigated" it replaced, pointing the opposite way.
+  // Not "generic sweep". The sweep ran over the whole body because no container
+  // this vendor names was in the document, so the number may have come from a
+  // banner rather than a results card — which is the difference between an
+  // ordinary fallback and a price nobody should rank.
+  if (path === 'body-fallback') return 'swept the whole page — no results container found';
   if (path === 'left-our-origins') return 'off the vendor’s site, or never got there';
   // The probe never answered, so the background described the tab instead.
   return 'no answer from the page';
@@ -1069,6 +1074,14 @@ function renderQuote(quote: Quote, winnerId: string | null, trip: Trip): HTMLLIE
     warning.className = 'hint is-warning';
     warning.textContent =
       'This landed on the vendor home page, not a results page — the code was almost certainly not applied.';
+    item.append(warning);
+  }
+
+  if (quote.suspect === 'scope-lost') {
+    const warning = document.createElement('p');
+    warning.className = 'hint is-warning';
+    warning.textContent =
+      'This price came from outside the results list — it may be a banner or an advert rather than a rate. Not ranked.';
     item.append(warning);
   }
 

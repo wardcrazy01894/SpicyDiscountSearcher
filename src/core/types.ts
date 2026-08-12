@@ -292,8 +292,22 @@ export interface Quote {
    * too late", which are different problems with different fixes.
    */
   lateReport?: ProbeReport;
-  /** Set when the evidence says this page is not the search we asked for. */
-  suspect?: 'landed-elsewhere';
+  /**
+   * Set when the evidence says this price should not be ranked.
+   *
+   * `landed-elsewhere`: the page is not the search we asked for.
+   * `scope-lost`: the price came from outside every container the vendor
+   * names, so it may have been swept off a banner, a footer or a cross-sell
+   * rather than a results card. Hertz reported $20,000 for every code that
+   * way, from a Car Sales advert.
+   *
+   * Both keep the quote out of the ranking rather than merely badging it. That
+   * distinction is the whole lesson of the `landedElsewhere` note in
+   * CLAUDE.md — "Flagging alone was not enough", because `pricedOnly` filtered
+   * on status and price, so the bad number still won and `savings` still
+   * announced it.
+   */
+  suspect?: 'landed-elsewhere' | 'scope-lost';
   /** Paired with finishedAt to show how long a vendor took to answer. */
   startedAt?: number;
   finishedAt?: number;

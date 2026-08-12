@@ -711,6 +711,49 @@ describe('diagnosing a run afterwards', () => {
     expect(landed?.status).toBe('ok');
   });
 
+  it('flags a price swept off the whole page, and keeps its label', async () => {
+    // The Hertz $20,000: a Car Sales advert outside the results container, on a
+    // page that landed exactly where it was asked to. `landedElsewhere` cannot
+    // see it — `finalPath` is right — so without this the quote is `ok`,
+    // unflagged, and ranked as the cheapest rate in the race.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [{ ...OFFER, amount: 20000 }],
+      report: { ...REPORT, path: 'body-fallback' },
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.suspect);
+    expect(quote?.suspect).toBe('scope-lost');
+    // The label survives ingest. `PROBE_PATHS` had no test at all, so dropping
+    // `body-fallback` from it downgraded every such report to `generic-sweep`
+    // with a green suite — erasing the only evidence the scope was lost.
+    expect(quote?.report?.path).toBe('body-fallback');
+  });
+
+  it('downgrades an unrecognised path to the label that is not ranked', async () => {
+    // A forged or future value must not be handed the more trusted label.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, path: 'not-reached' },
+    });
+    await settle(1_000);
+
+    const quote = (await getState())?.quotes.find((q) => q.report);
+    expect(quote?.report?.path).toBe('body-fallback');
+  });
+
   it('leaves a quote that reached a real results path unflagged', async () => {
     await bootWorker();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
@@ -743,6 +786,8 @@ describe('diagnosing a run afterwards', () => {
     // tab that never loaded.
     expect(quote?.report?.title).toBe('No vehicles available');
     expect(quote?.report?.offerCount).toBe(0);
+    // `generic-sweep` is an allowed claim and survives ingest untouched — only
+    // an unrecognised one is downgraded.
     expect(quote?.report?.path).toBe('generic-sweep');
   });
 
@@ -1403,7 +1448,10 @@ describe('what a content script is allowed to claim', () => {
     await settle(1_000);
 
     const quote = (await getState())?.quotes[0];
-    expect(quote?.report?.path).toBe('generic-sweep');
+    // Downgraded to `body-fallback`, not `generic-sweep`: a refused claim
+    // should land on the label that keeps the quote out of the ranking, not
+    // the more trusted one.
+    expect(quote?.report?.path).toBe('body-fallback');
     // The observations themselves are still the probe's, and still kept.
     expect(quote?.report?.finalPath).toBe(REPORT.finalPath);
     expect(quote?.report?.offerCount).toBe(REPORT.offerCount);
@@ -1614,7 +1662,7 @@ describe('a report a page could have forged', () => {
     await settle();
 
     const late = (await getState())?.quotes[0]?.lateReport;
-    expect(late?.path).toBe('generic-sweep');
+    expect(late?.path).toBe('body-fallback');
     expect(late?.finalPath).toBe('/late');
   });
 });
