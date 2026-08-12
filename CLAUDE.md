@@ -203,38 +203,10 @@ encode other people's websites. They will break. Both are deliberately isolated:
   results, so `main` won on every vendor and every page; the narrow selectors in
   front of it were decoration. `firstMatch` now tries each alternative in turn.
   Found by measuring National, where `.vehicle-list` is real, present, and made
-  no difference whatsoever when added.
-
-  **Hertz and Avis were measured on 2026-08-11 and were worse than National.**
-  Their narrow selectors did not merely lose the document-order race — they
-  match nothing at all. `[data-testid="vehicle-list"]` and `.vehicle-list` are
-  absent from Hertz; `[data-testid="vehicle-results"]` and `.car-results` are
-  absent from Avis. Both entries are now a bare, measured `main`: on Hertz 4.3k
-  of a 50.3k body holding 70 of the page's 71 price nodes (the one it excludes
-  is a marketing "under $20,000"), on Avis 4.7k holding all 50 vehicle prices.
-  Deleting the four dead selectors rather than reordering them is the point — a
-  selector that matches nothing is a false claim about the page, and it is what
-  made this entry look checked for as long as it did.
-
-  Nothing narrower exists for either. Hertz styles with emotion, so its cards
-  carry generated class names and per-card numeric ids, and no element inside
-  `main` with a stable handle holds more than four prices. Avis does have a
-  tighter `[data-testid="aem-container"]` (3.3k, same 50 prices) and it is
-  deliberately unused: that is Adobe Experience Manager's generic wrapper, not a
-  vehicle list, so it can point at a marketing box on some other page.
-
-  Scoping Avis matters more than its ratio suggests. It is a Next.js app, so
-  `document.body.textContent` is 464k characters of mostly inline RSC flight
-  payload, dense with `$` sigils — and body is exactly what `extract` falls back
-  to when no container matches. The 80-character cap in `priceSites` is what
-  keeps that payload out of the sweep today, since the flight blob is one huge
-  script node; small inline scripts are still eligible in principle.
-
-  **No vendor defines an `offer` selector**, though, so the per-offer branch
-  never fires and every `ProbeReport` says `generic-sweep`. The selector path is
-  kept — and tested with an injected config — so it works the day someone fills
-  one in.
-
+  no difference whatsoever when added. **No vendor defines an `offer` selector**,
+  though, so the per-offer branch never fires and every `ProbeReport` says
+  `generic-sweep`. The selector path is kept — and tested with an injected
+  config — so it works the day someone fills one in.
 - A vendor redesign therefore degrades to a noisier sweep rather than nothing.
   Labels are best-effort: a card with no heading of its own inherits the
   previous card's, which markup cannot distinguish from a legitimate wrapper.
@@ -291,69 +263,6 @@ The two things that would silently produce a wrong answer, and their guards:
   pair directly under the card with no wrapper element, and `Taxes and fees not
 included: $57.20`, where the negation is invisible to the rule. Both surface a
   fee as a price.
-
-- **A number that was never an _offer_.** Hertz renders `Price range$42-$90`
-  above its cards — a filter control whose lower bound is derived from the
-  results, so it is at or below every real rate on the page ($42 against a
-  cheapest genuine $54/day when measured). `isRangeLine` suppresses it, sharing
-  `isFeeLine`'s shape — lead phrase, then ask what is left, so "Rate range
-  $89/day" survives — and its inheritance, which it needs more: on Hertz the
-  words and the amount are in different elements, so suppressing only the label
-  would leave the `$42` leaf emitting.
-
-  **"Lead" means anchored, and the first version was not.** `RANGE_LEAD_RE`
-  matched the phrase anywhere in the text while its own docstring claimed
-  otherwise, so `AAA Member Rate range $109` and `Weekend rate range $129`
-  extracted **zero offers** — a vendor dropped out of the race, which is strictly
-  worse than the filter bound the guard exists to exclude. Neither carries a
-  basis word for the second half of the rule to save them with, so the anchor is
-  doing all the work. A filter's label leads; an offer's does not.
-
-  `Prices range $99-$180 for your dates` stays suppressed, and is the rule rather
-  than an exception to it: that line does lead with the phrase, and reads as a
-  spread across the results rather than a rate anybody can book. Said with less
-  certainty than the two above, deliberately — that string was invented for the
-  test and has never been seen on a live page, so it is the heuristic applied to
-  a plausible shape, not a measurement like Hertz's `$42`.
-
-  **Anchoring alone opened a second hole, and the first attempt to write it off
-  got the arithmetic wrong.** A filter whose label and amounts sit in **one** leaf
-  behind a prefix — `Filter by price range $42-$90` — is not at position 0, and
-  unlike Hertz's real markup there is no separate ancestor leading with the bare
-  phrase for the walk to inherit from. That was dismissed here as costing "one
-  wrong number in a bucket that usually loses to `total`". It does not. On a page
-  with no total-basis offer anywhere, `BASIS_PREFERENCE` is
-  `['total', 'unknown', 'per-day']`, nothing requires a `total` to exist, and the
-  escaped `$42` therefore outranks every genuine daily rate and takes the
-  headline outright. Hotel results — the category this codebase has thought about
-  least — are exactly where per-day-only pages live.
-
-  So it is closed rather than documented, with `isFeeLine`'s own companion rule:
-  the phrase mid-line counts **when the text quotes more than one price**.
-  `priceSites` already pairs `FEE_LEAD_RE` with `prices.length > 1` for the same
-  reason. `Filter by price range $42-$90` is a span between two ends;
-  `AAA Member Rate range $109` is a rate with an awkward label. Both directions
-  checked to fail: dropping the mid-string rule loses the prefixed filter, and
-  relaxing the count to `> 0` suppresses both real rates.
-
-  Known escapes, stated because the count is a **proxy and not a
-  discriminator** — a claim this bullet made for one round and should not have.
-  A genuine two-tier line reusing the label (`Weekend rate range $129 $99`: a
-  was-price beside a live one, or member beside non-member) quotes two prices and
-  is suppressed, losing the real $99. That is `isFeeLine`'s cost exactly, and the
-  same trade taken deliberately — it fails to an empty offer list rather than a
-  wrong headline price. The difference worth naming is that here the loss is a
-  whole _card_ rather than one number on it.
-
-  What rescues a was/now pair when anything does is `STRUCK_SELECTOR`, which is
-  semantic-only: `s`, `del`, `strike`. A price struck through in CSS alone —
-  common — is invisible to it, and takes the card with it.
-
-  **On Hertz's own page none of this changes an answer**, which is worth keeping
-  in view. That page prints "$226 est. total" per card and `total` outranks
-  `unknown`, so the bound never surfaced there. The test that matters is
-  therefore the one with the totals removed; the version covering the page as it
-  renders today passes with the guard deleted entirely.
 
 - **A digit in a model name.** `PRICE_RE`'s suffix branch is
   `(NUMBER)\s*(CURRENCY)`, and car pages are full of names ending in digits. The
@@ -672,31 +581,6 @@ close). Never pass it a URL or a code.
 
 ## Known gaps
 
-- **No Avis code has been shown to save any money.** Separate from whether the
-  URL carries the search, which is what `verified` claims and what the location
-  replay proved. On a TPA round trip on 2026-08-11, `A120590`, `B771000`, the
-  deliberate nonsense `Z9Z9Z9Z` and no code at all all returned the identical
-  cheapest six — 53, 54, 54, 58, 59, 61 — and all three coded runs rendered "Your
-  savings are reflected below". So that banner tracks the presence of an
-  `awd_number` in our own request and nothing else.
-
-  Two readings, and this cannot tell them apart: these codes may genuinely be
-  worth nothing at that branch on those dates, or Avis may be ignoring
-  `awd_number` from a deep link entirely. The second would mean the whole Avis
-  lane is racing codes that do nothing, which is worth knowing before trusting
-  any Avis result. The way in is a code and an itinerary where the discount is
-  known to bite — a differential like National's, which is exactly how National's
-  driver was proved ($70.30/day with the code against $74.00 without).
-
-  Avis's `verified` flag survives this, and the distinction is the point.
-  `verified` claims the URL carries the **search**, which rests on the location
-  replay — changing `pickup_location_code` moved the results page to Tampa — and
-  never depended on the banner. `deeplinks.ts` used to cite the banner as
-  "confirming the AWD had applied" and no longer does. The rule it trips over is
-  stated in that file's Hertz builder rather than here: driving the search and
-  applying the discount are two claims, and for a discount-code racer the second
-  is the load-bearing one. For Avis the second currently has nothing behind it.
-
 - Deep-link query params are unverified against live sites for every vendor
   except Avis and Hertz (see README). Beyond that there are now three distinct
   states, and the difference decides what would fix each:
@@ -787,81 +671,19 @@ close). Never pass it a URL or a code.
   cannot run them. The README's tally needs revisiting against what is still
   missing.
 
-- **Avis is capped at one lane, and the client-side half of why is measured.**
-  The open question was: probe tabs share one profile, each clears
-  `booking-widget.store`, and if that store carried the AWD then tab A could
-  render tab B's code — the same trip at a different discount, which
-  `verify-trip` is structurally blind to because it only compares locations.
+- Two Avis questions are open and cannot be answered while the test browser is
+  rate-limited. Deferred deliberately rather than guessed at.
 
-  **What was measured**, on one TPA round trip with the tabs loaded
-  concurrently. Two tabs on _different_ AWDs: the code travels in
-  **sessionStorage**, which is per-tab by the web platform's own rules. Each
-  tab's `reservation.store` and `REACT_QUERY_OFFLINE_CACHE` held its own code and
-  not the other's, found by enumerating every key in both stores and testing each
-  value against both codes. The only localStorage keys carrying an AWD are a
-  bot-detection event log and an mParticle analytics batch queue, both write-side
-  telemetry. And `booking-widget.store` — the shared key this worry was actually
-  about, and the one we clear — is 65 bytes and carries no code at all. That last
-  fact is what the earlier truncated dump could not establish, and it is what
-  closes the original question.
+  **Concurrent Avis tabs share one `localStorage`.** At concurrency two or more,
+  each probe tab clears `booking-widget.store` while Avis rewrites it from its
+  own URL. If that store carries the AWD, tab A could render tab B's code — the
+  same trip at a different discount, which `verify-trip` is structurally blind
+  to because it only compares locations. A dump of the store showed location
+  data and no code, but it was truncated, so this is unresolved rather than
+  ruled out. Capping Avis to one lane is the conservative answer if it turns out
+  to be real.
 
-  **What was _not_ measured, and cannot be from outside.** A third tab carrying
-  the deliberate nonsense `Z9Z9Z9Z` renders the savings banner, the same prices,
-  and no error. So the banner is a client-side echo of "my own request carried an
-  `awd_number`", not a server verdict — which means an earlier draft of this
-  section was wrong to treat a coded tab and an uncoded tab rendering differently
-  as proof that nothing shared carries the code. That difference follows from
-  sessionStorage isolation alone and adds nothing. A cookie-identified backend
-  session could still be pricing both tabs off one code with no tell.
-
-  Nothing available can rule that out, because **nothing observable varies with
-  the code at all**: the cheapest six were identical — 53, 54, 54, 58, 59, 61 —
-  with `A120590`, with `B771000`, with `Z9Z9Z9Z`, and with no code. There is no
-  price delta to leak, so there is no experiment of this shape that could catch a
-  leak. Saying so is the honest stopping point.
-
-  **So the cap goes on, reversing what two drafts of this entry concluded.** The
-  measurement closes the client-side worry and says nothing about the one that is
-  left; reading "no cap needed" off it was reading a conclusion off the wrong
-  half.
-
-  "Unfalsifiable is not absent" is the shape of the argument but cannot be the
-  whole of it — taken alone it would cap every vendor here, including Hertz and
-  the hotels. What makes it an argument is specific to this vendor: **Avis has
-  already been caught preferring remembered state to the URL.** The
-  Tampa/Philadelphia bug is exactly that, a saved booking widget outranking the
-  query string and pricing a journey nobody asked for, and it is why
-  `reset-widget-state.ts` exists.
-
-  What that transfers is narrower than a first draft of this paragraph claimed,
-  and the correction matters. The location leaked through `booking-widget.store`,
-  in **localStorage**; the code lives in `reservation.store` and
-  `REACT_QUERY_OFFLINE_CACHE`, in **sessionStorage**. Different stores, and the
-  measurement above proves the demonstrated vector does not carry the code. So
-  what carries over is not the vector but the vendor's disposition: this is a
-  site observed letting remembered state beat an explicit URL parameter, which is
-  precisely the shape of the one risk left untestable. Hertz has never been
-  observed doing anything of the kind, and stays uncapped.
-
-  Two things sharpen it. "No Avis code has been shown to move a price" is
-  _consistent with_ a shared session overriding the URL's `awd_number`, which
-  would make an uncapped Avis actively wrong rather than merely unproven. And
-  `enterprise` already carries this cap on thinner grounds — analogy to National,
-  with no measurement of its own — while the version of this entry predating the
-  whole investigation said plainly that capping Avis was "the conservative answer
-  if it turns out to be real".
-
-  The cost is the largest of any capped vendor: Avis has 27 codes, more than any
-  other car vendor, and they now serialise. Worth it on the asymmetry this whole
-  codebase is organised around — halved throughput is a cost the user can see,
-  one company's price under another's code is not.
-
-  Note what none of this touches: the clearing of `booking-widget.store` is
-  still needed, because that store holds the **location**, which is the
-  Tampa/Philadelphia bug it was written for.
-
-- One Avis question is still open. **The gate could be made ours rather than
-  merely narrow.** `awd_number` is
+  **The gate could be made ours rather than merely narrow.** `awd_number` is
   produced by Avis's own search flow too, so the reset can still fire on a
   user's hand-run search. A URL fragment never reaches the server and only we
   would emit one, which would close it — but whether Avis's router tolerates a

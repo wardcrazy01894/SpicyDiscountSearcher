@@ -7,38 +7,19 @@
  * the popup would report one company's price under another's code — the "real
  * page, real price, wrong rental" failure this codebase is organised around.
  *
- * These used to inject a fake cap onto `hertz`, because the only capped vendors
- * were ones no run could route to — a capped vendor that never opens a tab
- * proves nothing. **Avis is capped now**, and it deep-links and opens real tabs,
- * so the injection is gone and the mechanism is exercised against the shipping
- * configuration instead of a mock of it.
- *
- * The three caps do not rest on equal evidence, and flattening them is the
- * mistake this file keeps having to undo:
- *
- * - **National** is measured. Its form returns carrying the previous search's
- *   account number, so a second lane really can settle on the wrong code.
- * - **Enterprise** is analogy to National, with no measurement of its own.
- * - **Avis** is the weakest of the three. Its one *demonstrated* cross-tab leak
- *   — the saved booking widget that priced the wrong journey — was measured and
- *   provably does **not** carry the code: the location sat in localStorage, the
- *   code sits in per-tab sessionStorage. What the cap rests on is a prior about
- *   the vendor, which has been seen letting remembered state beat an explicit
- *   URL parameter, plus the fact that the remaining server-side route cannot be
- *   checked while no Avis code moves a price.
- *
- * `hertz` is the uncapped control, comparatively rather than by measurement:
- * nobody has dumped Hertz's storage the way Avis's was dumped. It has simply
- * never been seen doing any of this, and its deep link was replay-proved to
- * drive the search from the query string alone, differing inventory counts and
- * all — evidence of a stateless search rather than proof of an empty one. If
- * Hertz ever leaks, it earns the same cap.
+ * Tested against an injected cap rather than against National itself, because
+ * National is still `searchable: false`: its builder throws, `makeQuote` settles
+ * the quote at plan time, and it never reaches the queue at all. Capping a
+ * vendor nothing can route to would prove nothing, so these mock `findVendor` to
+ * cap `hertz` — the same shape, on a vendor that really does open tabs. The
+ * production values live in `vendors.ts` and are asserted at the bottom.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
 import { VENDORS } from '../src/core/vendors.js';
+import type * as VendorsModule from '../src/core/vendors.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -61,6 +42,20 @@ const REPORT: ProbeReport = {
 
 let chromeMock: ChromeHarness;
 
+/** Cap `hertz` at one lane, leaving every other vendor as it really is. */
+function capHertz(): void {
+  vi.doMock('../src/core/vendors.js', async () => {
+    const actual = await vi.importActual<typeof VendorsModule>('../src/core/vendors.js');
+    return {
+      ...actual,
+      findVendor: (id: string) => {
+        const vendor = actual.findVendor(id);
+        return vendor && id === 'hertz' ? { ...vendor, maxLanes: 1 } : vendor;
+      },
+    };
+  });
+}
+
 async function bootWorker(): Promise<void> {
   chromeMock = installChromeMock();
   vi.resetModules();
@@ -77,7 +72,7 @@ async function getState(): Promise<RunState | null> {
   return reply.state;
 }
 
-function planOf(concurrency: number, vendors: Array<'avis' | 'hertz'>): SearchPlan {
+function planOf(concurrency: number, vendors: Array<'hertz' | 'avis'>): SearchPlan {
   return {
     trip: TRIP,
     concurrency,
@@ -101,11 +96,13 @@ async function answerOpenTabs(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  capHertz();
 });
 
 afterEach(() => {
   chromeMock.restore();
   vi.useRealTimers();
+  vi.doUnmock('../src/core/vendors.js');
 });
 
 describe('a vendor capped below the run concurrency', () => {
@@ -114,7 +111,7 @@ describe('a vendor capped below the run concurrency', () => {
     // Four codes, four lanes, and every one of them at the capped vendor.
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
+      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
     });
     await settle();
 
@@ -127,7 +124,7 @@ describe('a vendor capped below the run concurrency', () => {
     await bootWorker();
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
+      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
     });
     await settle();
 
@@ -151,7 +148,7 @@ describe('a vendor capped below the run concurrency', () => {
     // tab and idle the other two.
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(3, ['avis', 'avis', 'avis', 'hertz', 'hertz']),
+      plan: planOf(3, ['hertz', 'hertz', 'hertz', 'avis', 'avis']),
     });
     await settle();
 
@@ -159,8 +156,8 @@ describe('a vendor capped below the run concurrency', () => {
     const openVendors = chromeMock.tabOptions.map((t) =>
       new URL(t.options.url!).host.includes('hertz') ? 'hertz' : 'avis',
     );
-    expect(openVendors.filter((v) => v === 'avis')).toHaveLength(1);
-    expect(openVendors.filter((v) => v === 'hertz')).toHaveLength(2);
+    expect(openVendors.filter((v) => v === 'hertz')).toHaveLength(1);
+    expect(openVendors.filter((v) => v === 'avis')).toHaveLength(2);
   });
 
   it('tears the run down cleanly while lanes are parked on the cap', async () => {
@@ -177,7 +174,7 @@ describe('a vendor capped below the run concurrency', () => {
     await bootWorker();
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
+      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
     });
     await settle();
     expect(chromeMock.tabs.size).toBe(1);
@@ -196,30 +193,21 @@ describe('a vendor capped below the run concurrency', () => {
 });
 
 describe('the caps that actually ship', () => {
-  it('holds every vendor a second tab could settle on the wrong code to one lane', () => {
-    // Deliberately not "every vendor that leaks" — only National's leak is
-    // measured to carry the code. See this file's header for what each of the
-    // three actually rests on; they are not the same strength and an earlier
-    // version of this title said they were.
-    //
-    // Avis's route here is the one worth remembering. The client-side worry
-    // really was measured away — the AWD lives in per-tab sessionStorage, and
-    // `booking-widget.store` carries no code — and for two rounds that was read
-    // as "no cap needed". It does not support that: what it leaves open is a
-    // shared server-side session, which *nothing* can close, because no Avis
-    // code was found to move a price and so no observable delta exists for a
-    // leak to show up in. Unfalsifiable is not absent, and Enterprise is capped
-    // on less than this.
+  it('holds the session-state vendors to one lane', () => {
+    // National is measured: its form comes back carrying the previous search's
+    // location, dates and account number. Enterprise keeps its search the same
+    // way. Both are set now so the value is written down next to the evidence
+    // rather than rediscovered when their drivers land.
     const capped = VENDORS.filter((v) => v.maxLanes === 1).map((v) => v.id);
-    expect(capped).toEqual(['avis', 'enterprise', 'national']);
+    expect(capped).toEqual(['enterprise', 'national']);
   });
 
-  it('leaves the vendors with no such hazard uncapped', () => {
-    // Hertz has never been seen to leak anything between tabs, and its deep link
-    // was replay-proved to drive the search from the query string alone. Not the
-    // same as a storage dump proving it holds nothing — see this file's header.
+  it('leaves every other vendor uncapped', () => {
+    // Including Avis, which CLAUDE.md records as *suspected* of the same
+    // problem and never measured. Capping it would halve its throughput on a
+    // hunch; this is a one-line change the day someone checks.
     const uncapped = VENDORS.filter((v) => v.maxLanes === undefined).map((v) => v.id);
+    expect(uncapped).toContain('avis');
     expect(uncapped).toContain('hertz');
-    expect(uncapped).not.toContain('avis');
   });
 });
