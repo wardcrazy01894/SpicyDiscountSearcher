@@ -687,8 +687,8 @@ close). Never pass it a URL or a code.
   cannot run them. The README's tally needs revisiting against what is still
   missing.
 
-- **Concurrent Avis tabs do _not_ share the AWD — answered, 2026-08-11.** This
-  was the open question: probe tabs share one profile, each clears
+- **Avis is capped at one lane, and the client-side half of why is measured.**
+  The open question was: probe tabs share one profile, each clears
   `booking-widget.store`, and if that store carried the AWD then tab A could
   render tab B's code — the same trip at a different discount, which
   `verify-trip` is structurally blind to because it only compares locations.
@@ -720,11 +720,26 @@ close). Never pass it a URL or a code.
   price delta to leak, so there is no experiment of this shape that could catch a
   leak. Saying so is the honest stopping point.
 
-  So Avis stays uncapped, on the strength of the localStorage measurement and the
-  per-tab guarantee of sessionStorage, and `tests/vendor-lane-cap.test.ts`
-  records why. Note what this does _not_ say: the clearing of
-  `booking-widget.store` is still needed, because that store holds the
-  **location**, which is the Tampa/Philadelphia bug it was written for.
+  **So the cap goes on, reversing what two drafts of this entry concluded.** The
+  measurement closes the client-side worry and says nothing about the one that
+  is left; reading "no cap needed" off it was reading a conclusion off the wrong
+  half. A risk that is unfalsifiable is not a risk that is absent, and this
+  codebase already knows what it does with that — `enterprise` carries
+  `maxLanes: 1` on architectural analogy to National with no measurement behind
+  it at all, and the version of this entry that predates the whole
+  investigation said plainly that "capping Avis to one lane is the conservative
+  answer if it turns out to be real".
+
+  The gap-entry above sharpens it rather than softening it: "no Avis code has
+  been shown to move a price" is _consistent with_ a shared session overriding
+  the URL's `awd_number`, which would make an uncapped Avis actively wrong
+  rather than merely unproven. Halved Avis throughput is a cost the user can
+  see. One company's price under another's code is not, and this whole codebase
+  is organised around that asymmetry.
+
+  Note what none of this touches: the clearing of `booking-widget.store` is
+  still needed, because that store holds the **location**, which is the
+  Tampa/Philadelphia bug it was written for.
 
 - **The Avis savings banner proves nothing about the code**, which is a separate
   and worse finding than the one above. `Z9Z9Z9Z` earns the same "Your savings
@@ -735,12 +750,12 @@ close). Never pass it a URL or a code.
   Avis's `verified` flag survives, because it is a claim about the URL carrying
   the **search**, and that rests on the location replay (changing
   `pickup_location_code` moved the results page to Tampa) rather than on the
-  banner. What has no evidence behind it is the other half, and CLAUDE.md's own
-  rule for Hertz names it: "driving the search and applying the discount are two
-  claims, and for a discount-code racer the second is the load-bearing one."
-  For Avis that second claim is currently unevidenced — no Avis code has been
-  shown to change a price. Worth its own investigation, and not one this section
-  can close.
+  banner. What has no evidence behind it is the other half, and the rule is
+  stated in `deeplinks.ts`'s Hertz builder rather than here: driving the search
+  and applying the discount are two claims, and for a discount-code racer the
+  second is the load-bearing one. For Avis that second claim is currently
+  unevidenced — no Avis code has been shown to change a price. Worth its own
+  investigation, and not one this section can close.
 
 - One Avis question is still open. **The gate could be made ours rather than
   merely narrow.** `awd_number` is

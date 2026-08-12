@@ -16,43 +16,46 @@ export const VENDORS: Vendor[] = [
     codeLabel: 'AWD',
     host: 'www.avis.com',
     searchable: true,
-    // Deliberately **no `maxLanes`**, and now on evidence rather than on the
-    // absence of it. Avis looked like national and enterprise: probe tabs share
-    // one profile, `reset-widget-state.ts` clears a localStorage key on every
-    // one of them, and if that key carried the AWD then tab A could price tab
-    // B's code — which `verify-trip.ts` is structurally blind to, since it only
-    // compares locations and both tabs ask for the same trip.
+    // Capped, and the route to that answer is worth keeping because it went the
+    // other way first. Avis looked like national and enterprise: probe tabs
+    // share one profile, `reset-widget-state.ts` clears a localStorage key on
+    // every one of them, and if that key carried the AWD then tab A could price
+    // tab B's code — which `verify-trip.ts` cannot catch, since it compares only
+    // locations and both tabs ask for the same trip.
     //
-    // Measured on 2026-08-11, on one TPA round trip, tabs loaded concurrently.
-    //
-    // Two tabs on different AWDs: the code travels in sessionStorage, which is
-    // per-tab by the platform's own rules. Each tab's `reservation.store` and
+    // Measured on 2026-08-11, one TPA round trip, tabs loaded concurrently. Two
+    // tabs on different AWDs: the code travels in sessionStorage, per-tab by the
+    // platform's own rules, and each tab's `reservation.store` and
     // `REACT_QUERY_OFFLINE_CACHE` held its own code and not the other's, found
     // by enumerating every key in both stores. The only localStorage keys
     // carrying an AWD are a bot-detection event log and an mParticle analytics
-    // batch queue — write-side telemetry, not read back to price a search. And
-    // `booking-widget.store`, the key this worry was actually about and the one
-    // we clear, is 65 bytes and carries no code at all. That last fact is what
-    // an earlier truncated dump could not settle, and it closes the question as
-    // posed.
+    // batch queue — write-side telemetry. And `booking-widget.store`, the key
+    // this worry named and the one we clear, is 65 bytes carrying no code at
+    // all, which an earlier truncated dump could not establish.
     //
-    // What it does not close, stated because an earlier draft claimed it did: a
-    // cookie-identified backend session pricing both tabs off one code. The
-    // tempting evidence was that a coded tab renders "Your savings are reflected
-    // below" and an uncoded one does not — but a tab carrying the nonsense
-    // `Z9Z9Z9Z` renders that banner too, at the same prices and with no error,
-    // so it is a client-side echo of our own request rather than a server
-    // verdict. Two tabs differing on it follows from sessionStorage isolation
-    // alone.
+    // That was read as "no cap needed" for two rounds. It does not support that,
+    // and the gap is the whole reason this comment is long. What it closes is
+    // the *client-side* worry. What it leaves open is a cookie-identified
+    // backend session pricing both tabs off one code — and no experiment can
+    // close that one, because nothing observable varies with the code at all:
+    // identical cheapest six with two real AWDs, with the nonsense `Z9Z9Z9Z`,
+    // and with no code. The tempting counter-evidence, that a coded tab renders
+    // "Your savings are reflected below" and an uncoded one does not, is worth
+    // nothing: `Z9Z9Z9Z` renders it too, so it echoes our own request rather
+    // than reporting a server verdict.
     //
-    // Nothing available settles that, because nothing observable varies with the
-    // code: identical cheapest six with two real AWDs, with the nonsense one,
-    // and with no code at all. No price delta exists to leak, so no experiment
-    // of this shape could catch a leak. See CLAUDE.md — the fact that no Avis
-    // code has been shown to move a price is its own, larger question.
+    // So the risk that matters is unfalsifiable rather than absent, and this
+    // file already knows what to do with that — enterprise above carries
+    // `maxLanes: 1` on architectural analogy alone, with no measurement at all.
+    // Worse, "no Avis code has been shown to move a price" (CLAUDE.md) is itself
+    // consistent with a shared session overriding the URL's `awd_number`, which
+    // would make an uncapped Avis actively wrong rather than merely unproven.
+    // A halved Avis throughput is a cost the user can see; one company's price
+    // under another's code is not.
+    maxLanes: 1,
     //
-    // The clear itself is still needed: that store holds the *location*, which
-    // is the Tampa/Philadelphia bug it was written for.
+    // The widget clear is still needed and is a separate thing: that store holds
+    // the *location*, which is the Tampa/Philadelphia bug it was written for.
   },
   {
     id: 'budget',

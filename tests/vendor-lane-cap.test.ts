@@ -7,19 +7,21 @@
  * the popup would report one company's price under another's code — the "real
  * page, real price, wrong rental" failure this codebase is organised around.
  *
- * Tested against an injected cap rather than against National itself, because
- * National is still `searchable: false`: its builder throws, `makeQuote` settles
- * the quote at plan time, and it never reaches the queue at all. Capping a
- * vendor nothing can route to would prove nothing, so these mock `findVendor` to
- * cap `hertz` — the same shape, on a vendor that really does open tabs. The
- * production values live in `vendors.ts` and are asserted at the bottom.
+ * These used to inject a fake cap onto `hertz`, because the only capped vendors
+ * were ones no run could route to — a capped vendor that never opens a tab
+ * proves nothing. **Avis is capped now**, and it deep-links and opens real tabs,
+ * so the injection is gone and the mechanism is exercised against the shipping
+ * configuration instead of a mock of it.
+ *
+ * `hertz` is the uncapped control for the same reason it is uncapped in
+ * production: it carries its whole search in the query string and leaves nothing
+ * behind for a second tab to pick up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
 import { VENDORS } from '../src/core/vendors.js';
-import type * as VendorsModule from '../src/core/vendors.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -42,20 +44,6 @@ const REPORT: ProbeReport = {
 
 let chromeMock: ChromeHarness;
 
-/** Cap `hertz` at one lane, leaving every other vendor as it really is. */
-function capHertz(): void {
-  vi.doMock('../src/core/vendors.js', async () => {
-    const actual = await vi.importActual<typeof VendorsModule>('../src/core/vendors.js');
-    return {
-      ...actual,
-      findVendor: (id: string) => {
-        const vendor = actual.findVendor(id);
-        return vendor && id === 'hertz' ? { ...vendor, maxLanes: 1 } : vendor;
-      },
-    };
-  });
-}
-
 async function bootWorker(): Promise<void> {
   chromeMock = installChromeMock();
   vi.resetModules();
@@ -72,7 +60,7 @@ async function getState(): Promise<RunState | null> {
   return reply.state;
 }
 
-function planOf(concurrency: number, vendors: Array<'hertz' | 'avis'>): SearchPlan {
+function planOf(concurrency: number, vendors: Array<'avis' | 'hertz'>): SearchPlan {
   return {
     trip: TRIP,
     concurrency,
@@ -96,13 +84,11 @@ async function answerOpenTabs(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  capHertz();
 });
 
 afterEach(() => {
   chromeMock.restore();
   vi.useRealTimers();
-  vi.doUnmock('../src/core/vendors.js');
 });
 
 describe('a vendor capped below the run concurrency', () => {
@@ -111,7 +97,7 @@ describe('a vendor capped below the run concurrency', () => {
     // Four codes, four lanes, and every one of them at the capped vendor.
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
+      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
     });
     await settle();
 
@@ -124,7 +110,7 @@ describe('a vendor capped below the run concurrency', () => {
     await bootWorker();
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
+      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
     });
     await settle();
 
@@ -148,7 +134,7 @@ describe('a vendor capped below the run concurrency', () => {
     // tab and idle the other two.
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(3, ['hertz', 'hertz', 'hertz', 'avis', 'avis']),
+      plan: planOf(3, ['avis', 'avis', 'avis', 'hertz', 'hertz']),
     });
     await settle();
 
@@ -156,8 +142,8 @@ describe('a vendor capped below the run concurrency', () => {
     const openVendors = chromeMock.tabOptions.map((t) =>
       new URL(t.options.url!).host.includes('hertz') ? 'hertz' : 'avis',
     );
-    expect(openVendors.filter((v) => v === 'hertz')).toHaveLength(1);
-    expect(openVendors.filter((v) => v === 'avis')).toHaveLength(2);
+    expect(openVendors.filter((v) => v === 'avis')).toHaveLength(1);
+    expect(openVendors.filter((v) => v === 'hertz')).toHaveLength(2);
   });
 
   it('tears the run down cleanly while lanes are parked on the cap', async () => {
@@ -174,7 +160,7 @@ describe('a vendor capped below the run concurrency', () => {
     await bootWorker();
     await chromeMock.fromPopup({
       type: 'START_RUN',
-      plan: planOf(4, ['hertz', 'hertz', 'hertz', 'hertz']),
+      plan: planOf(4, ['avis', 'avis', 'avis', 'avis']),
     });
     await settle();
     expect(chromeMock.tabs.size).toBe(1);
@@ -193,32 +179,29 @@ describe('a vendor capped below the run concurrency', () => {
 });
 
 describe('the caps that actually ship', () => {
-  it('holds the session-state vendors to one lane', () => {
+  it('holds every vendor that can leak a code between tabs to one lane', () => {
     // National is measured: its form comes back carrying the previous search's
     // location, dates and account number. Enterprise keeps its search the same
-    // way. Both are set now so the value is written down next to the evidence
-    // rather than rediscovered when their drivers land.
+    // way and is capped on that analogy alone, with no measurement of its own.
+    //
+    // Avis joins them, and its route here is the one worth remembering. The
+    // client-side worry really was measured away — the AWD lives in
+    // sessionStorage, which is per-tab, and `booking-widget.store` carries no
+    // code — and for two rounds that was read as "no cap needed". It does not
+    // support that. What it leaves open is a shared server-side session, which
+    // *nothing* can close, because no Avis code was found to move a price and
+    // so no observable delta exists for a leak to show up in.
+    //
+    // Unfalsifiable is not absent. Enterprise is capped on less than this.
     const capped = VENDORS.filter((v) => v.maxLanes === 1).map((v) => v.id);
-    expect(capped).toEqual(['enterprise', 'national']);
+    expect(capped).toEqual(['avis', 'enterprise', 'national']);
   });
 
-  it('leaves every other vendor uncapped', () => {
-    // Including Avis, which CLAUDE.md recorded as *suspected* of the same
-    // problem. Somebody checked, on 2026-08-11: the AWD travels in
-    // sessionStorage, which is per-tab, and `booking-widget.store` — the shared
-    // key the worry was actually about, and the one we clear — carries no code
-    // at all. That closes the question as it was posed.
-    //
-    // It does not close a cookie-identified backend session, and nothing can:
-    // no Avis code was found to move a price, so there is no observable delta a
-    // leak could show up in. The vendor entry says so at length, including which
-    // tempting piece of evidence turned out to be worthless.
-    //
-    // So this stays uncapped on a measurement rather than on a shrug, and with
-    // its limits written down. Capping it would have halved Avis's throughput
-    // against a hazard nothing can currently detect either way.
+  it('leaves the vendors with no such hazard uncapped', () => {
+    // Hertz carries its whole search in the query string and keeps nothing that
+    // a second tab could pick up, so a cap would cost throughput for nothing.
     const uncapped = VENDORS.filter((v) => v.maxLanes === undefined).map((v) => v.id);
-    expect(uncapped).toContain('avis');
     expect(uncapped).toContain('hertz');
+    expect(uncapped).not.toContain('avis');
   });
 });

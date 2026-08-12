@@ -48,6 +48,16 @@ country/region and a driver age of 25, and both **refuse one-way trips**,
 because Avis honoured its return-location parameter on one replay and ignored
 it on two others.
 
+It is also not a promise that the **code** does anything, and for Avis that
+distinction currently bites. On a TPA round trip on 2026-08-11, two real AWDs, a
+deliberately invalid one, and no code at all returned identical prices — while
+all three coded runs displayed "Your savings are reflected below". So that
+banner tracks the presence of a code in the URL and nothing more, and no Avis
+code has yet been shown to save money. Either those codes are worth nothing on
+that trip or Avis ignores `awd_number` from a deep link; nothing measured so far
+separates the two. Treat an Avis result as a real price for a real search, and
+not as evidence the discount applied.
+
 Some cannot be deep-linked at all, which is worse than unverified. **Budget,
 Enterprise and National** keep the search in session state. Their URLs carry the
 code and the whole itinerary and the sites ignore all of it — Enterprise's
