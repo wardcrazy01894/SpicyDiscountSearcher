@@ -20,8 +20,24 @@ and ranks them.
 | Price extraction from a results page               | ✅ generic sweep, heavily tested — per-vendor `offer` selectors unfilled   |
 | Deep links that pre-apply a code                   | ⚠️ **Hertz and Avis work; National is driven; the rest unverified or off** |
 
-The last row is the honest caveat. None of these vendors document their search
-URLs, so the query parameters in `src/core/deeplinks.ts` are reverse-engineered.
+### Cars: what is left, and what is finished
+
+**Finished — Hertz, Avis, National.** All three return real prices. They need no
+tuning, no re-measurement and no further verification, and changes to them
+should be **reactive only**: prices stopped coming back, or a visibly wrong
+number reached the popup. Two PRs on 2026-08-11 went the other way, improving
+vendors that already worked on the strength of measurements taken in an ordinary
+browser tab rather than in the probe's own environment. Both broke production —
+Hertz priced every quote at $20,000 and Avis returned one price for every code —
+and both were reverted.
+
+**Left — Sixt, Budget, Enterprise.** These three cannot run at all, so they are
+where car work goes. Only Sixt is reachable today: Enterprise's booking app 503s
+instead of mounting, and Budget raises a bot check when its form is submitted.
+
+The last table row is the honest caveat. None of these vendors document their
+search URLs, so the query parameters in `src/core/deeplinks.ts` are
+reverse-engineered.
 Two are now checked against the live sites and marked `'verified'`:
 
 - **Hertz** — `/us/en/book/vehicles`, code as `CDP`. Works from a cold browser.
