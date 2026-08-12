@@ -722,10 +722,14 @@ background's own knowledge, and a page claiming `cancelled` would misattribute
 its failure to the user. State the rule when you extend `PROBE_FAILURES`, not a
 second copy of the list — the two drifted apart once already.
 
-`form-fill` and `form-submit` satisfy the rule and are still deliberately **not**
-on the allowlist, because nothing emits them yet. A code admitted before its
-emitter exists can only ever arrive forged, and the popup would print "could not
-fill the search form" for a build with no form-filling code in it.
+`form-fill`, `form-submit` and `code-rejected` **are** on the allowlist now, and
+the paragraph that used to sit here said the opposite long after that stopped
+being true — it survived National's driver landing and contradicted this same
+section twenty lines up. The rule it stated is still the right one: a code
+admitted before anything can emit it can only ever arrive forged, and the popup
+would print "could not fill the search form" for a build with no form-filling
+code in it. What changed is that National and Enterprise are both reachable
+emitters, which is exactly the test that rule applies.
 
 `warn()` in the service worker is the only place this extension logs. There is
 no log store and the worker's console dies with it, so the structured fields

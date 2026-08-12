@@ -5,9 +5,14 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * a search.
  *
  * Budget, Enterprise and National keep the itinerary in session state, so no
- * query string can carry it and `deeplinks.ts` refuses to build one for them.
- * The only way to price a code at those vendors is to open their form and fill
- * it in, which is what this file is the framework for.
+ * query string can carry it. The only way to price a code at those vendors is
+ * to open their form and fill it in, which is what this file is the framework
+ * for.
+ *
+ * `deeplinks.ts` still refuses to build a search URL for any of them — nothing
+ * about driving a form makes one possible. What it does for the two that are
+ * driven is return the page the form lives on, marked `'driven'`: not a deep
+ * link, and deliberately not graded as one.
  *
  * **The doctrine `deeplinks.ts` follows applies here unchanged, and matters
  * more.** A deep link that rots usually lands somewhere obviously wrong; a
@@ -17,8 +22,13 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * worked, and a step that cannot be verified fails the quote instead of
  * continuing. `form-fill` is visible in the popup; a wrong price is not.
  *
- * National is live on this path (`drivers/national.ts`); Budget and Enterprise
- * are not, and `drivers/enterprise.ts` records what is still missing for it.
+ * National and Enterprise are both live on this path (`drivers/national.ts`,
+ * `drivers/enterprise.ts`). Budget is not: its form is mapped but submitting it
+ * raises a bot check, so nothing drives it yet.
+ *
+ * Read Enterprise's for a form whose date control is a range picker, and
+ * National's for one whose submit ends in a real navigation — the two shapes a
+ * third driver is most likely to meet.
  */
 
 /**
