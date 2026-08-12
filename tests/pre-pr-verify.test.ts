@@ -65,7 +65,11 @@ function parseDecision(stdout: string): string {
   return parsed.hookSpecificOutput?.permissionDecision ?? 'malformed';
 }
 
-const bash = (command: string, cwd: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd });
+const bash = (command: string, cwd: string) => ({
+  tool_name: 'Bash',
+  tool_input: { command },
+  cwd,
+});
 
 describe('the pre-PR gate', () => {
   it('emits exactly one JSON document when verify fails', () => {
@@ -73,7 +77,7 @@ describe('the pre-PR gate', () => {
     // neither, so the hook is ignored and the PR is created unverified.
     const repo = fakeRepo('echo BROKEN >&2; exit 1');
     const stdout = run(bash('gh pr create --title x', repo));
-    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(() => JSON.parse(stdout) as unknown).not.toThrow();
     expect(parseDecision(stdout)).toBe('deny');
   });
 
