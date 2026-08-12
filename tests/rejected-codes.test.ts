@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clearRejected,
-  loadRejected,
+  readRejected,
   recordRejected,
   rejectionKey,
   rejectionSet,
@@ -34,7 +34,7 @@ describe('recordRejected', () => {
   it('remembers a refusal so the code is not raced again', async () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1_000);
-    const entries = await loadRejected(store);
+    const entries = (await readRejected(store))!;
     expect(entries).toEqual([{ vendor: 'national', code: 'XZ15J55', at: 1_000 }]);
     expect(rejectionSet(entries).has(rejectionKey('national', 'XZ15J55'))).toBe(true);
   });
@@ -43,7 +43,7 @@ describe('recordRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1_000);
     await recordRejected(store, 'national', 'XZ15J55', 9_000);
-    const entries = await loadRejected(store);
+    const entries = (await readRejected(store))!;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.at).toBe(1_000);
   });
@@ -54,20 +54,20 @@ describe('recordRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1);
     await recordRejected(store, 'enterprise', 'XZ15J55', 1);
-    expect(await loadRejected(store)).toHaveLength(2);
+    expect(await readRejected(store)).toHaveLength(2);
   });
 });
 
-describe('loadRejected', () => {
+describe('readRejected', () => {
   it('is empty when nothing has been refused', async () => {
-    expect(await loadRejected(fakeStore())).toEqual([]);
+    expect(await readRejected(fakeStore())).toEqual([]);
   });
 
   it('survives whatever an older build left behind', async () => {
     // Persisted state outlives the code that wrote it, and a throw here would
     // take the popup's whole startup with it.
     const store = fakeStore({ rejectedCodes: 'not an array' });
-    expect(await loadRejected(store)).toEqual([]);
+    expect(await readRejected(store)).toEqual([]);
   });
 
   it('drops malformed entries rather than trusting the shape', async () => {
@@ -77,18 +77,27 @@ describe('loadRejected', () => {
         { vendor: 'national' },
         null,
         'nonsense',
+        // `at` is declared `number` and every build that has written this key
+        // wrote one, so an entry without it is not a `RejectedCode` — and this
+        // is the function whose job is not trusting what it reads. Nothing
+        // compares timestamps today; the filter is about the shape being what
+        // the type says, not about any reader's arithmetic.
+        { vendor: 'national', code: 'NOSTAMP' },
+        { vendor: 'national', code: 'BADSTAMP', at: 'yesterday' },
       ],
     });
-    expect(await loadRejected(store)).toEqual([{ vendor: 'national', code: 'GOOD', at: 1 }]);
+    expect(await readRejected(store)).toEqual([{ vendor: 'national', code: 'GOOD', at: 1 }]);
   });
 
-  it('returns empty rather than throwing when storage is unavailable', async () => {
-    // Costs a wasted tab, not correctness — the run simply re-asks the vendor.
+  it('says null rather than empty when storage is unavailable', async () => {
+    // The distinction the store is built on. Collapsed to `[]`, one failed read
+    // let `recordRejected` write a single-entry list over everything the vendors
+    // had already refused, and let the popup report a failed clear as a success.
     const broken = {
       get: () => Promise.reject(new Error('no storage')),
       set: () => Promise.resolve(),
     };
-    expect(await loadRejected(broken)).toEqual([]);
+    expect(await readRejected(broken)).toBeNull();
   });
 });
 
@@ -99,6 +108,6 @@ describe('clearRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1);
     await clearRejected(store);
-    expect(await loadRejected(store)).toEqual([]);
+    expect(await readRejected(store)).toEqual([]);
   });
 });

@@ -356,6 +356,27 @@ quietly retire a working code, permanently and invisibly. Only the vendor's own
 words are durable enough to act on, and the popup says how many codes are being
 skipped and offers to try them again.
 
+**The store is written directly, from both sides, and that is a deliberate
+retreat.** `recordRejected` is read-modify-write with no atomicity underneath
+it, so two refusals settling inside one `get` round trip can lose one, and a
+clear written from the popup can land between a worker write's read and its
+write. Both are real. Both were fixed, for a while, with a serialised write
+queue, a `CLEAR_REJECTED` message round trip, bounded waits on either side, and
+eight interacting flags in the popup — and that machinery generated far more
+user-visible bugs, over twenty review rounds, than the races it closed ever
+could have. The cost of the races is bounded and small: a refusal is missed, a
+code is raced once more, one wasted tab. The cost of the machinery was not.
+
+What survives from it is the one part that prevents actual data loss:
+`readRejected` distinguishes an unreadable store from an empty one, so a
+transient `storage.get` failure cannot make `recordRejected` write a
+single-entry list over everything the vendors have already refused. That is ten
+lines and no state.
+
+If those races ever need closing again, close them where they are cheap — a
+per-vendor lane cap already exists and makes the two-lane case unreachable —
+rather than by ordering every write in the extension.
+
 Driving the form is the answer for Enterprise, and the shape of it is now
 measured rather than guessed. **The three sentences that used to sit here were
 wrong on every count** — they described a multi-step wizard whose real inputs

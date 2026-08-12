@@ -86,7 +86,6 @@ const KEEPALIVE_MS = 20_000;
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
-
 interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
@@ -232,6 +231,10 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
+    // Fire and forget. Nothing waits for it: the popup re-reads this list when
+    // the run finishes, and a write that lands after that broadcast costs one
+    // wasted tab on the next run, which is the trade this whole store is built
+    // on. Ordering the two was worth far less than the machinery it took.
     void recordRejected(
       chrome.storage.local,
       quote.candidate.vendor,
@@ -911,17 +914,89 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
-        // Guarded on `active === run` with the rest of teardown: a newer run
-        // has started its own keepalive, and stopping unconditionally here
-        // would suspend the worker out from under it.
-        stopKeepAlive();
+        // Stamped before the awaits, not between them. The `finally` and the
+        // outer `.catch` exist because those awaits are believed able to
+        // reject — and `active` is never nulled, so a run that reached this
+        // block without a `finishedAt` is reported live by `currentState()`
+        // for the life of the worker: the popup stuck on "Racing codes…" with
+        // Run disabled and no way back. It also closes the window where every
+        // quote is settled but `GET_STATE` still answers "running".
+        //
+        // Deleting this line — moving the stamp back between the awaits —
+        // passes the whole suite, and that is recorded rather than hidden:
+        // reaching it needs `closeWindow` to reject, and it is fully
+        // try/caught today, so a test would have to add a failing
+        // `windows.remove` to the chrome fake to construct a state the code
+        // cannot currently be in. The line costs nothing and restores the
+        // guarantee the original ordering had.
         run.state.finishedAt = Date.now();
-        await closeWindow(run);
-        await publish();
+        try {
+          await closeWindow(run);
+          await publish();
+        } finally {
+          // Last, after the closes and the final publish, so teardown itself is
+          // still covered by a resident worker — the same ordering `cancelRun`
+          // has always used, and for the same reason. `finishedAt` lives only
+          // in memory until `publish` persists it, so a reclaim before that
+          // loses the finished snapshot and the popup falls back to
+          // `reapInterrupted`. It mattered less when nothing here awaited I/O;
+          // awaiting a storage write between the two is what made the gap worth
+          // closing.
+          //
+          // In a `finally`, because moving it last silently traded away the
+          // unconditional stop it used to have as the block's first statement.
+          // Any of those three rejecting — `publish` calls `broadcast`, whose
+          // `chrome.runtime.sendMessage` can *throw* synchronously on an
+          // invalidated context, which its own `.catch` does not cover — left
+          // the interval poking every 20s for the rest of the ceiling with no
+          // run in progress. That is the failure `beginRun`'s own
+          // `catch { stopKeepAlive(); throw }` above exists for.
+          //
+          // Re-checked, not covered by the block's own `active === run`: that
+          // test is now three awaits old, and a newer run starting inside them
+          // has its own keepalive to stop out from under. Exactly the
+          // regression `cancelRun` records below, which is why it re-checks
+          // too.
+          //
+          // Deleting that guard passes the whole suite, and that is recorded
+          // rather than hidden: reaching it needs a second run to start
+          // *inside* teardown's storage wait, and `startRun` cancels the active
+          // run first — which awaits the same write this one is parked on. Kept
+          // because the reasoning is `cancelRun`'s, where the unguarded version
+          // was a real measured regression, and because a guard that costs one
+          // comparison is not worth trading for a test that would have to be
+          // built out of that interleaving.
+          if (active === run) stopKeepAlive();
+        }
       }
     }
-  })();
+  })().catch((error: unknown) => {
+    // Nothing awaits this IIFE, so a throw out of teardown is an unhandled
+    // rejection — the one failure in this file that no `Quote.failure` can
+    // carry, because by here the run is over and every quote is settled. The
+    // `finally` above has already stopped the keepalive and the run has been
+    // torn down; all that is left is to say it happened rather than let the
+    // runtime report it with no context.
+    warn('teardown failed after the run finished', error);
+  });
 
+  return state;
+}
+
+/**
+ * What the popup should be shown: the live run, or the settled snapshot.
+ *
+ * One caller now that the clear no longer goes through the worker, and kept
+ * separate anyway: `active?.state ?? null` is the tempting shorthand and it is
+ * wrong after a restart, where it says "no run" about one the user can still
+ * see on screen.
+ */
+async function currentState(): Promise<RunState | null> {
+  if (active) return active.state;
+  // No active run, so anything unfinished in the snapshot belongs to a worker
+  // that was suspended. Settle it before the popup sees it.
+  const state = reapInterrupted(await loadPersisted());
+  if (state) await persist(state).catch(() => {});
   return state;
 }
 
@@ -1005,15 +1080,7 @@ chrome.runtime.onMessage.addListener(
           return;
         }
         case 'GET_STATE': {
-          if (active) {
-            sendResponse({ type: 'RUN_STATE', state: active.state } satisfies StateMessage);
-            return;
-          }
-          // No active run, so anything unfinished in the snapshot belongs to a
-          // worker that was suspended. Settle it before the popup sees it.
-          const state = reapInterrupted(await loadPersisted());
-          if (state) await persist(state).catch(() => {});
-          sendResponse({ type: 'RUN_STATE', state } satisfies StateMessage);
+          sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
         case 'PROBE_READY': {

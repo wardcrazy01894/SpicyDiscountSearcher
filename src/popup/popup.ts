@@ -18,7 +18,7 @@ import {
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
   clearRejected,
-  loadRejected,
+  readRejected,
   rejectionKey,
   rejectionSet,
   type RejectedCode,
@@ -118,6 +118,14 @@ const ui: UiState = {
   rejected: [],
 };
 
+/**
+ * Whether `main()` has established a selection to draw.
+ *
+ * The RUN_STATE listener is registered at module scope, so a broadcast can
+ * arrive before `restoreForm` and `setCategory` have run.
+ */
+let booted = false;
+
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
 
@@ -153,12 +161,34 @@ function money(amount: number, currency: string): string {
   }
 }
 
+/**
+ * An empty vendor selection means "no preference", so it is filled in.
+ *
+ * Deliberately *not* inside `renderVendorChips`, where it lived until this
+ * render gained call sites that are not the user establishing a selection —
+ * clearing the refusal list, and a run finishing. Unticking every chip leaves
+ * `ui.vendors` empty with the boxes unticked (the change handler does not
+ * re-render), so the fill would have re-ticked the whole row under a user who
+ * had just cleared it, reverting a choice they made and leaving `ui.vendors`
+ * disagreeing with the saved form until the next save. Filling belongs to the
+ * moments a selection is established, not to drawing one.
+ *
+ * Which is a narrower guarantee than "an untick survives", and deliberately so.
+ * Clicking the already-active category tab still re-fills, and so does
+ * reopening the popup, because `restoreForm` reads a saved `vendors: []` as a
+ * selection and this then replaces it. Both are the behaviour that shipped
+ * before any of this; an empty selection is read as "no preference" rather than
+ * "race nothing", and making it persist is a different decision from stopping a
+ * re-render reverting it.
+ */
+function defaultVendorsIfEmpty(): void {
+  if (ui.vendors.size > 0) return;
+  for (const vendor of vendorsFor(ui.category)) ui.vendors.add(vendor.id);
+}
+
 function renderVendorChips(): void {
   const vendors = vendorsFor(ui.category);
-  // Whenever nothing is selected — not only on first open. Deliberate: an
-  // empty selection cannot race anything, so it is treated as "no preference"
-  // rather than "race nothing".
-  if (ui.vendors.size === 0) for (const vendor of vendors) ui.vendors.add(vendor.id);
+  const refused = rejectionSet(ui.rejected);
 
   vendorChips.replaceChildren(
     ...vendors.map((vendor) => {
@@ -172,15 +202,58 @@ function renderVendorChips(): void {
         if (box.checked) ui.vendors.add(vendor.id);
         else ui.vendors.delete(vendor.id);
         label.classList.toggle('is-on', box.checked);
+        // The company list is a function of the vendor selection — which
+        // companies match, which vendors each row is labelled with, and which
+        // of the three empty-state messages applies — and none of it redrew
+        // when the selection changed. Unticking Avis and Hertz to leave only
+        // National, which is this PR's own motivating scenario, left every Avis
+        // and Hertz company on screen with their old labels until some
+        // unrelated trigger rebuilt the list.
+        renderCompanyList();
         refreshPlan();
         void saveForm();
       });
 
+      // What this vendor would actually race, which is the number the plan line
+      // reports and the whole reason this is not just `countCodesFor(id)`: the
+      // chip said 19 while the run did 14, because the plan learned to skip
+      // refused codes and the count had not.
+      const raceable = countCodesFor(vendor.id, refused);
+      // Each call is a full pass over every record in the database, and with
+      // nothing refused — the overwhelmingly common case — the second one is
+      // guaranteed to return what the first did.
+      const total = refused.size === 0 ? raceable : countCodesFor(vendor.id);
       const count = document.createElement('span');
       count.className = 'count';
-      count.textContent = String(countCodesFor(vendor.id));
+      count.textContent = String(raceable);
+      // Said out loud, not only in a `title`. The smaller number alone is its
+      // own confusion — a vendor you know has nineteen codes quietly showing
+      // fourteen — and a tooltip needs a hovering mouse, so on a touch device
+      // or through a screen reader the chip was exactly the bare "14" this is
+      // supposed to avoid.
+      //
+      // It also names what it counts. This is a per-vendor total across every
+      // company, which agrees with the plan line only when no company is
+      // ticked; tick one with a single National code and the chip still reads
+      // 14 while the plan says "Racing 1 code". Scoping the count to the
+      // selection would make the chips move as companies are ticked, which is
+      // a different and worse thing to read.
+      const reconciliation =
+        total > raceable
+          ? `${total} codes at ${vendor.label} across every company, ${total - raceable} refused by the vendor and no longer raced`
+          : `${total} codes at ${vendor.label} across every company`;
+      label.title = reconciliation;
+      // Real text, not `aria-label`. That attribute is wrong here twice:
+      // `<label>` maps to the generic role, where ARIA prohibits naming, and
+      // where a browser honours it anyway it *replaces* the visible "National
+      // 14" — so the number on screen stops being part of the accessible name
+      // and "click National 14" no longer matches for voice control. A hidden
+      // span composes with the visible label instead of overriding it.
+      const spoken = document.createElement('span');
+      spoken.className = 'sr-only';
+      spoken.textContent = ` — ${reconciliation}`;
 
-      label.append(box, document.createTextNode(vendor.label), count);
+      label.append(box, document.createTextNode(vendor.label), count, spoken);
       return label;
     }),
   );
@@ -226,6 +299,40 @@ function syncSelectionSummary(): void {
   if (fresh) companyList.prepend(fresh);
 }
 
+/** Nothing matched because of the vendor picker or the search box. */
+function emptyBySelection(query: string): string {
+  return query
+    ? `No company matching "${query}" has a code for these vendors.`
+    : 'Pick at least one vendor.';
+}
+
+/** Nothing matched because every code that would have was refused. */
+function emptyByRefusal(query: string): string {
+  const what = query ? `Every code matching "${query}" at these vendors` : 'Every code here';
+  // Names the button below the form rather than describing the state and
+  // stopping, because the state is undoable and the undo is two lines away.
+  return `${what} was refused by the vendor. Use "try them again" to re-ask.`;
+}
+
+/**
+ * Which of the two filters emptied the list.
+ *
+ * The same predicate without the refusal check answers it, and the answer
+ * decides between two opposite diagnoses: "you have picked nothing" and "the
+ * vendors said no to everything". Reachable — select only National, let its
+ * codes be refused over a few runs, and the plan line correctly says every code
+ * was refused while this list told the user to pick a vendor they had already
+ * picked.
+ */
+function emptyReason(query: string, vendors: VendorId[]): string {
+  const reachesAnyway =
+    vendors.length > 0 &&
+    searchCompanies(query).some((company) =>
+      company.codes.some((code) => !!code.code && vendors.some((v) => codeReaches(code.vendor, v))),
+    );
+  return reachesAnyway ? emptyByRefusal(query) : emptyBySelection(query);
+}
+
 function renderCompanyList(): void {
   const query = companySearch.value;
   const vendors = [...ui.vendors];
@@ -237,30 +344,78 @@ function renderCompanyList(): void {
   // `Purdue / Big TEN`, `UNION Bank/MUFG` and `University of Maryland` among
   // them, which are precisely the companies README says disappeared when these
   // vendors went unsearchable.
-  const matches = searchCompanies(query).filter((company) =>
-    company.codes.some((code) => code.code && vendors.some((v) => codeReaches(code.vendor, v))),
+  const refused = rejectionSet(ui.rejected);
+  const raceableAt = (code: { code: string | null; vendor: VendorId }, vendor: VendorId): boolean =>
+    !!code.code &&
+    codeReaches(code.vendor, vendor) &&
+    !refused.has(rejectionKey(vendor, code.code));
+  const found = searchCompanies(query);
+  const matches = found.filter((company) =>
+    company.codes.some((code) => vendors.some((v) => raceableAt(code, v))),
+  );
+  // A company the user has ticked stays listed even when it has nothing left to
+  // race. Otherwise the row vanishes while the slug stays in `ui.companies` and
+  // in the saved form, so the plan reads "No codes left to race — all 1 were
+  // refused" with no checkbox anywhere to untick: the only ways out are the
+  // blanket `clear`, which drops every company, or putting all the refusals
+  // back.
+  //
+  // Kept apart from `matches` rather than folded into it, because everything
+  // below asks "is there anything to race" and a stranded row is not an answer
+  // to that. Merged, it suppressed the empty-list branch entirely — so
+  // unticking every vendor chip with a company still selected showed no rows'
+  // worth of plan and never said `Pick at least one vendor`, which was exactly
+  // the diagnosis.
+  const raceableSlugs = new Set(matches.map((company) => company.slug));
+  const stranded = found.filter(
+    (company) => ui.companies.has(company.slug) && !raceableSlugs.has(company.slug),
   );
   const selected = selectionSummary();
 
-  if (matches.length === 0) {
+  if (matches.length === 0 && stranded.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = query
-      ? `No company matching "${query}" has a code for these vendors.`
-      : 'Pick at least one vendor.';
+    empty.textContent = emptyReason(query, vendors);
     // Still offer the escape hatch — an empty list is exactly when a stale
     // selection has stranded the plan.
     companyList.replaceChildren(...(selected ? [selected, empty] : [empty]));
     return;
   }
 
+  // The empty-list message still belongs above the stranded rows when there is
+  // genuinely nothing to race — they are an escape hatch, not a plan.
+  const emptyNote = document.createElement('p');
+  emptyNote.className = 'empty';
+  emptyNote.textContent = matches.length === 0 ? emptyReason(query, vendors) : '';
+
   // Long lists make the popup crawl; the search box is how you reach the rest.
-  const shown = matches.slice(0, 60);
+  //
+  // Stranded rows go **first**, and that ordering is the whole point rather
+  // than a presentation choice. Behind the matches they were cut by this slice
+  // whenever there were already 60 — which never happens for cars (33 matches)
+  // and always happens for hotels (212), so the escape hatch simply did not
+  // exist in that category: tick a Hilton-only company, untick the Hilton chip,
+  // and the row vanished with the slug still in `ui.companies` and the saved
+  // form, which is exactly the trap it was added to prevent. They are also the
+  // rows that need action, and there are only ever as many as the user ticked.
+  // Stranded rows first so the 60-row cut cannot swallow the escape hatch, but
+  // capped so the escape hatch cannot swallow the list. `stranded` is bounded
+  // only by how many companies the user has ticked, and with 60-plus ticked —
+  // reachable by searching and ticking — unticking a vendor chip filled the
+  // whole list with rows that cannot race and pushed every company that can
+  // behind the cut. Ten is enough to untick from, and the next render brings
+  // the next ten.
+  const listed = [...stranded.slice(0, 10), ...matches];
+  const shown = listed.slice(0, 60);
   companyList.replaceChildren(
     ...(selected ? [selected] : []),
+    ...(matches.length === 0 ? [emptyNote] : []),
     ...shown.map((company) => {
       const row = document.createElement('label');
       row.className = 'company';
+      // Whether this row is only here because it is ticked. Unticking one of
+      // those changes what the list *contains*, not just what is checked.
+      const isStranded = !raceableSlugs.has(company.slug);
 
       const box = document.createElement('input');
       box.type = 'checkbox';
@@ -271,6 +426,30 @@ function renderCompanyList(): void {
         syncSelectionSummary();
         refreshPlan();
         void saveForm();
+        // Only for a stranded row being unticked, and only then. The cap on
+        // those rows is justified by "the next render brings the next ten" —
+        // and nothing here rendered, so unticking all ten left them on screen
+        // unchecked while the rest of the selection stayed invisible and
+        // untickable. That is the trap the stranded rows exist to avoid, moved
+        // from "more than 60 matches" to "more than 10 stranded".
+        //
+        // Every other tick keeps `syncSelectionSummary`, which exists precisely
+        // so the list is not rebuilt under the click that caused it.
+        if (isStranded && !box.checked) {
+          // Keep the keyboard where it was. `renderCompanyList` is a
+          // `replaceChildren`, so it detaches the very input being dispatched
+          // to: focus falls back to `<body>` and the next Tab restarts from the
+          // top of the popup — which makes unticking the ten stranded rows one
+          // after another, the flow the cap's own justification assumes,
+          // impossible without a mouse.
+          const had = document.activeElement === box;
+          const index = [...companyList.querySelectorAll('label.company')].indexOf(row);
+          renderCompanyList();
+          if (had && index >= 0) {
+            const inputs = companyList.querySelectorAll<HTMLInputElement>('label.company input');
+            inputs[Math.min(index, inputs.length - 1)]?.focus();
+          }
+        }
       });
 
       const name = document.createElement('span');
@@ -292,25 +471,42 @@ function renderCompanyList(): void {
       // Rendered as labels rather than raw ids, so a row reads
       // "Avis · National" instead of "avis · national". The ids are internal
       // and this is the picker.
-      vendorList.textContent = [
-        ...new Set(
-          company.codes
-            .filter((c) => c.code)
-            .flatMap((c) => vendors.filter((vendor) => codeReaches(c.vendor, vendor))),
-        ),
-      ]
-        .map((id) => findVendor(id)?.label ?? id)
-        .join(' · ');
+      const reachable = [
+        ...new Set(company.codes.flatMap((c) => vendors.filter((vendor) => raceableAt(c, vendor)))),
+      ].map((id) => findVendor(id)?.label ?? id);
+      // A stranded row must say why rather than render the blank the fix above
+      // is named after — and the reason has to be *determined*, not assumed.
+      // "All refused" was asserted for every stranded row, so unticking the one
+      // vendor a company has a code at labelled it `all refused` with an empty
+      // refusal store. The two cases want opposite actions from the user: put
+      // the refusals back, or pick a different vendor.
+      const refusedHere = company.codes.some(
+        (c) =>
+          !!c.code &&
+          vendors.some((v) => codeReaches(c.vendor, v) && refused.has(rejectionKey(v, c.code!))),
+      );
+      vendorList.textContent = reachable.length
+        ? reachable.join(' · ')
+        : refusedHere
+          ? 'all refused'
+          : 'no code at these vendors';
 
       row.append(box, name, vendorList);
       return row;
     }),
   );
 
-  if (matches.length > shown.length) {
+  // Against everything there is to list, including the stranded rows this
+  // render is holding back. Comparing a match count to a length that also held
+  // stranded rows under-reported — at 59 matches plus 5 stranded it printed
+  // nothing at all while four rows were dropped, which is the user's only
+  // signal that anything is hidden — and capping those rows would under-report
+  // again by exactly the number it hid.
+  const total = stranded.length + matches.length;
+  if (total > shown.length) {
     const more = document.createElement('p');
     more.className = 'empty';
-    more.textContent = `+${matches.length - shown.length} more — keep typing to narrow.`;
+    more.textContent = `+${total - shown.length} more — keep typing to narrow.`;
     companyList.append(more);
   }
 }
@@ -356,6 +552,14 @@ function refreshPlan(): void {
     planSummary.textContent = SEND_FAILED_MESSAGE;
     planSummary.classList.add('is-warning');
     runBtn.disabled = true;
+    // Except the note, which is about a different thing entirely and is the
+    // second early return to have stranded it — the first was the all-refused
+    // branch below. `sendFailed` is set by a failed GET_STATE at boot and is
+    // cleared only by `renderRun`, which the clear path never calls, so a clear
+    // that *worked* left this line still reading "N codes have been refused"
+    // with the chips beside it already showing the restored counts. It is also
+    // the state where a clear is most likely to have failed.
+    renderRejectedNote();
     return;
   }
   const { all, capped, skipped } = plannedCandidates();
@@ -397,9 +601,48 @@ function refreshPlan(): void {
   renderRejectedNote();
 }
 
+/** Reads issued, so a later one can be told from an earlier. */
+let rejectedRead = 0;
+
+/** The newest read whose result was actually stored. */
+let appliedRead = 0;
+
+/**
+ * Re-read the refusal list, unless a later read has already been applied.
+ *
+ * Three places read it — boot, the finished-run broadcast, and the clear — and
+ * none of them was ordered against the others, so whichever `storage.get`
+ * resolved *last* won regardless of which was issued last. A run finishing as
+ * the user pressed "try them again" left the popup holding the pre-clear list:
+ * the codes they had just cleared went on being skipped and the note reappeared
+ * seconds later, with nothing to correct it until the popup was reopened.
+ *
+ * Compared against what was last *applied* rather than last issued, so a result
+ * is only ever discarded in favour of one that actually landed — a read that
+ * failed cannot supersede one that succeeded.
+ */
+async function reloadRejected(): Promise<RejectedCode[] | null> {
+  const mine = ++rejectedRead;
+  // `readRejected`, so a read that *failed* is not mistaken for "no refusals" —
+  // that would empty the list, inflate every chip, and let the next run re-race
+  // codes the vendors have already refused.
+  const entries = await readRejected(chrome.storage.local);
+  if (entries === null) return null;
+  if (mine <= appliedRead) return null;
+  appliedRead = mine;
+  ui.rejected = entries;
+  return entries;
+}
+
 /** The standing list, separate from this plan's skip count. */
 function renderRejectedNote(): void {
-  const total = ui.rejected.length;
+  // Deduped, like every other consumer of this list. `readRejected` accepts
+  // whatever an older build wrote and does not collapse duplicates — which is
+  // the stated premise for the two-directional `changed` comparison in the
+  // RUN_STATE listener — so a stored `[A, A]` had this line saying "2 codes
+  // have been refused" while the chips, the company list and the plan line all
+  // accounted for one.
+  const total = rejectionSet(ui.rejected).size;
   rejectedNote.hidden = total === 0;
   rejectedCount.textContent = total
     ? `${total} ${total === 1 ? 'code has' : 'codes have'} been refused by a vendor and are no longer raced — `
@@ -1043,6 +1286,7 @@ function setCategory(category: Category): void {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('.tab')) {
     tab.classList.toggle('is-active', tab.dataset['category'] === category);
   }
+  defaultVendorsIfEmpty();
   renderVendorChips();
   renderCompanyList();
   refreshPlan();
@@ -1121,6 +1365,17 @@ form.addEventListener('submit', (event) => {
   // building a new one; this is the half that stops the message being sent.
   ui.pendingStart = true;
   runBtn.disabled = true;
+  // And says so, for the same reason the clear button does. This reply is not
+  // prompt: `beginRun` awaits `cancelRun`, which waits on the previous run's
+  // outstanding refusal writes — up to the ceiling if storage is slow, and a
+  // run with seven or more refusals has a chain longer than that, so teardown
+  // can give up with writes still pending and leave this call to wait again.
+  // A disabled button with its ordinary label, no tabs opening and no "Racing
+  // codes…" is indistinguishable from a dead extension.
+  //
+  // `renderRun` sets the caption on every reply, so nothing has to put this
+  // back; `applyReply`'s failure branch replaces it with its own.
+  runBtn.textContent = 'Starting…';
   void send({ type: 'START_RUN', plan }).then(applyReply);
 });
 
@@ -1187,10 +1442,34 @@ rejectedClear.addEventListener('click', () => {
   // Forgets every refusal rather than offering a per-code list. The whole point
   // is to re-ask the vendor, and the vendors are the authority — a picker over
   // remembered answers would be a UI for second-guessing a cache.
-  void clearRejected(chrome.storage.local).then(() => {
-    ui.rejected = [];
-    refreshPlan();
-  });
+  //
+  // Written from here, directly. It went through the service worker for a
+  // while, so that both writers shared one serialised queue and a clear could
+  // not land between an in-flight `recordRejected`'s read and its write. That
+  // race is real and it is not worth what it cost: the window is one run
+  // settling a refusal at the moment the button is pressed, the consequence is
+  // that some refusals come back, and pressing again fixes it. The machinery
+  // for it — a message round trip, a write queue with per-link bounds, and
+  // eight interacting flags in this file — generated far more bugs than the
+  // race ever could, and every one of them was reachable in ordinary use.
+  void clearRejected(chrome.storage.local)
+    // Through `reloadRejected` like the other two readers, so a run finishing
+    // at this moment cannot leave the popup holding the pre-clear list.
+    .then(() => reloadRejected())
+    .then((entries) => {
+      if (!entries) return;
+      // Chips and the company list carry the count too, so `refreshPlan` alone
+      // would leave them showing the reduced numbers after putting the codes
+      // back.
+      renderVendorChips();
+      renderCompanyList();
+      refreshPlan();
+    })
+    .catch(() => {
+      // `clearRejected` swallows its own storage failure, so the reachable
+      // thrower is a render. Leaving the counts as they are is the honest
+      // outcome; the next open re-reads them.
+    });
 });
 
 cancelBtn.addEventListener('click', () => {
@@ -1219,10 +1498,48 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
   // moment ago — spending a real tab to rediscover a refusal, which is the one
   // thing remembering them exists to avoid.
   if (message.state?.finishedAt) {
-    void loadRejected(chrome.storage.local).then((entries) => {
-      ui.rejected = entries;
-      refreshPlan();
-    });
+    // Both directions, not `length` plus one-way containment. `readRejected`
+    // does not dedupe and accepts whatever an older build wrote, so a stored
+    // `[A, A]` against a held `[A, B]` compares equal on both of those and
+    // leaves B's codes excluded from the counts until the popup is reopened.
+    const before = rejectionSet(ui.rejected);
+    void reloadRejected()
+      .then((entries) => {
+        // Superseded: a clear the user pressed in the meantime has already
+        // stored its answer, and this read predates it — applying it would put
+        // the codes they just cleared back into the counts.
+        if (!entries) return;
+        const after = rejectionSet(entries);
+        const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
+        // Before boot has established a selection there is nothing to preserve and
+        // no selection to draw: `restoreForm` and `setCategory` have not run, so
+        // `ui.vendors` is empty and rendering here would draw every chip unticked
+        // under a user who has several picked, plus "Pick at least one vendor".
+        // It self-corrects when `setCategory` renders a moment later, which makes
+        // it a flicker rather than a stuck state — and one this listener could not
+        // produce until the default-fill moved out of the render.
+        if (!booted) return;
+        // Only when a refusal was actually recorded. Both renders are a full
+        // `replaceChildren`, and a run finishes asynchronously with whatever the
+        // user is doing — rebuilding the company list under someone mid-click
+        // resets their scroll and drops their focus. Most runs record nothing, so
+        // this makes the disruption as rare as the news that causes it. It does
+        // not remove it: a run that does refuse a code still rebuilds both lists,
+        // which is the honest trade for showing counts that are no longer true.
+        if (changed) {
+          renderVendorChips();
+          renderCompanyList();
+        }
+        refreshPlan();
+      })
+      .catch(() => {
+        // This body grew from one assignment into two full `replaceChildren`
+        // re-renders plus `refreshPlan`, so a throw is now an unhandled rejection
+        // that stops the counts updating with no message and nothing to tell it
+        // apart from "no refusals changed". The clear path carries a `.catch` for
+        // the same reason.
+        renderRejectedNote();
+      });
   }
 });
 
@@ -1236,9 +1553,15 @@ async function main(): Promise<void> {
   maxCodesInput.max = String(MAX_CODES);
 
   // Before restoreForm, so the first refreshPlan already knows what to skip.
-  ui.rejected = await loadRejected(chrome.storage.local);
+  //
+  // Through `reloadRejected` like the other two readers, so a listener read
+  // issued after this one wins even if it resolves first. This used to carry
+  // its own `if (ui.rejected.length === 0)` guard, which was the same idea
+  // written for one pair of readers rather than all three.
+  await reloadRejected();
   await restoreForm();
   setCategory(ui.category);
+  booted = true;
 
   const totalCodes = vendorsFor('car')
     .concat(vendorsFor('hotel'))

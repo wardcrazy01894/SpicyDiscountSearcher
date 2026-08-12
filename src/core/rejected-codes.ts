@@ -59,7 +59,20 @@ export interface RejectionStore {
   set(items: Record<string, unknown>): Promise<void>;
 }
 
-export async function loadRejected(storage: RejectionStore): Promise<RejectedCode[]> {
+/**
+ * The stored list, or **null when storage could not be read**.
+ *
+ * The difference matters to writers and only to writers. `recordRejected` is
+ * read-modify-write, so collapsing a failed `chrome.storage.local.get` into "no
+ * refusals" made one transient error replace the whole remembered list with a
+ * single entry — silently, and the next run re-raced every code the vendors had
+ * already refused.
+ *
+ * A malformed *value* still reads as empty rather than as a failure: that is a
+ * store an older build really did write, and refusing to write over it would
+ * wedge the feature permanently rather than transiently.
+ */
+export async function readRejected(storage: RejectionStore): Promise<RejectedCode[] | null> {
   try {
     const stored = await storage.get(KEY);
     const list: unknown = stored[KEY];
@@ -71,12 +84,11 @@ export async function loadRejected(storage: RejectionStore): Promise<RejectedCod
         !!entry &&
         typeof entry === 'object' &&
         typeof (entry as RejectedCode).vendor === 'string' &&
-        typeof (entry as RejectedCode).code === 'string',
+        typeof (entry as RejectedCode).code === 'string' &&
+        typeof (entry as RejectedCode).at === 'number',
     );
   } catch {
-    // Storage being unavailable costs a wasted tab, not correctness — the run
-    // simply re-asks. Never worth failing a race over.
-    return [];
+    return null;
   }
 }
 
@@ -87,7 +99,10 @@ export async function recordRejected(
   code: string,
   at: number,
 ): Promise<void> {
-  const existing = await loadRejected(storage);
+  // A read that failed must not become an empty list here, or this write
+  // replaces every remembered refusal with a single entry.
+  const existing = await readRejected(storage);
+  if (existing === null) return;
   if (existing.some((e) => rejectionKey(e.vendor, e.code) === rejectionKey(vendor, code))) return;
   if (existing.length >= MAX_ENTRIES) return;
   try {

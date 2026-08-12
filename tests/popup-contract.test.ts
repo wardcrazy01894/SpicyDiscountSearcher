@@ -52,14 +52,53 @@ const SELECTORS = [
 let sentMessages: Array<{ type: string }> = [];
 /** The popup's RUN_STATE listener, so the background can push to it. */
 let broadcastListeners: Array<(message: unknown) => void> = [];
+/**
+ * A background that answers the way the real one does.
+ *
+ * Deliberately has no clear branch: "try them again" writes
+ * `chrome.storage.local` from the popup and sends nothing, so a stub that
+ * handled a clear message would be dead code inviting the next test author to
+ * wire a clear through it and get a false pass.
+ */
+function fakeBackground(_message: { type: string }): Promise<unknown> {
+  return Promise.resolve({ type: 'RUN_STATE', state: null });
+}
+
 /** Swapped by a test to make START_RUN reject the way a dead worker does. */
-let sendMessageImpl: (message: { type: string }) => Promise<unknown> = () =>
-  Promise.resolve({ type: 'RUN_STATE', state: null });
+let sendMessageImpl: (message: { type: string }) => Promise<unknown> = fakeBackground;
+
+/** The plan a finished-run broadcast carries; its contents do not matter here. */
+const PLAN = {
+  trip: {
+    category: 'car',
+    pickupLocation: 'TPA',
+    dropoffLocation: '',
+    pickupDate: '2026-09-04',
+    pickupTime: '10:00',
+    dropoffDate: '2026-09-11',
+    dropoffTime: '10:00',
+  },
+  candidates: [],
+  concurrency: 2,
+};
 
 /** Seeded into chrome.storage.local before the popup boots. */
 let savedForm: Record<string, unknown> | null = null;
 /** Codes a vendor has already refused, as the background would have stored them. */
 let savedRejected: Array<{ vendor: string; code: string; at: number }> | null = null;
+
+/**
+ * How long *boot's* storage reads take.
+ *
+ * Zero for every test but one. `main()` is a chain of awaited reads, so slowing
+ * them is what holds open the window between the module registering its
+ * RUN_STATE listener and boot having a selection to draw. Only the first two —
+ * the ones `main` itself awaits — so a broadcast arriving inside that window
+ * gets a *fast* read and renders promptly, which is what puts the assertion
+ * safely between the two events rather than guessing at a gap.
+ */
+let getDelayMs = 0;
+let slowReadsLeft = 0;
 
 /** The slice of chrome the popup touches while starting up. */
 function installChrome(): void {
@@ -69,7 +108,20 @@ function installChrome(): void {
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
       local: {
-        get: () => Promise.resolve(Object.fromEntries(local)),
+        get: () => {
+          const slow = slowReadsLeft > 0;
+          if (slow) slowReadsLeft -= 1;
+          // Snapshot when the read is *issued*, not when it resolves — which is
+          // what `chrome.storage.get` does, and the whole difference between a
+          // slow read and a stale one. Resolving with the map's later contents
+          // made a delayed read silently pick up writes that happened after it,
+          // so a test for "the stale read must not win" had no stale read in it
+          // and passed against the bug.
+          const snapshot = Object.fromEntries(local);
+          return slow
+            ? new Promise((resolve) => setTimeout(() => resolve(snapshot), getDelayMs))
+            : Promise.resolve(snapshot);
+        },
         set: (items: Record<string, unknown>) => {
           for (const [k, v] of Object.entries(items)) local.set(k, v);
           return Promise.resolve();
@@ -95,7 +147,9 @@ beforeEach(() => {
   broadcastListeners = [];
   savedForm = null;
   savedRejected = null;
-  sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+  getDelayMs = 0;
+  slowReadsLeft = 0;
+  sendMessageImpl = fakeBackground;
   installChrome();
   document.body.innerHTML = BODY;
 });
@@ -177,12 +231,40 @@ describe('the popup half of the double-run guard', () => {
     });
   }
 
+  /** What the background pushes when a race ends, which is when refusals land. */
+  async function broadcastFinishedRun(): Promise<void> {
+    for (const listener of broadcastListeners) {
+      listener({
+        type: 'RUN_STATE',
+        state: {
+          plan: {
+            trip: {
+              category: 'car',
+              pickupLocation: 'TPA',
+              dropoffLocation: '',
+              pickupDate: '2026-09-04',
+              pickupTime: '10:00',
+              dropoffDate: '2026-09-11',
+              dropoffTime: '10:00',
+            },
+            candidates: [],
+            concurrency: 2,
+          },
+          quotes: [],
+          finishedAt: Date.now(),
+        },
+      });
+    }
+    // Past the storage read the handler does before it decides to re-render.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
   it('offers a codes cap high enough to race every car code, and enforces it', async () => {
     // 100 covers all 66 car candidates, so a car run can be exhaustive. The
     // number matters because nothing ranks the codes — `interleaveByVendor`
     // makes truncation *fair*, not *good*, so whatever the cap cuts is cut
     // arbitrarily.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const maxCodes = document.querySelector<HTMLInputElement>('#max-codes')!;
@@ -211,6 +293,70 @@ describe('the popup half of the double-run guard', () => {
     expect(raced).toBe(100);
   });
 
+  it('counts the vendor chip the way the run counts it', async () => {
+    // Reported from a loaded extension: "National has 5 codes that have been
+    // refused so won't be raced. So it is doing 14, though the check box next
+    // to National still says 19."
+    //
+    // The same disagreement as before — the chip promising what the run will not
+    // do — arriving because the plan learned to skip refused codes and
+    // `countCodesFor` had not.
+    savedRejected = ['XZ15J55', 'XZ45B65', 'XZ24R05', 'XZ24S06', 'XZ15CH7'].map((code) => ({
+      vendor: 'national',
+      code,
+      at: 1,
+    }));
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const chip = [...document.querySelectorAll('#vendor-chips .chip')].find((el) =>
+      (el.textContent ?? '').includes('National'),
+    );
+    expect(chip?.querySelector('.count')?.textContent).toBe('14');
+    // The smaller number alone is its own confusion, so the chip carries the
+    // difference rather than swallowing it — and says it in real text as well
+    // as in a `title`, since a tooltip needs a hovering mouse and a bare "14"
+    // explains nothing without one.
+    expect(chip?.getAttribute('title')).toMatch(/19 codes at National.*5 refused/);
+    // Text rather than `aria-label`, which would *replace* the visible
+    // "National 14" in the accessible name instead of adding to it.
+    expect(chip?.getAttribute('aria-label')).toBeNull();
+    const spoken = chip?.querySelector('.sr-only')?.textContent ?? '';
+    expect(spoken).toMatch(/19 codes at National.*5 refused/);
+    expect(chip?.textContent).toMatch(/National/);
+    // And names what it counts: a per-vendor total across every company, which
+    // is not the plan's number once a company is ticked.
+    expect(chip?.getAttribute('title')).toMatch(/across every company/);
+
+    // And it agrees with the plan's own count of what is left to race. The cap
+    // is a separate, visible truncation — "14 codes match … racing 12 of them" —
+    // so the number to compare the chip against is the match, not the slice.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/^14 codes match/);
+    });
+  });
+
+  it('puts the chip count back when the refusals are cleared', async () => {
+    // `refreshPlan` alone would leave the chip and the company list showing the
+    // reduced numbers after the codes had been put back.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const count = () =>
+      [...document.querySelectorAll('#vendor-chips .chip')]
+        .find((el) => (el.textContent ?? '').includes('National'))
+        ?.querySelector('.count')?.textContent;
+    expect(count()).toBe('18');
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => expect(count()).toBe('19'));
+  });
+
   it('stops racing a code the vendor has refused, and says it is doing so', async () => {
     // Racing a refused code costs a real tab on a real vendor site and can only
     // fail. National refuses several of the contract ids in the workbook.
@@ -219,7 +365,7 @@ describe('the popup half of the double-run guard', () => {
       { vendor: 'national', code: 'XZ15J55', at: 1 },
     ];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const summary = () => document.querySelector('#plan-summary')?.textContent ?? '';
@@ -236,7 +382,7 @@ describe('the popup half of the double-run guard', () => {
     // a permanent, invisible edit to the user's own code list.
     savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     await vi.waitFor(() =>
       expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/),
@@ -250,12 +396,387 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
   });
 
+  it('updates the refused note even when the popup could not reach the background at boot', async () => {
+    // `refreshPlan` returns early on `ui.sendFailed`, which is set by a failed
+    // GET_STATE at boot and cleared only by `renderRun` — which the clear path
+    // never calls. So a clear that *worked* left the note still reading "N
+    // codes have been refused" with the chips beside it already restored. It is
+    // the second early return to have stranded this note; the first was the
+    // all-refused branch.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.reject(new Error('worker is asleep'));
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#plan-summary')?.textContent).toMatch(/Could not reach/);
+    });
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+
+    // The worker wakes up for the clear even though GET_STATE never landed.
+    sendMessageImpl = fakeBackground;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+  });
+
+  it('keeps a ticked company listed once all its codes are refused', async () => {
+    // The filter drops a company whose every reachable code has been refused,
+    // but the slug stays in `ui.companies` and in the saved form — so the row
+    // vanished while the plan line read "No codes left to race", with no
+    // checkbox left to untick it. The only escapes were the blanket `clear`,
+    // which drops every company, or restoring all the refusals.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const ibm = allCompanies().find((company) => company.slug === 'ibm')!;
+    savedRejected = ibm.codes
+      .filter((record) => record.code && codeReaches(record.vendor, 'national'))
+      .map((record) => ({ vendor: 'national', code: record.code!, at: 1 }));
+    expect(savedRejected.length).toBeGreaterThan(0);
+    savedForm = { category: 'car', vendors: ['national'], companies: ['ibm'] };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    const ibmRow = () => rows().find((row) => (row.textContent ?? '').includes(ibm.name));
+    await vi.waitFor(() => expect(ibmRow()).toBeDefined());
+    // Listed, tickable — and saying why rather than rendering the blank vendor
+    // list that a half-fix to this filter produced once before.
+    expect(ibmRow()?.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
+    expect(ibmRow()?.querySelector('.vendors')?.textContent).toBe('all refused');
+  });
+
+  it('says why a ticked company has nothing to race, rather than assuming', async () => {
+    // The escape-hatch row above was kept for *any* reason, then labelled
+    // `all refused` unconditionally — so a company that simply has no code at
+    // the remaining vendors was blamed on refusals, with an empty store. The
+    // two cases want opposite actions: put the refusals back, or pick another
+    // vendor.
+    savedForm = { category: 'car', vendors: ['hertz', 'avis'], companies: [] };
+    installChrome();
+    await boot();
+
+    // Tick the first company that reaches Avis and not Hertz, then untick Avis.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const avisOnly = allCompanies().find(
+      (company) =>
+        company.codes.some((c) => c.code && codeReaches(c.vendor, 'avis')) &&
+        !company.codes.some((c) => c.code && codeReaches(c.vendor, 'hertz')),
+    )!;
+    const rowFor = (name: string) =>
+      [...document.querySelectorAll('#company-list label.company')].find((row) =>
+        (row.textContent ?? '').includes(name),
+      );
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = avisOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    rowFor(avisOnly.name)?.querySelector<HTMLInputElement>('input')?.click();
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Avis') && box.checked) box.click();
+    }
+
+    // Still listed, so it can be unticked — and honest about why.
+    expect(rowFor(avisOnly.name)?.querySelector('.vendors')?.textContent).toBe(
+      'no code at these vendors',
+    );
+  });
+
+  it('still says to pick a vendor when a ticked company is all that is listed', async () => {
+    // Folding the stranded row into `matches` suppressed the empty-list branch
+    // entirely: with a company ticked and every chip unticked, the list showed
+    // one unraceable row and never said `Pick at least one vendor`, which was
+    // exactly the diagnosis.
+    savedForm = { category: 'car', vendors: ['national'], companies: ['ibm'] };
+    installChrome();
+    await boot();
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if (box.checked) box.click();
+    }
+
+    const list = () => document.querySelector('#company-list')?.textContent ?? '';
+    expect(list()).toMatch(/Pick at least one vendor/);
+    // And the row is still there to untick.
+    expect(document.querySelectorAll('#company-list label.company').length).toBe(1);
+  });
+
+  it('keeps a stranded company listed even behind a full page of matches', async () => {
+    // The escape hatch was appended *after* the matches and then sliced at 60,
+    // so it existed only while there were fewer than 60 matches. Cars have 33,
+    // which is why it looked fine; hotels have 146 at Hilton alone, so in that
+    // category the row vanished — slug still in `ui.companies` and in the saved
+    // form, and no checkbox anywhere to untick it.
+    //
+    // The scenario needs matches *and* a stranded row at once, which an earlier
+    // version of this test did not have: unticking the only selected vendor
+    // leaves no matches either, so the ordering it meant to pin made no
+    // difference and the mutation survived.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies().find(
+      (company) => has(company, 'marriott') && !has(company, 'hilton'),
+    )!;
+    savedForm = { category: 'hotel', vendors: ['hilton', 'marriott'], companies: [] };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    const named = () => rows().map((row) => row.querySelector('span')?.textContent ?? '');
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = marriottOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    rows()[0]?.querySelector<HTMLInputElement>('input')?.click();
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Untick Marriott. Hilton stays selected, so there are still 146 matches —
+    // far more than the 60-row cap — and this company is stranded among them.
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Marriott') && box.checked) {
+        box.click();
+      }
+    }
+
+    expect(rows().length).toBe(60);
+    expect(named()).toContain(marriottOnly.name);
+  });
+
+  it('counts the hidden rows against everything it meant to list', async () => {
+    // The hint compared a *match* count against a length that also held
+    // stranded rows, so it under-reported by exactly the number of stranded
+    // rows on screen — and at 59 matches plus 5 stranded printed nothing at all
+    // while four rows were dropped.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies().find(
+      (company) => has(company, 'marriott') && !has(company, 'hilton'),
+    )!;
+    savedForm = { category: 'hotel', vendors: ['hilton', 'marriott'], companies: [] };
+    installChrome();
+    await boot();
+
+    const search = document.querySelector<HTMLInputElement>('#company-search')!;
+    search.value = marriottOnly.name;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector<HTMLInputElement>('#company-list label.company input')?.click();
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if ((box.closest('label')?.textContent ?? '').includes('Marriott') && box.checked) {
+        box.click();
+      }
+    }
+
+    const hint = document.querySelector('#company-list')?.textContent ?? '';
+    const reported = Number(/\+(\d+) more/.exec(hint)?.[1]);
+    const hiltonCompanies = allCompanies().filter((company) =>
+      company.codes.some((code) => code.code && codeReaches(code.vendor, 'hilton')),
+    ).length;
+    // 146 matches + 1 stranded, 60 shown.
+    expect(reported).toBe(hiltonCompanies + 1 - 60);
+  });
+
+  it('brings the next stranded rows in when one is unticked', async () => {
+    // The cap on stranded rows is justified by "the next render brings the next
+    // ten" — and nothing rendered on untick, so unticking all ten left them on
+    // screen unchecked while the rest of the selection stayed invisible and
+    // untickable. That is the trap stranded rows exist to avoid, moved from
+    // "more than 60 matches" to "more than 10 stranded".
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 15);
+    expect(marriottOnly.length).toBeGreaterThan(11);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const strandedRows = () =>
+      [...document.querySelectorAll('#company-list label.company')].filter(
+        (row) => row.querySelector('.vendors')?.textContent === 'no code at these vendors',
+      );
+    await vi.waitFor(() => expect(strandedRows().length).toBe(10));
+    const before = strandedRows()
+      .map((row) => row.querySelector('span')?.textContent ?? '')
+      .join('|');
+
+    strandedRows()[0]?.querySelector<HTMLInputElement>('input')?.click();
+
+    // Still ten, and not the same ten: the eleventh has taken the free slot.
+    expect(strandedRows().length).toBe(10);
+    expect(
+      strandedRows()
+        .map((row) => row.querySelector('span')?.textContent ?? '')
+        .join('|'),
+    ).not.toBe(before);
+  });
+
+  it('keeps the keyboard on the list when a stranded row is unticked', async () => {
+    // The re-render is a `replaceChildren`, so it detaches the very input being
+    // dispatched to: focus falls back to `<body>` and the next Tab restarts
+    // from the top of the popup. Unticking the ten stranded rows one after
+    // another — the flow the cap's own justification assumes — then needs a
+    // mouse.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 15);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const inputs = () => [
+      ...document.querySelectorAll<HTMLInputElement>('#company-list label.company input'),
+    ];
+    await vi.waitFor(() => expect(inputs().length).toBeGreaterThan(10));
+    const first = inputs()[0]!;
+    first.focus();
+    expect(document.activeElement).toBe(first);
+    first.click();
+
+    // Focus is still in the list, on the row that took its place.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(inputs()).toContain(document.activeElement);
+  });
+
+  it('applies a successful read even when a newer one fails', async () => {
+    // The other ordering. Comparing against the *issue* counter meant a result
+    // could be discarded in favour of a read that then failed, so nothing was
+    // ever applied: boot's read succeeds slowly, a broadcast issues a newer
+    // ticket, boot's result is thrown away as superseded, the newer read fails —
+    // and `ui.rejected` stays empty for the session, so the chips are inflated
+    // and the next Run re-races every refused code.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    const chromeStub = (
+      globalThis as {
+        chrome: { storage: { local: { get: () => Promise<Record<string, unknown>> } } };
+      }
+    ).chrome;
+    const real = chromeStub.storage.local.get;
+    let call = 0;
+    chromeStub.storage.local.get = () => {
+      call += 1;
+      // 1 is boot's refusal read: slow, and succeeds. 2 is the broadcast's,
+      // issued while that one is still out, and fails. Everything after — the
+      // saved-form read `main` does next — must work, or boot never finishes and
+      // the test measures a dead popup rather than the ordering.
+      if (call === 1) {
+        return new Promise((resolve) => setTimeout(() => void real().then(resolve), 150));
+      }
+      if (call === 2) return Promise.reject(new Error('no storage'));
+      return real();
+    };
+
+    const started = import('../src/popup/popup.js');
+    await vi.waitFor(() => expect(broadcastListeners.length).toBeGreaterThan(0));
+    // A newer read is issued while boot's is still out, and it will fail.
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    await started;
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-count')?.textContent).toMatch(/1 code has/);
+    });
+  });
+
+  it('does not let stranded rows crowd out every company that can race', async () => {
+    // Stranded rows go first so the 60-row cut cannot swallow the escape hatch;
+    // uncapped, the escape hatch swallowed the list instead. `stranded` is
+    // bounded only by how many companies the user has ticked.
+    const { allCompanies } = await import('../src/core/codes.js');
+    const has = (company: { codes: Array<{ code: string | null; vendor: string }> }, v: string) =>
+      company.codes.some((code) => code.code && code.vendor === v);
+    const marriottOnly = allCompanies()
+      .filter((company) => has(company, 'marriott') && !has(company, 'hilton'))
+      .slice(0, 30);
+    expect(marriottOnly.length).toBeGreaterThan(20);
+    savedForm = {
+      category: 'hotel',
+      vendors: ['hilton'],
+      companies: marriottOnly.map((company) => company.slug),
+    };
+    installChrome();
+    await boot();
+
+    const rows = () => [...document.querySelectorAll('#company-list label.company')];
+    await vi.waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    const strandedShown = rows().filter(
+      (row) => row.querySelector('.vendors')?.textContent === 'no code at these vendors',
+    ).length;
+    // Enough to untick from, and not the whole page.
+    expect(strandedShown).toBeLessThanOrEqual(10);
+    expect(rows().length - strandedShown).toBeGreaterThan(40);
+  });
+
+  it('counts the refused note the way everything else counts it', async () => {
+    // `loadRejected` accepts whatever an older build wrote and does not dedupe,
+    // which is the stated premise for the two-directional `changed` check in the
+    // RUN_STATE listener. Under that premise this line said "2 codes have been
+    // refused" while the chips, the company list and the plan all accounted for
+    // one.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: '5666666', at: 1 },
+    ];
+    installChrome();
+    await boot();
+
+    expect(document.querySelector('#rejected-count')?.textContent).toMatch(/^1 code has/);
+  });
+
+  it('does not let a finishing run undo a clear the user just made', async () => {
+    // Three places read the refusal list — boot, the finished-run broadcast and
+    // the clear — and none was ordered against the others, so whichever
+    // `storage.get` resolved last won regardless of which was *issued* last.
+    // A run finishing as the user presses "try them again" therefore left the
+    // popup holding the pre-clear list: the codes they had just cleared went on
+    // being skipped and the note came back seconds later, with nothing to
+    // correct it until the popup was reopened.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+    });
+
+    // The broadcast's read is issued first and resolves last — the interleaving
+    // that used to win. One slow read is enough: the clear's own read is fast.
+    getDelayMs = 200;
+    slowReadsLeft = 1;
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // The stale read must not have put the cleared codes back.
+    expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
+  });
+
   it('reloads refused codes when a run finishes, so the next Run skips them', async () => {
     // The popup usually stays open across a run. Loaded once at boot,
     // `ui.rejected` would still be empty afterwards and pressing Run again
     // would re-race codes the vendor refused a moment ago — a real tab spent
     // rediscovering a refusal, which is the one thing this feature avoids.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     expect(document.querySelector('#plan-summary')?.textContent ?? '').not.toMatch(/refused/);
 
@@ -267,28 +788,7 @@ describe('the popup half of the double-run guard', () => {
     ).chrome.storage.local.set({
       rejectedCodes: [{ vendor: 'national', code: '5666666', at: 1 }],
     });
-    for (const listener of broadcastListeners) {
-      listener({
-        type: 'RUN_STATE',
-        state: {
-          plan: {
-            trip: {
-              category: 'car',
-              pickupLocation: 'TPA',
-              dropoffLocation: '',
-              pickupDate: '2026-09-04',
-              pickupTime: '10:00',
-              dropoffDate: '2026-09-11',
-              dropoffTime: '10:00',
-            },
-            candidates: [],
-            concurrency: 2,
-          },
-          quotes: [],
-          finishedAt: Date.now(),
-        },
-      });
-    }
+    await broadcastFinishedRun();
 
     await vi.waitFor(() => {
       expect(document.querySelector('#plan-summary')?.textContent).toMatch(/1 refused code is/);
@@ -306,13 +806,219 @@ describe('the popup half of the double-run guard', () => {
       companies: ['ibm'],
     };
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     await vi.waitFor(() => {
       expect(document.querySelector('#plan-summary')?.textContent).toMatch(/No codes left to race/);
     });
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(false);
+  });
+
+  it('says the vendors refused everything, rather than "pick a vendor"', async () => {
+    // Two filters can empty the company list, and until this branch existed the
+    // message named the wrong one. Select only National, let its codes be
+    // refused over a few runs, and the plan line correctly said every code was
+    // refused while the list below told the user to pick a vendor they had
+    // already picked — pointing away from the one control that fixes it.
+    const { allCompanies, codeReaches } = await import('../src/core/codes.js');
+    savedRejected = allCompanies()
+      .flatMap((company) => company.codes)
+      .filter((record) => record.code && codeReaches(record.vendor, 'national'))
+      .map((record) => ({ vendor: 'national', code: record.code!, at: 1 }));
+    expect(savedRejected.length).toBeGreaterThan(0);
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const empty = () => document.querySelector('#company-list .empty:not(.selection)')?.textContent;
+    await vi.waitFor(() => expect(empty()).toBeTruthy());
+    expect(empty()).toMatch(/refused by the vendor/);
+    // And names the undo, which is two lines below the list.
+    expect(empty()).toMatch(/try them again/);
+    expect(empty()).not.toMatch(/Pick at least one vendor/);
+  });
+
+  it('still says "pick a vendor" when that is really the problem', async () => {
+    // The other half, and the reason the new branch tests reachability rather
+    // than just "the list is empty": a genuinely empty selection must keep the
+    // message that names the control it is about.
+    savedForm = { category: 'car', vendors: [], companies: [] };
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    // Nothing selected in storage means the popup fills it in, so untick by
+    // hand — the state only a user can reach. Nothing else is dispatched: this
+    // used to poke `#company-search` to force a re-render, which meant the test
+    // passed against a popup that never redrew the list when the selection
+    // changed. The chip's own handler has to do it.
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      if (box.checked) box.click();
+    }
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#company-list .empty:not(.selection)')?.textContent).toMatch(
+        /Pick at least one vendor/,
+      );
+    });
+  });
+
+  it('does not re-tick vendor chips the user has just cleared', async () => {
+    // `renderVendorChips` used to fill an empty selection itself, which was
+    // right while `setCategory` was its only caller. It is now also called when
+    // the refusal set changes — so unticking every chip and then clearing the
+    // refusals silently re-ticked the whole row, reverting a choice the user had
+    // just made and leaving `ui.vendors` disagreeing with the saved form.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const boxes = () => [...document.querySelectorAll<HTMLInputElement>('#vendor-chips input')];
+    expect(boxes().length).toBeGreaterThan(0);
+    for (const box of boxes()) {
+      if (box.checked) box.click();
+    }
+    expect(boxes().every((box) => !box.checked)).toBe(true);
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
+    expect(boxes().every((box) => !box.checked)).toBe(true);
+  });
+
+  it('leaves the company list alone when a run refuses nothing', async () => {
+    // Both renders are a full `replaceChildren`, and a run finishes
+    // asynchronously with whatever the user is doing: rebuilding the list under
+    // someone mid-click resets their scroll and drops their focus. Most runs
+    // refuse nothing, so the rebuild is gated on the news actually changing.
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const row = () => document.querySelector('#company-list label');
+    const before = row();
+    expect(before).not.toBeNull();
+
+    await broadcastFinishedRun();
+    // Node identity, because that is precisely what a click, a focus and a
+    // scroll position are attached to.
+    expect(row()).toBe(before);
+
+    // The converse: news that does change the counts still redraws them.
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [{ vendor: 'national', code: '5666666', at: 1 }],
+    });
+    await broadcastFinishedRun();
+    await vi.waitFor(() => expect(row()).not.toBe(before));
+  });
+
+  it('redraws the company list when a vendor chip is toggled', async () => {
+    // The list is a function of the vendor selection — which companies match,
+    // which vendors each row is labelled with, and which empty-state message
+    // applies — and the chip handler never redrew it. Unticking Avis and Hertz
+    // to leave only National is this PR's own motivating scenario, and it left
+    // every Avis and Hertz row on screen with its old labels.
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const labels = () =>
+      [...document.querySelectorAll('#company-list .vendors')]
+        .map((el) => el.textContent ?? '')
+        .join(' ');
+    expect(labels()).toMatch(/Hertz/);
+
+    for (const box of document.querySelectorAll<HTMLInputElement>('#vendor-chips input')) {
+      const chip = box.closest('label')?.textContent ?? '';
+      if (!chip.includes('National') && box.checked) box.click();
+    }
+
+    expect(labels()).not.toMatch(/Hertz/);
+    expect(labels()).toMatch(/National/);
+  });
+
+  it('notices a same-sized change to the refused set', async () => {
+    // `loadRejected` deliberately tolerates whatever an older build wrote and
+    // does not dedupe, so counting entries is not the same as comparing sets: a
+    // stored `[A, A]` against a held `[A, B]` matches on length and on every
+    // stored key being one we already had. B's codes would stay excluded from
+    // the chip counts and the company list until the popup was reopened.
+    savedRejected = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: 'XZ15J55', at: 1 },
+    ];
+    installChrome();
+    sendMessageImpl = fakeBackground;
+    await boot();
+
+    const count = () =>
+      [...document.querySelectorAll('#vendor-chips .chip')]
+        .find((el) => (el.textContent ?? '').includes('National'))
+        ?.querySelector('.count')?.textContent;
+    expect(count()).toBe('17');
+
+    await (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: (i: unknown) => Promise<void> } } };
+      }
+    ).chrome.storage.local.set({
+      rejectedCodes: [
+        { vendor: 'national', code: '5666666', at: 1 },
+        { vendor: 'national', code: '5666666', at: 1 },
+      ],
+    });
+    await broadcastFinishedRun();
+
+    await vi.waitFor(() => expect(count()).toBe('18'));
+  });
+
+  it('draws nothing when a run finishes before boot has a selection', async () => {
+    // The RUN_STATE listener is registered at module scope, so a broadcast can
+    // land while `main()` is still awaiting storage. Moving the default-fill out
+    // of the render made that reachable: the handler would draw every chip
+    // unticked and print "Pick at least one vendor" under a user who has several
+    // picked, until `setCategory` corrected it a moment later.
+    savedForm = { category: 'car', vendors: ['national'], companies: [] };
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    // Only boot's *first* read is slowed, and generously. Slowing two of them
+    // does not work and the reason is the whole shape of this test: the reads
+    // interleave by time rather than by count, so the broadcast's own read takes
+    // the second slow slot and the handler renders *after* boot — which is
+    // exactly the state this is trying to catch the popup not being in, so the
+    // mutant passes. One slow read leaves the handler's read fast, so it renders
+    // within milliseconds while boot is still 600ms away.
+    getDelayMs = 600;
+    slowReadsLeft = 1;
+    installChrome();
+    sendMessageImpl = fakeBackground;
+
+    const started = import('../src/popup/popup.js');
+    await vi.waitFor(() => expect(broadcastListeners.length).toBeGreaterThan(0));
+    await broadcastFinishedRun();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Mid-boot: nothing drawn is the correct amount to draw. Either state below
+    // would be a lie about a selection that has been restored but not applied.
+    // `renderRun` ran, so the listener really did reach the branch under test
+    // rather than throwing on the way — which would pass these two for free.
+    expect(document.querySelector('#results')?.hasAttribute('hidden')).toBe(false);
+    const chips = () => [...document.querySelectorAll<HTMLInputElement>('#vendor-chips input')];
+    expect(chips().some((box) => !box.checked)).toBe(false);
+    expect(document.querySelector('#company-list')?.textContent ?? '').not.toMatch(
+      /Pick at least one vendor/,
+    );
+
+    // And boot still lands, with the saved selection — so this test is watching
+    // a popup that works, not one wedged behind a slow read.
+    await started;
+    await vi.waitFor(() => expect(chips().length).toBeGreaterThan(0));
+    expect(chips().filter((box) => box.checked)).toHaveLength(1);
   });
 
   it('labels a company with a vendor it only reaches through alsoTryAs', async () => {
@@ -326,7 +1032,7 @@ describe('the popup half of the double-run guard', () => {
     // were the previous half-fix's own fault: correcting the *filter* let those
     // companies into the list while this line still asked the old question, so
     // they matched and had nothing to show. The ids were raw, too.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     const rows = [...document.querySelectorAll('#company-list .company')];
@@ -361,7 +1067,7 @@ describe('the popup half of the double-run guard', () => {
     // Re-installed: beforeEach built the fake storage before this test could
     // seed it, so the popup would have booted against an empty store.
     installChrome();
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
 
     // Read the `.vendors` span rather than the whole row: company *names*
@@ -388,7 +1094,7 @@ describe('the popup half of the double-run guard', () => {
     // cannot reach a search, whose home pages answer with a "from $19/day" that
     // wins. Rejecting here is the difference between no answer and a
     // confidently wrong one, so it has to happen before START_RUN is sent.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     const set = (name: string, value: string): void => {
       const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
@@ -416,7 +1122,7 @@ describe('the popup half of the double-run guard', () => {
         return Promise.resolve({ id: 1 });
       },
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
 
@@ -445,7 +1151,7 @@ describe('the popup half of the double-run guard', () => {
     (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
       create: () => Promise.reject(new Error('no window')),
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#avis-captcha-btn')?.click();
     await Promise.resolve();
@@ -462,7 +1168,7 @@ describe('the popup half of the double-run guard', () => {
         return Promise.resolve({ id: 1 });
       },
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
 
@@ -483,7 +1189,7 @@ describe('the popup half of the double-run guard', () => {
     (globalThis as { chrome?: Record<string, unknown> }).chrome!.tabs = {
       create: () => Promise.reject(new Error('no window')),
     };
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     document.querySelector<HTMLButtonElement>('#budget-captcha-btn')?.click();
     await Promise.resolve();
@@ -497,7 +1203,7 @@ describe('the popup half of the double-run guard', () => {
     // Chrome emits hh:mm — but adding one makes Chrome emit hh:mm:ss, which
     // both verified builders reject. Without this the failure is two
     // `link-build`s and a race decided by a vendor that reaches no search.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const time = document.querySelector<HTMLInputElement>('[name="pickupTime"]');
@@ -512,7 +1218,7 @@ describe('the popup half of the double-run guard', () => {
     // One-way is refused in the builders because Avis's return-location
     // parameter proved unreliable; catching it here means the user is told,
     // rather than every car quote failing as link-build.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const dropoff = document.querySelector<HTMLInputElement>('[name="dropoffLocation"]');
@@ -526,7 +1232,7 @@ describe('the popup half of the double-run guard', () => {
   it('accepts a lowercase code and a drop-off equal to the pick-up', async () => {
     // The guard must not be so strict that it rejects the same airport spelled
     // differently — that would refuse a perfectly ordinary round trip.
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     fillCarForm();
     const pickup = document.querySelector<HTMLInputElement>('[name="pickupLocation"]');
@@ -540,7 +1246,7 @@ describe('the popup half of the double-run guard', () => {
 
   /** Push a finished run into the popup and return the caveat line's text. */
   async function caveatFor(quotes: unknown[]): Promise<string> {
-    sendMessageImpl = () => Promise.resolve({ type: 'RUN_STATE', state: null });
+    sendMessageImpl = fakeBackground;
     await boot();
     expect(broadcastListeners.length).toBeGreaterThan(0);
     for (const listen of broadcastListeners) {
