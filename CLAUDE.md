@@ -175,7 +175,34 @@ encode other people's websites. They will break. Both are deliberately isolated:
   results, so `main` won on every vendor and every page; the narrow selectors in
   front of it were decoration. `firstMatch` now tries each alternative in turn.
   Found by measuring National, where `.vehicle-list` is real, present, and made
-  no difference whatsoever when added. **No vendor defines an `offer` selector**,
+  no difference whatsoever when added.
+
+  **Hertz and Avis were measured on 2026-08-11 and were worse than National.**
+  Their narrow selectors did not merely lose the document-order race — they
+  match nothing at all. `[data-testid="vehicle-list"]` and `.vehicle-list` are
+  absent from Hertz; `[data-testid="vehicle-results"]` and `.car-results` are
+  absent from Avis. Both entries are now a bare, measured `main`: on Hertz 4.3k
+  of a 50.3k body holding 70 of the page's 71 price nodes (the one it excludes
+  is a marketing "under $20,000"), on Avis 4.7k holding all 50 vehicle prices.
+  Deleting the four dead selectors rather than reordering them is the point — a
+  selector that matches nothing is a false claim about the page, and it is what
+  made this entry look checked for as long as it did.
+
+  Nothing narrower exists for either. Hertz styles with emotion, so its cards
+  carry generated class names and per-card numeric ids, and no element inside
+  `main` with a stable handle holds more than four prices. Avis does have a
+  tighter `[data-testid="aem-container"]` (3.3k, same 50 prices) and it is
+  deliberately unused: that is Adobe Experience Manager's generic wrapper, not a
+  vehicle list, so it can point at a marketing box on some other page.
+
+  Scoping Avis matters more than its ratio suggests. It is a Next.js app, so
+  `document.body.textContent` is 464k characters of mostly inline RSC flight
+  payload, dense with `$` sigils — and body is exactly what `extract` falls back
+  to when no container matches. The 80-character cap in `priceSites` is what
+  keeps that payload out of the sweep today, since the flight blob is one huge
+  script node; small inline scripts are still eligible in principle.
+
+  **No vendor defines an `offer` selector**,
   though, so the per-offer branch never fires and every `ProbeReport` says
   `generic-sweep`. The selector path is kept — and tested with an injected
   config — so it works the day someone fills one in.
@@ -235,6 +262,23 @@ The two things that would silently produce a wrong answer, and their guards:
   pair directly under the card with no wrapper element, and `Taxes and fees not
 included: $57.20`, where the negation is invisible to the rule. Both surface a
   fee as a price.
+
+- **A number that was never an _offer_.** Hertz renders `Price range$42-$90`
+  above its cards — a filter control whose lower bound is derived from the
+  results, so it is at or below every real rate on the page ($42 against a
+  cheapest genuine $54/day when measured). `isRangeLine` suppresses it, sharing
+  `isFeeLine`'s shape (lead phrase, then ask what is left, so "Rate range
+  $89/day" survives) and its inheritance, which it needs more: the words and the
+  amount are always in different elements, so suppressing only the label would
+  leave the `$42` leaf emitting.
+
+  **This changes no answer today, and that is the interesting part.** Hertz also
+  prints "$226 est. total" per card, `total` outranks `unknown` in
+  `BASIS_PREFERENCE`, and the bare `$42` classifies `unknown` — so the only thing
+  between that filter bound and the headline price is one wording on one
+  vendor's card. The test that matters is therefore the one with the totals
+  removed; the version covering the page as it renders today passes with the
+  guard deleted. Both directions were checked to fail.
 
 - **A digit in a model name.** `PRICE_RE`'s suffix branch is
   `(NUMBER)\s*(CURRENCY)`, and car pages are full of names ending in digits. The

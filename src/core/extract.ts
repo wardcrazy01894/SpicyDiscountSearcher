@@ -148,8 +148,48 @@ export interface VendorSelectors {
  * fallback keeps working in the meantime.
  */
 export const VENDOR_SELECTORS: Partial<Record<VendorId, VendorSelectors>> = {
-  hertz: { container: '[data-testid="vehicle-list"], .vehicle-list, main' },
-  avis: { container: '[data-testid="vehicle-results"], .car-results, main' },
+  /**
+   * Measured against the live results page on 2026-08-11, like National's.
+   *
+   * Neither narrow selector existed: `[data-testid="vehicle-list"]` and
+   * `.vehicle-list` match nothing on Hertz, so this entry has always been `main`
+   * wearing a testid's clothes. They are gone rather than demoted, because a
+   * selector that matches nothing is not a preference — it is a claim about the
+   * page that is false.
+   *
+   * `main` is the right scope here and is now known to be, rather than assumed:
+   * 4.3k of a 50.3k-character body, holding 70 of the page's 71 price nodes. The
+   * one it excludes is the marketing line "Like-new cars for under $20,000",
+   * which is exactly the sort of number a body-wide sweep would have ranked.
+   *
+   * Nothing narrower is available. Hertz styles with emotion, so the cards carry
+   * generated `emotion-cache-*` class names and per-card numeric ids (`#1_5`),
+   * and no element inside `main` with an id, role, `data-*` or `aria-label`
+   * holds more than four prices. A container is only worth writing when there is
+   * a stable handle to write; inventing one is how this entry got here.
+   */
+  hertz: { container: 'main' },
+  /**
+   * Measured the same day, with the same result: `[data-testid="vehicle-results"]`
+   * and `.car-results` match nothing, and `main` is a good scope — 4.7k
+   * characters holding all 50 vehicle prices, and every one of its cheapest
+   * numbers is a genuine rate ("$53.54 /day", "$160.62 Vehicle total rate").
+   *
+   * Scoping matters more here than the ratio makes it look. Avis is a Next.js
+   * app, so `document.body.textContent` runs to 464k characters — almost all of
+   * it inline RSC flight payload, which is dense with `$` sigils. That is the
+   * fallback `extract` reaches for when no container matches, and it is why the
+   * narrow-selector fiction was worth removing rather than leaving in place: a
+   * redesign that breaks `main` should be visibly a redesign, not a quiet
+   * demotion into 464k of script text.
+   *
+   * `[data-testid="aem-container"]` does match, and is tighter (3.3k, same 50
+   * prices). Deliberately not used: it is Adobe Experience Manager's generic
+   * wrapper rather than anything to do with vehicles, so it is liable to match a
+   * marketing box on some other page and scope the sweep to it. 1.4k of correct
+   * chrome beats a tighter container that can silently point somewhere else.
+   */
+  avis: { container: 'main' },
   budget: { container: '[data-testid="vehicle-results"], .car-results, main' },
   enterprise: { container: '.car-class-list, [data-testid="vehicle-list"], main' },
   /**
@@ -290,6 +330,40 @@ function isFeeLine(own: string): boolean {
   return classifyBasis(withoutFeeWords) === 'unknown';
 }
 
+/** The label a results page puts on a price *filter*, rather than on an offer. */
+const RANGE_LEAD_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?\b/i;
+
+/**
+ * Is this element a price *filter* rather than a price?
+ *
+ * Hertz's results page renders `Price range$42-$90` above the cards, and both
+ * numbers read as perfectly good prices. The lower bound is the trap: it is
+ * derived from the results, so it is at or below every real rate on the page —
+ * $42 against a cheapest genuine rate of $54/day when this was measured.
+ *
+ * It does not win *today*, and the guard is not here on the strength of a bug
+ * anybody has seen. It is here because of how narrowly it misses. Hertz also
+ * renders "$226 est. total" per card, `total` outranks `unknown` in
+ * BASIS_PREFERENCE, and the bare `$42` classifies `unknown` — so the only thing
+ * standing between that filter bound and the headline price is one wording on
+ * one vendor's card. Drop "est. total" from the markup and `unknown` is next in
+ * the preference order, which makes the cheapest number on the page a number
+ * that was never an offer. That is the fee-line failure exactly, and it is worth
+ * closing while the markup that produces it is in front of us.
+ *
+ * Same shape as `isFeeLine`, and for the same reason: lead phrase, then ask what
+ * is left. "Rate range" copy on a card ("Savings Rate range $89/day") still says
+ * what its number means, so the range words were a modifier and the number
+ * stands. Suppression propagates to descendants through the existing walk, which
+ * is what actually catches the `$42` — the words and the number are in different
+ * elements, `<div>Price range<span>$42-$90</span></div>`, and the leaf carrying
+ * the amount says nothing about itself at all.
+ */
+function isRangeLine(own: string): boolean {
+  if (!RANGE_LEAD_RE.test(own)) return false;
+  return classifyBasis(own.replace(RANGE_LEAD_RE, ' ')) === 'unknown';
+}
+
 /**
  * Does this text describe two different kinds of number at once?
  *
@@ -411,7 +485,7 @@ interface PriceSite {
    * right — picked it up as if it were a rate. Excluding a number means making
    * sure nobody else takes it.
    */
-  suppressed: 'fee-line' | 'mixed-basis' | null;
+  suppressed: 'fee-line' | 'range-line' | 'mixed-basis' | null;
 }
 
 /**
@@ -510,9 +584,11 @@ function priceSites(root: Element): PriceSite[] {
     const suppressed =
       isFeeLine(own) || (FEE_LEAD_RE.test(own) && prices.length > 1)
         ? 'fee-line'
-        : prices.length > 1 && mixesBases(own)
-          ? 'mixed-basis'
-          : null;
+        : isRangeLine(own)
+          ? 'range-line'
+          : prices.length > 1 && mixesBases(own)
+            ? 'mixed-basis'
+            : null;
     sites.push({ element, own, prices, suppressed });
   }
 
@@ -527,14 +603,28 @@ function priceSites(root: Element): PriceSite[] {
   // thousand hotel cards — every one of which has a fee line — that measured
   // ten times slower than the linear form. This runs on the vendor's main
   // thread, so it is their page that pays. Same shape as claimedByDescendants.
-  const feeElements = new Set(
-    sites.filter((s) => s.suppressed === 'fee-line').map((s) => s.element),
-  );
+  //
+  // `range-line` inherits for the same reason and needs it more, because the
+  // words and the number are *always* in different elements: Hertz renders
+  // `Price range<span>$42-$90</span>`, so the element that says "range" holds no
+  // bare amount of its own and the leaves that hold the amounts say nothing.
+  // Without the walk the guard would suppress only the label.
+  //
+  // `mixed-basis` is deliberately not in here. A wrapper reading "$54/day $226
+  // est. total" is suppressed precisely because its *children* are the two real
+  // prices; propagating to them would throw away the offers.
+  const inherited = new Map<Element, 'fee-line' | 'range-line'>();
+  for (const site of sites) {
+    if (site.suppressed === 'fee-line' || site.suppressed === 'range-line') {
+      inherited.set(site.element, site.suppressed);
+    }
+  }
   for (const site of sites) {
     if (site.suppressed) continue;
     for (let node = site.element.parentElement; node; node = node.parentElement) {
-      if (feeElements.has(node)) {
-        site.suppressed = 'fee-line';
+      const reason = inherited.get(node);
+      if (reason) {
+        site.suppressed = reason;
         break;
       }
     }
