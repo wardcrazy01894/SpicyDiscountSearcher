@@ -624,8 +624,9 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 Read the top of this file first: **none of what follows is a reason to touch
-Hertz, Avis or National.** Those three work. The open rental-car work is Sixt,
-Budget and Enterprise, and the entries below describe what each of those needs.
+Hertz, Avis or National.** Those three work. The open rental-car work is Budget
+and Enterprise, and the entries below describe what each of those needs. Sixt is
+described below too, but as a closed question rather than as work.
 
 - **The two car vendors that cannot run.** **Budget and Enterprise** are worse
   than unverified: both keep the search in session state, so no query string can

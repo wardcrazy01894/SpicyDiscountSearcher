@@ -112,15 +112,15 @@ and what "nothing happened" looks like.
 ## Vendor state
 
 The three car vendors marked **yes** below are **finished** — Hertz, Avis and
-National return real prices and are not work in progress. Car work means Sixt,
-Budget and Enterprise. See the top of `CLAUDE.md` for why that boundary is
-written down rather than assumed.
+National return real prices and are not work in progress. Car work means Budget
+and Enterprise. See the top of `CLAUDE.md` for why that boundary is written down
+rather than assumed.
 
 | Vendor                    | Searchable | Where it stands                                                                                                                                |
 | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                 |
 | Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                               |
-| Sixt                      | no         | Builder measured to 302 to the site root. Disabled — but nothing proves a URL cannot work. See below                                           |
+| Sixt                      | no         | **Closed.** Its search URL works and replays; no corporate-code field exists anywhere in its funnel, so a driver has nothing to drive. See below |
 | Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
 | Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
 | National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                       |
@@ -294,10 +294,24 @@ It costs three codes and no company: every company with a Sixt code has one at
 another car vendor, so nothing disappears from the picker. `sixt.com` is out of
 the manifest too, which is a real reduction in what the extension may read.
 
-Unlike Budget and Enterprise, **nothing proves Sixt cannot work** — only that
-the one path anybody tried does not. Its builder's refusal says so in its own
-message rather than borrowing theirs, because that difference decides whether
-the next person should go looking for a URL. They should.
+This paragraph used to end "that difference decides whether the next person
+should go looking for a URL. **They should.**" Somebody did, on 2026-08-12, and
+the answer closed the vendor rather than opening it — which is worth leaving on
+the page, because this document exists to tell people which vendor to pick up
+next and it was pointing at the wrong one.
+
+`/betafunnel/#/offerlist` searches correctly on a `BRANCH:<id>` and survives a
+replay under a deliberately contradictory title, so the URL was never the
+obstacle. **There is no corporate-code field anywhere in Sixt's funnel** — not
+the home form, not the results page, not the booking-option step — and its
+corporate surface is login and registration. That closes the driver route too,
+and it is the one relevant fact for _this_ document: the recon procedure below
+assumes there is a field to find. For Sixt there is nothing to drive, so no
+amount of the checklist that follows will help.
+
+Reopening it needs credentials for a Sixt business account, not another URL.
+`src/core/deeplinks.ts` carries the parameters and the full finding, including
+why racing it uncoded for its retail rate was declined as well.
 
 ## Reading a page that has no layout
 
