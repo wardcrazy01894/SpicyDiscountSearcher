@@ -69,6 +69,22 @@ interface FormOptions {
    * to wait for, which is exactly why a bare `waitFor` burned the whole budget.
    */
   deafInputs?: number;
+  /** Model a component that only opens its menu for a focused field. */
+  requiresFocus?: boolean;
+  /** The code the visible option advertises. Defaults to the one we ask for. */
+  offerCode?: string;
+  /** Model the widget tearing the location field out of the document entirely. */
+  locationDisappears?: boolean;
+  /** Model a click the option accepts and then does nothing with. */
+  selectionDoesNothing?: boolean;
+  /**
+   * Model the widget replacing the location input while we are nudging it.
+   *
+   * The same shape `cidRemountsAsync` models one field along, and the reason
+   * the retry re-queries: nudging the detached node announces the value to
+   * nothing, forever, while the live field sits empty.
+   */
+  locationRemountsAsync?: boolean;
   /** What "Browse Vehicles" does. */
   onSubmit?: 'results' | 'rejected' | 'nothing';
   /** Model a controlled input that refuses the value written to it. */
@@ -302,7 +318,7 @@ function renderForm(options: FormOptions = {}): void {
     <label>Pick-up &amp; Return Location</label>
     <div class="location-field"><input name="location-search" placeholder="Provide a Location" /></div>
     <input type="checkbox" id="sameLocation" />
-    <div class="location-dropdown__aria-items"></div>
+    <ul class="location-dropdown__aria-items"></ul>
     <select id="age"><option>25+</option></select>
     <label for="cid">Corporate Account Number</label>
     <input type="text" id="cid" />
@@ -312,33 +328,108 @@ function renderForm(options: FormOptions = {}): void {
   renderDateTime(form, options);
 
   const location = form.querySelector<HTMLInputElement>('input[name="location-search"]')!;
-  const menu = form.querySelector<HTMLElement>('.location-dropdown__aria-items')!;
+  const aria = form.querySelector<HTMLElement>('.location-dropdown__aria-items')!;
   const chipHost = form.querySelector<HTMLElement>('.location-field')!;
 
-  // The autocomplete: opens on `input`, offers a button, and on selection
-  // closes itself and renders the branch as a chip beside the field — which is
-  // what the driver verifies against.
-  let deaf = options.deafInputs ?? 0;
-  location.addEventListener('input', () => {
-    // Not even the menu is cleared while deaf — the handler is not bound yet, so
-    // the event reaches nothing at all.
-    if (deaf > 0) {
-      deaf -= 1;
-      return;
-    }
-    menu.replaceChildren();
-    if (!location.value || !suggestion) return;
-    const option = document.createElement('button');
-    option.textContent = suggestion;
-    option.className = 'cta-unstyled';
-    option.addEventListener('click', () => {
-      menu.replaceChildren();
+  /**
+   * Both menus, exactly as the live form renders them (measured 2026-08-12).
+   *
+   * The screen-reader mirror comes **first in document order** and spaces the
+   * branch name from the code; the visible list comes second and glues them
+   * together inside separate elements. Reproducing both is the entire point of
+   * this fixture — a single tidy menu is what let three real bugs pass.
+   */
+  const branch = suggestion ? suggestion.split(/\bTPA\b/)[0]!.trim() : '';
+  const openMenus = (): void => {
+    // The mirror: `li`s carrying the spaced text, and no click handler at all.
+    const mirror = document.createElement('li');
+    mirror.textContent = suggestion!;
+    aria.append(mirror);
+
+    const real = document.createElement('div');
+    real.className = 'location-dropdown auto-complete';
+    // Verbatim shape: li[role=option] > button > (.location-name, .airport-code).
+    // The `li` is NOT clickable; only the button is.
+    real.innerHTML = `
+      <div class="location-group">
+        <li class="location-group__item" role="option">
+          <button tabindex="-1" class="cta-unstyled" data-location-type="airports">
+            <span class="location-name"><span>${branch}</span></span><small
+            class="airport-code">${options.offerCode ?? 'TPA'}</small><span
+            class="location-group__item-city-sub-country">Tampa, FL, 33607 US</span>
+          </button>
+          <small class="location-group__item-select">Select</small>
+        </li>
+      </div>`;
+    real.querySelector('button')!.addEventListener('click', () => {
+      // A click the page accepts and does nothing with: both menus stay open and
+      // no chip appears. The mirror staying is the point — it still renders the
+      // branch name, so a readback that excludes only the visible menu passes.
+      if (options.selectionDoesNothing) return;
+      aria.replaceChildren();
+      real.remove();
       const chip = document.createElement('span');
-      chip.textContent = suggestion.split(/\bTPA\b/)[0]!.trim();
+      chip.textContent = branch;
       chipHost.append(chip);
     });
-    menu.append(option);
-  });
+    form.append(real);
+  };
+
+  const closeMenus = (): void => {
+    aria.replaceChildren();
+    form.querySelector('.location-dropdown.auto-complete')?.remove();
+  };
+
+  let deaf = options.deafInputs ?? 0;
+  let remountsLeft = options.locationRemountsAsync ? 1 : 0;
+
+  /**
+   * Bind the autocomplete to a field.
+   *
+   * A function rather than a one-off `addEventListener` so a remount can
+   * re-bind it — a React section re-render replaces the node *and* attaches
+   * fresh handlers, and a fixture whose replacement is inert would fail the
+   * driver for the wrong reason.
+   */
+  const attach = (field: HTMLInputElement): void => {
+    field.addEventListener('input', () => {
+      // A detached field answers nothing. React takes the handlers with the
+      // node when it unmounts a section, and without this the fixture let a
+      // nudge aimed at the *old* input still open the menu — which is exactly
+      // the bug the retry's re-query exists to prevent, so the test for it
+      // passed against code that did not have the fix.
+      if (!field.isConnected) return;
+      // Not even the menu is cleared while deaf — the handler is not bound yet,
+      // so the event reaches nothing at all.
+      if (deaf > 0) {
+        deaf -= 1;
+        return;
+      }
+      if (options.locationDisappears) {
+        void Promise.resolve().then(() => field.remove());
+        return;
+      }
+      if (remountsLeft > 0) {
+        remountsLeft -= 1;
+        void Promise.resolve().then(() => {
+          const fresh = document.createElement('input');
+          fresh.name = 'location-search';
+          field.removeAttribute('name');
+          field.replaceWith(fresh);
+          attach(fresh);
+        });
+        return;
+      }
+      // A component that only answers a focused field. Off by default; the live
+      // one was never measured either way, so this models the risk rather than
+      // asserting it is real.
+      if (options.requiresFocus && document.activeElement !== field) return;
+      closeMenus();
+      if (!field.value || !suggestion) return;
+      openMenus();
+    });
+  };
+  attach(location);
 
   if (cidRejectsValue) {
     const cid = form.querySelector<HTMLInputElement>('#cid')!;
@@ -471,31 +562,137 @@ describe('fillLocation', () => {
     );
   });
 
-  it('fails when the suggestion is only ever in the dropdown', async () => {
-    // The check that nearly went in wrong. The menu contains the branch name by
-    // construction, so a body-wide search would pass here — with the form
+  it('fails when the suggestion is only ever in a dropdown', async () => {
+    // The check that nearly went in wrong, twice. A menu contains the branch
+    // name by construction, so a body-wide search passes here — with the form
     // holding no selection at all and the next step submitting a blank search.
-    renderForm();
+    //
+    // **This is also the regression test for excluding only one menu.** The
+    // screen-reader mirror renders the same name, so with `textOutside` given
+    // just `LOCATION_MENU` this passes on a click that selected nothing.
+    renderForm({ selectionDoesNothing: true });
     const form = document.querySelector('.location-field')!;
-    const context = makeContext();
-    const location = document.querySelector<HTMLInputElement>('input[name="location-search"]')!;
-    // Selection does nothing: the menu stays open and no chip appears.
-    location.addEventListener('input', () => {
-      const menu = document.querySelector('.location-dropdown__aria-items')!;
-      menu.replaceChildren();
-      const option = document.createElement('button');
-      option.textContent = SUGGESTION;
-      menu.append(option);
-    });
-    const error = await failureOf(fillLocation(context));
+    const error = await failureOf(fillLocation(makeContext()));
     expect(error.failure).toBe('form-fill');
     expect(form.textContent).not.toContain('Tampa International');
     // And it says *why* it looks like this, rather than only that it timed out.
-    // A menu still open means the click did not even dismiss it, and the name
-    // being present somewhere separates "the suggestion vanished" from "it was
-    // never promoted into a chip".
     expect(error.message).toContain('menu=still-open');
+    expect(error.message).toContain('aria=present');
     expect(error.message).toContain('anywhere=true');
+  });
+
+  it('clicks the option, not the role=option wrapper that swallows it', async () => {
+    // National's lesson, and Enterprise's actual live failure. The `<li>` is
+    // `role="option"` and has no handler; only the inner button selects. Pinned
+    // by asserting the *button* is what got clicked.
+    renderForm();
+    const clicked: string[] = [];
+    document.addEventListener(
+      'click',
+      (e) => clicked.push((e.target as HTMLElement).tagName),
+      true,
+    );
+    await fillLocation(makeContext());
+    expect(clicked).toContain('BUTTON');
+    expect(clicked).not.toContain('LI');
+  });
+
+  it('ignores the screen-reader mirror when looking for the option', async () => {
+    // The bug itself. `location-dropdown__aria-items` comes first in document
+    // order, so `[class*="location-dropdown"]` matched it — and its `li`s carry
+    // the same text with no handler. Deleting the `.auto-complete` scope from
+    // `LOCATION_MENU` makes the driver click the mirror and this fails.
+    renderForm();
+    await fillLocation(makeContext());
+    expect(document.querySelector('.location-field')!.textContent).toContain(
+      'Tampa International Airport',
+    );
+  });
+
+  it('matches the code in a tab that has layout, where the text is glued', async () => {
+    // The live form renders `Tampa International AirportTPA Tampa, FL…` — no
+    // separator before the code — so `hasToken` refuses it. A probe tab is
+    // saved from that by accident, because with no layout `innerText` is `''`
+    // and `textOf` falls back to `visibleText`, which re-spaces the text nodes.
+    // jsdom never defines `innerText`, so the default fixture is always the
+    // lucky case; this one supplies it, which is the *unlucky* case and the one
+    // any foreground run gets.
+    renderForm();
+    const location = document.querySelector<HTMLInputElement>('input[name="location-search"]')!;
+    const glue = (): void => {
+      for (const button of document.querySelectorAll<HTMLElement>(
+        '.location-dropdown.auto-complete li.location-group__item button',
+      )) {
+        Object.defineProperty(button, 'innerText', {
+          configurable: true,
+          get: () => 'Tampa International AirportTPA Tampa, FL, 33607 US',
+        });
+      }
+    };
+    location.addEventListener('input', glue);
+    await fillLocation(makeContext());
+    expect(document.querySelector('.location-field')!.textContent).toContain(
+      'Tampa International Airport',
+    );
+  });
+
+  it('refuses an option advertising a different airport', async () => {
+    // The lookup answered and disagreed with us, which is a different thing
+    // from answering with nothing — and the message must say which.
+    renderForm({ offerCode: 'PIE' });
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toContain('menu=present');
+    expect(error.message).toContain('offered=PIE');
+  });
+
+  it('stops nudging once the component has answered', async () => {
+    // The dead `offered.length > 0` branch replaced by a real suppression. A
+    // component that is plainly listening must not keep being re-prodded: that
+    // is the livelock `RETRY_INTERVAL_MS` exists to describe.
+    renderForm({ offerCode: 'PIE' });
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.message).toContain('nudges=0');
+  });
+
+  it('nudges the live field after the widget remounts it', async () => {
+    // The retry re-queries rather than closing over the original input. With
+    // `const live = pickup` this hangs: every nudge announces the value to a
+    // detached node while the live field sits empty.
+    renderForm({ locationRemountsAsync: true });
+    await fillLocation(makeContext());
+    expect(document.querySelector('.location-field')!.textContent).toContain(
+      'Tampa International Airport',
+    );
+  });
+
+  it('reports the live field, not the one it captured before the remount', async () => {
+    // `field=held` read off a detached node, while the form holds nothing, is
+    // worse than no diagnostic: it inverts the inference the message invites.
+    // With the widget having removed the field, the honest answer is `gone`.
+    renderForm({ locationDisappears: true });
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.message).toContain('field=gone');
+    expect(error.message).toContain('fields=0');
+  });
+
+  it('focuses the field before typing, so the first keystroke is enough', async () => {
+    // Pinned by *cost*, not by outcome: without the initial focus the component
+    // ignores the first event and only the 4s retry recovers it, so the clock
+    // is what tells the two apart. `nudgeInput` focuses, so an outcome-only
+    // assertion passes either way.
+    renderForm({ requiresFocus: true });
+    let clock = 0;
+    await fillLocation(
+      makeContext({
+        now: () => clock,
+        sleep: (ms) => {
+          clock += ms;
+          return Promise.resolve();
+        },
+      }),
+    );
+    expect(clock).toBeLessThan(4_000);
   });
 
   it('recovers a keystroke the location component was not yet listening for', async () => {
@@ -512,19 +709,32 @@ describe('fillLocation', () => {
   });
 
   it('reports what the page was doing when the autocomplete never answered', async () => {
-    // The diagnostics are the point of the change, not decoration: this exact
-    // timeout was reported from a live run and could not be told apart from a
-    // lost keystroke, a cleared field or an empty lookup. `menu=present
-    // options=0` is the signature of the lookup running and returning nothing,
-    // which is what this fixture models.
+    // The diagnostics are the point, not decoration: this exact timeout was
+    // reported from a live run and could not be told apart from a lost
+    // keystroke, a cleared field or an empty lookup.
     renderForm({ suggestion: null });
     const error = await failureOf(fillLocation(makeContext()));
     expect(error.failure).toBe('form-fill');
     expect(error.message).toContain('field=held');
-    expect(error.message).toContain('menu=present');
-    expect(error.message).toContain('options=0');
+    expect(error.message).toContain('menu=absent');
+    expect(error.message).toContain('offered=none');
     expect(error.message).toContain('widget=present');
     expect(error.message).toMatch(/nudges=[1-9]/);
+  });
+
+  it('tells a lookup that disagreed apart from one that never rendered', async () => {
+    // The reviewer's finding, pinned. While `menu` matched
+    // `[class*="location-dropdown"]` it also matched the screen-reader mirror,
+    // which is present regardless — so `menu=absent` was unreachable and these
+    // two states produced byte-identical messages.
+    renderForm({ suggestion: null });
+    const silent = await failureOf(fillLocation(makeContext()));
+    document.body.innerHTML = '';
+    renderForm({ offerCode: 'PIE' });
+    const disagreed = await failureOf(fillLocation(makeContext()));
+    expect(silent.message).not.toBe(disagreed.message);
+    expect(silent.message).toContain('menu=absent');
+    expect(disagreed.message).toContain('menu=present');
   });
 
   it('refuses a one-way trip rather than driving an unmeasured field', async () => {

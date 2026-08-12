@@ -85,16 +85,50 @@ Then type defensively anyway. A marker narrows the race, it does not close it,
 and one event into a component that is not listening leaves nothing to wait for
 — so re-apply the value while the thing you expect has not appeared.
 
-**That paragraph has now been ignored once, at a cost.** Enterprise's driver
-picked a good marker and then typed with a bare `waitFor`, and its first live run
-failed at exactly the step above — the user's report was that it was "failing to
-select the location". A good marker made the second half feel unnecessary; it is
-not, because the two guard different things. The marker says the widget rendered;
-nothing says it has finished binding handlers, and `#cid` is a different
-component from the location field in any case. Enterprise is the sharper version
-of National's lesson rather than an exception to it: grepping its served
-`/en/reserve.html` finds **zero `<input>` elements at all**, so every field is
-widget-built and every one of them is subject to this race.
+Enterprise is the sharper version of that lesson rather than an exception to it:
+its served `/en/reserve.html` (200, 453,800 bytes, brand nav and `booking-widget`
+styles present) contains **zero `<input>` elements at all**, so every field is
+widget-built and every one is subject to this race. Record the status and a
+positive fact or two alongside a finding like that — an error body would also
+contain no inputs, and Enterprise serves 403s to `curl`.
+
+## The suggestion menu you can see is not always the one you match
+
+Enterprise's driver failed its first live run here, and the diagnosis that first
+looked obvious — a lost keystroke — was wrong. The vendor renders its
+suggestions **twice**:
+
+| element                           | tag   | box     | contents                        |
+| --------------------------------- | ----- | ------- | ------------------------------- |
+| `location-dropdown__aria-items`   | `ul`  | **0x0** | `li` mirrors for screen readers |
+| `location-dropdown auto-complete` | `div` | 855x400 | the real, clickable options     |
+
+`[class*="location-dropdown"]` matches both, and `querySelector` returns the
+**first in document order** — the mirror. So the driver found an `li` whose text
+contained the airport code, clicked it, and nothing happened: a screen-reader
+element has no handler. The visible symptom is a dropdown that is plainly open
+while the driver reports it never found one.
+
+Three habits fall out of it, and all three are cheap:
+
+- **Check how many elements your menu selector matches**, not just that it
+  matches one. A comma list or a `[class*=…]` is not a preference order.
+- **Click the innermost thing that is actually a control.** Enterprise's
+  `li.location-group__item` carries `role="option"` and swallows the click;
+  only the `button` inside it selects. National's `<li>` does the same.
+- **Exclude every copy of the menu from the readback.** With only the visible
+  one excluded, the mirror still renders the branch name — so "the name appears
+  outside the menu" is satisfied by a click that selected nothing, which is the
+  exact check that verification was supposed to be.
+
+Prefer a field's own element to text matching where the markup offers one.
+Enterprise puts the code in `<small class="airport-code">TPA</small>`, which is
+exact; the option's _text_ glues it to the branch name
+(`Tampa International AirportTPA`), where `hasToken` refuses it. A probe tab
+hides that — no layout means `innerText` is `''`, so `textOf` falls back to
+`visibleText`, which re-spaces the text nodes and makes the match work by
+accident. Code that only works in a tab with no layout is not code you want to
+find out about later.
 
 **Test in a hidden tab.** Probe tabs live in a minimised window, so
 `setTimeout` is throttled to roughly once a second: a 250 ms poll costs 1 s of

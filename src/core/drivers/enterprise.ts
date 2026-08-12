@@ -3,7 +3,6 @@ import {
   DriverError,
   type DriveContext,
   type FormDriver,
-  hasToken,
   nudgeInput,
   POLL_MS,
   setNativeValue,
@@ -128,10 +127,82 @@ export async function awaitHydration(ctx: DriveContext): Promise<HTMLInputElemen
   );
 }
 
-/** The dropdown the autocomplete renders its suggestions into. */
-const LOCATION_MENU = '[class*="location-dropdown"]';
-/** Whatever the menu offers. Buttons on the measured form; the rest are hedges. */
-const LOCATION_OPTION = 'button, [role="option"], li';
+/**
+ * The **visible** suggestion list.
+ *
+ * Deliberately not `[class*="location-dropdown"]`, which is what this shipped as
+ * and which was wrong on every run. Enterprise renders the suggestions *twice*,
+ * measured on the live form 2026-08-12:
+ *
+ * | element | tag | box | contents |
+ * | --- | --- | --- | --- |
+ * | `location-dropdown__aria-items` | `ul` | **0x0** | `li` mirrors for screen readers |
+ * | `location-dropdown auto-complete` | `div` | 855x400 | the real, clickable options |
+ *
+ * The mirror comes **first in document order**, so `querySelector` returned it —
+ * the same trap `firstMatch` exists for in `extract.ts`, where a comma list
+ * looks like a preference order and is not one. The driver then found a mirror
+ * `li` whose text contains the code, clicked it, and nothing happened: it is a
+ * screen-reader element with no handler. That is the whole of the reported
+ * failure — "it does a dropdown for location and we aren't picking it".
+ */
+const LOCATION_MENU = '.location-dropdown.auto-complete';
+/**
+ * Every copy of the menu, for the readback to ignore.
+ *
+ * Both must be excluded or the check passes on a click that did nothing: the
+ * mirror renders the branch name too, so it satisfies a search of "the page
+ * outside the visible menu" all by itself.
+ */
+const LOCATION_MENU_ANY = '[class*="location-dropdown"]';
+/**
+ * A suggestion's clickable element.
+ *
+ * The `<li class="location-group__item">` around it is **not** one — it carries
+ * `role="option"` and swallows a click silently, exactly as National's `<li>`
+ * does. Measured: clicking the inner `button` closes both menus and renders the
+ * branch outside them; clicking the `li` leaves the menu open.
+ */
+const LOCATION_OPTION = 'li.location-group__item button';
+/** The airport code, rendered on its own: `<small class="airport-code">TPA</small>`. */
+const OPTION_CODE = '.airport-code';
+/** The branch name, rendered on its own: `<span class="location-name">…</span>`. */
+const OPTION_NAME = '.location-name';
+
+/**
+ * The airport code an option is offering, or `''`.
+ *
+ * Read from its own element rather than matched out of the option's text,
+ * because the option's text **depends on whether the browser computed layout**.
+ * Measured on the live form: the code is glued to the branch name —
+ * `Tampa International AirportTPA Tampa, FL, 33607 US` — in `textContent` and
+ * in `innerText`, so the character before `TPA` is a letter and `hasToken`
+ * refuses it.
+ *
+ * A probe tab is saved from that by accident. It has no layout, so `innerText`
+ * is `''` and `textOf` falls back to `visibleText`, which joins *text nodes*
+ * with a space and re-separates the two. So `hasToken` happens to work in the
+ * probe and fails everywhere else — in a foreground tab, in any future run with
+ * layout, and the moment Enterprise puts the name and code in one text node.
+ *
+ * Depending on that is depending on a bug cancelling a bug. This element holds
+ * the code alone, so the match is exact and the same either way.
+ */
+function optionCode(option: Element): string {
+  return textOf(option.querySelector(OPTION_CODE)).toUpperCase();
+}
+
+/**
+ * Fallback matcher for an option that has lost its `airport-code` element.
+ *
+ * `hasToken` is not usable as the fallback for the reason above, so this allows
+ * the code to be preceded by anything that is not itself part of a code — a
+ * lowercase letter, as in `AirportTPA` — while still requiring a clean end, so
+ * `AUD` inside `Audi` stays refused.
+ */
+function textOffersCode(option: Element, iata: string): boolean {
+  return new RegExp(`(^|[^A-Z0-9])${iata}([^A-Za-z0-9]|$)`).test(textOf(option));
+}
 
 /**
  * What the page looked like when the location step ran out of time.
@@ -145,28 +216,64 @@ const LOCATION_OPTION = 'button, [role="option"], li';
  *
  * These are the observations that separate those: a field that lost its value
  * means the widget cleared it, a menu present with no options means the lookup
- * ran and returned nothing, and no menu at all after several nudges means the
- * events are not reaching the component.
+ * ran and returned nothing, `offered` naming other airports means it ran and
+ * disagreed with us, and no menu at all after several nudges means the events
+ * are not reaching the component.
+ *
+ * **`menu` reports the visible list only, and that is what makes it mean
+ * anything.** The first version of this read `[class*="location-dropdown"]`,
+ * which also matches the screen-reader mirror — an element present whether or
+ * not the autocomplete ever heard us. So `menu=absent` was unreachable and
+ * `options=0` was ambiguous across the exact two causes this exists to
+ * separate. `aria` reports the mirror separately, where it is a fact rather
+ * than a disguise.
  *
  * `widget` reports `#cid` rather than the location field because **the whole
- * form is widget-built** — measured 2026-08-12 by fetching `/en/reserve.html`
- * and counting `<input>` in the served HTML, of which there are *none*. So the
- * location input existing is already proof the widget rendered, and `#cid`
- * disappearing mid-step means it has since torn that render down.
+ * form is widget-built** — measured 2026-08-12 by fetching `/en/reserve.html`:
+ * 200, 453,800 bytes, brand nav and `booking-widget` styles present, and
+ * **zero `<input>` elements**. (The positive facts are recorded because a 403
+ * body would also contain no inputs, and `CLAUDE.md` notes Enterprise serves
+ * 403s to `curl`.) So the location input existing is already proof the widget
+ * rendered, and `#cid` disappearing mid-step means it has since torn that
+ * render down.
+ *
+ * Page-supplied strings are capped. `PROBE_FAILED`'s `message` reaches
+ * `chrome.storage.session` without the truncation `sanitizeReport` applies to
+ * `title` and `finalPath`, so an unbounded field value would put an arbitrary
+ * amount of page text into a quota-limited store.
  */
+const STATE_TEXT_CAP = 80;
+
 function autocompleteState(
   ctx: DriveContext,
-  field: HTMLInputElement,
   iata: string,
   nudges: number,
   elapsed: number,
 ): string {
+  // The *live* field, not the one `fillLocation` captured. Reporting the
+  // captured node describes something the retry deliberately abandoned: after a
+  // remount it can read `field=held` off a detached input while the field the
+  // user's form actually holds is empty, inverting the inference above.
+  const field = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
   const menu = ctx.doc.querySelector(LOCATION_MENU);
+  const options = menu ? [...menu.querySelectorAll(LOCATION_OPTION)] : [];
+  const codes = options
+    .map((el) => optionCode(el))
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(',');
   return [
-    `field=${field.value === iata ? 'held' : JSON.stringify(field.value)}`,
-    `connected=${field.isConnected}`,
+    `field=${
+      !field
+        ? 'gone'
+        : field.value === iata
+          ? 'held'
+          : JSON.stringify(field.value.slice(0, STATE_TEXT_CAP))
+    }`,
     `menu=${menu ? 'present' : 'absent'}`,
-    `options=${menu ? menu.querySelectorAll(LOCATION_OPTION).length : 0}`,
+    `options=${options.length}`,
+    `offered=${codes || 'none'}`,
+    `aria=${ctx.doc.querySelector('.location-dropdown__aria-items') ? 'present' : 'absent'}`,
     `fields=${ctx.doc.querySelectorAll('input[name="location-search"]').length}`,
     `widget=${ctx.doc.querySelector('#cid') ? 'present' : 'absent'}`,
     `nudges=${nudges}`,
@@ -188,17 +295,32 @@ function autocompleteState(
  * arrive already carrying somebody's previous search, and an unverified fill
  * would silently price it.
  *
- * **The keystroke is retried, and that is the half this shipped without.** The
- * first live run of this driver failed here. `awaitHydration` returning is not
- * proof the location component is *listening* — it waits for `#cid`, and a
- * widget that has rendered its inputs may still be wiring their handlers — so a
- * single `input` event can land on nothing, leave no menu to wait for, and burn
- * the whole budget. National met exactly this and fixed it the same way: focus
- * the field, and re-announce the value periodically rather than assume the first
- * event was heard. The retry never clears the field — a missing value is set
- * (the component wiped it) and an intact one is only nudged, which leaves a
+ * **What the first live run actually hit was the wrong container**, and the
+ * retry below was a fix for a different disease. The menu selector matched the
+ * screen-reader mirror rather than the visible list, so the driver clicked an
+ * element with no handler and then waited out its budget for a chip that could
+ * never appear — see `LOCATION_MENU`. Two further faults sat behind it, neither
+ * of which the run got far enough to reach: the readback excluded only one of
+ * the two menus, so it would have passed on a click that selected nothing; and
+ * the option's code is glued to its branch name, which `hasToken` refuses in
+ * any tab that has layout (see `optionCode`). All three measured on the live
+ * form 2026-08-12.
+ *
+ * **The keystroke is retried anyway**, because `awaitHydration` returning is
+ * still not proof the location component is *listening*: it waits for `#cid`,
+ * and a widget that has rendered its inputs may not have wired their handlers.
+ * A single `input` event that lands on nothing leaves no menu to wait for.
+ * National met that and fixed it the same way — focus the field, re-announce
+ * the value periodically. The retry never clears the field: a missing value is
+ * set (the component wiped it) and an intact one is only nudged, which leaves a
  * lookup in flight alone. Clearing and retyping is what broke every live run on
  * National; see `RETRY_INTERVAL_MS`.
+ *
+ * `RETRY_INTERVAL_MS` is 4 s against a **measured** Enterprise lookup of about
+ * 1.5 s — typed into a hidden, unfocused tab, six options back on the next
+ * poll. So the nudge cannot land on a lookup that has not had its chance,
+ * which was the concern National's docstring records. It is no longer the
+ * inference it was when this was ported.
  */
 export async function fillLocation(ctx: DriveContext): Promise<void> {
   const trip = carTrip(ctx);
@@ -229,11 +351,13 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   pickup.focus();
   setNativeValue(pickup, iata);
 
-  // The dropdown lives in a `location-dropdown__*` container and its options are
-  // buttons. Scoped to that container on purpose: a document-wide button search
-  // for the airport code also matches nav and footer links on a page that
-  // happens to mention the city.
   let nudges = 0;
+  // Whether the component has ever answered us. Once it has, nudging can only
+  // restart a lookup it is already running — the livelock `RETRY_INTERVAL_MS`
+  // describes. This is a real suppression rather than the dead `length > 0`
+  // branch it replaces, which returned `null` down both arms and so let the
+  // retry keep firing at a menu that was plainly listening.
+  let heard = false;
   const startedAt = ctx.now();
   const option = await waitWithRetry(
     ctx,
@@ -242,19 +366,23 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
       const menu = ctx.doc.querySelector(LOCATION_MENU);
       if (!menu) return null;
       const offered = [...menu.querySelectorAll<HTMLElement>(LOCATION_OPTION)];
-      // Offered something, just not ours. The timeout message already names the
-      // code that was never offered, and nudging a component that has plainly
-      // heard us would only thrash the lookup.
-      if (offered.length > 0) return offered.find((el) => hasToken(textOf(el), iata)) ?? null;
-      return null;
+      if (offered.length === 0) return null;
+      // Offered something, ours or not: the component heard us.
+      heard = true;
+      return (
+        offered.find((el) => optionCode(el) === iata) ??
+        offered.find((el) => textOffersCode(el, iata)) ??
+        null
+      );
     },
     () => {
+      if (heard) return;
       nudges += 1;
       // Re-query rather than reuse `pickup`: this form is entirely widget-built,
       // so a re-render can swap the input out from under us, and nudging the
       // detached node would announce the value to nothing forever.
-      const live =
-        ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0] ?? pickup;
+      const live = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
+      if (!live) return;
       if (live.value === iata) nudgeInput(live);
       else setNativeValue(live, iata);
     },
@@ -266,20 +394,20 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     if (!(error instanceof DriverError)) throw error;
     throw new DriverError(
       error.failure,
-      `${error.message} (${autocompleteState(ctx, pickup, iata, nudges, ctx.now() - startedAt)})`,
+      `${error.message} (${autocompleteState(ctx, iata, nudges, ctx.now() - startedAt)})`,
     );
   });
 
-  // The branch name is everything before the airport code — "Tampa
-  // International Airport TPA Tampa, FL, 33607 US." yields "Tampa
-  // International Airport", which is what the chip renders.
-  const optionText = textOf(option);
-  const name = optionText.split(new RegExp(`\\b${iata}\\b`, 'i'))[0]?.trim() ?? '';
+  // The branch name from its own element, not sliced out of the option's text.
+  // `Tampa International AirportTPA …` has no separator to split on — see
+  // `optionCode` — so the old `split(/\bTPA\b/)` returned the whole string and
+  // the readback then looked for a name that included the code and the city.
+  const name = textOf(option.querySelector(OPTION_NAME)) || textOf(option).split(iata)[0]?.trim();
 
   option.click();
 
-  // Falls back to the code when the option carried no name before it, rather
-  // than checking against an empty string — which would succeed on every page,
+  // Falls back to the code when the option carried no name at all, rather than
+  // checking against an empty string — which would succeed on every page,
   // including a blank one.
   const expected = name || iata;
 
@@ -288,24 +416,30 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     // contains this exact name — it is where the name came from — so a body-wide
     // `includes` passes whether or not the click did anything, which is the
     // difference between verifying a selection and verifying that a dropdown
-    // once opened. The proof is the name rendered somewhere the menu is not:
-    // the form shows the chosen branch as a chip beside the field.
-    const menu = ctx.doc.querySelector(LOCATION_MENU);
-    return textOutside(ctx.doc.body, menu).includes(expected) || null;
+    // once opened. The proof is the name rendered somewhere no menu is: the form
+    // shows the chosen branch as a chip beside the field.
+    //
+    // *Every* menu, not the visible one. The screen-reader mirror renders the
+    // same branch name, so excluding only `LOCATION_MENU` left this passing on a
+    // click that selected nothing — the very failure the paragraph above claims
+    // to prevent, arriving through the second copy.
+    const menus = [...ctx.doc.querySelectorAll(LOCATION_MENU_ANY)];
+    return textOutside(ctx.doc.body, menus).includes(expected) || null;
   }).catch((error: unknown) => {
     // The click landing on nothing is a *different* failure from the menu never
     // opening, and until this catch existed the two were equally silent. The
     // facts that separate them: a menu still open means the click did not even
     // dismiss it, and the expected name being absent from the whole document —
-    // menu included — means the suggestion itself went away rather than failing
+    // menus included — means the suggestion itself went away rather than failing
     // to be promoted into a chip.
     if (!(error instanceof DriverError)) throw error;
-    const menu = ctx.doc.querySelector(LOCATION_MENU);
+    const live = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
     const state = [
-      `expected=${JSON.stringify(expected)}`,
-      `menu=${menu ? 'still-open' : 'closed'}`,
+      `expected=${JSON.stringify(expected.slice(0, STATE_TEXT_CAP))}`,
+      `menu=${ctx.doc.querySelector(LOCATION_MENU) ? 'still-open' : 'closed'}`,
+      `aria=${ctx.doc.querySelector('.location-dropdown__aria-items') ? 'present' : 'absent'}`,
       `anywhere=${textOutside(ctx.doc.body, null).includes(expected)}`,
-      `field=${JSON.stringify(pickup.value)}`,
+      `field=${live ? JSON.stringify(live.value.slice(0, STATE_TEXT_CAP)) : 'gone'}`,
     ].join(' ');
     throw new DriverError(error.failure, `${error.message} (${state})`);
   });

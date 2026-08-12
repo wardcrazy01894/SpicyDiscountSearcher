@@ -307,9 +307,9 @@ export function textOf(el: Element | null | undefined): string {
  */
 const UNRENDERED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 
-/** Text nodes under `node`, skipping script source and one excluded subtree. */
-function collectText(node: Node, out: string[], exclude: Element | null): void {
-  if (exclude && node === exclude) return;
+/** Text nodes under `node`, skipping script source and any excluded subtree. */
+function collectText(node: Node, out: string[], exclude: readonly Element[]): void {
+  if (exclude.length > 0 && exclude.includes(node as Element)) return;
   if (node.nodeType === 1 && UNRENDERED.has((node as Element).tagName)) return;
   if (node.nodeType === 3) {
     out.push(node.nodeValue ?? '');
@@ -328,7 +328,7 @@ function collectText(node: Node, out: string[], exclude: Element | null): void {
 export function visibleText(root: Element | null | undefined): string {
   if (!root) return '';
   const parts: string[] = [];
-  collectText(root, parts, null);
+  collectText(root, parts, []);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
@@ -348,11 +348,23 @@ export function visibleText(root: Element | null | undefined): string {
  * text in a *non*-leaf — so the check could never pass, and the driver would
  * fail `form-fill` on a form it had filled correctly. Walking text nodes makes
  * no assumption about the shape at all.
+ *
+ * **Takes a list, because one exclusion is not always enough.** Enterprise
+ * renders its suggestions *twice* — a visible `location-dropdown auto-complete`
+ * and a 0x0 `location-dropdown__aria-items` mirror for screen readers, measured
+ * on the live form 2026-08-12. Excluding only the visible one leaves the mirror
+ * holding the branch name, so the readback passes on a click that selected
+ * nothing: precisely the "verifying that a dropdown once opened" failure this
+ * function exists to prevent, through a second copy of the menu.
  */
-export function textOutside(root: Element | null, exclude: Element | null): string {
+export function textOutside(
+  root: Element | null,
+  exclude: Element | readonly Element[] | null,
+): string {
   if (!root) return '';
+  const skip = exclude === null ? [] : Array.isArray(exclude) ? exclude : [exclude as Element];
   const parts: string[] = [];
-  collectText(root, parts, exclude);
+  collectText(root, parts, skip as readonly Element[]);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
