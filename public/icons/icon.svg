@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!--
+    Source artwork for the 128px and 48px icons. See `npm run icons`.
+
+    A chilli for "spicy", a coin for "discount", and a car and a hotel for the
+    two things it searches.
+
+    The pepper is the 🌶 emoji rather than a drawn path. A hand-drawn pod went
+    through several rounds and still read as a crescent moon or a carrot; the
+    emoji is a properly drawn chilli that everybody already recognises, which is
+    most of the job of a 48px icon.
+
+    The car and hotel are deliberately **not** in `icon-small.svg`. They are
+    legible here and turn to specks by 32px, so the small tile drops them and
+    keeps the silhouette instead — the pepper is the only shape that survives
+    16px, and three competing marks at that size communicate nothing.
+
+    These rasterise to whatever colour emoji font the machine running
+    `make-icons.sh` has — Apple Color Emoji on macOS. Fine for a side-loaded
+    extension, but note it bakes Apple's artwork into the committed PNGs: if
+    this is ever published to the Chrome Web Store, redraw from an openly
+    licensed set (Twemoji is CC-BY 4.0, Noto Emoji is OFL) rather than shipping
+    these.
+  -->
+  <rect width="128" height="128" rx="28" fill="#FFF3E0" />
+  <text
+    x="22"
+    y="34"
+    font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"
+    font-size="26"
+    text-anchor="middle"
+  >🚗</text>
+  <text
+    x="52"
+    y="34"
+    font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"
+    font-size="26"
+    text-anchor="middle"
+  >🏨</text>
+  <text
+    x="62"
+    y="104"
+    font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"
+    font-size="72"
+    text-anchor="middle"
+  >🌶</text>
+  <circle cx="97" cy="97" r="24" fill="#F7B92B" stroke="#FFF3E0" stroke-width="6" />
+  <text
+    x="97"
+    y="110"
+    font-family="Helvetica,Arial,sans-serif"
+    font-size="34"
+    font-weight="bold"
+    fill="#7A4A05"
+    text-anchor="middle"
+  >$</text>
+</svg>
