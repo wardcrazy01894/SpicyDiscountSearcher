@@ -193,16 +193,27 @@ function optionCode(option: Element): string {
 }
 
 /**
- * Fallback matcher for an option that has lost its `airport-code` element.
+ * **There is deliberately no fallback matcher**, and the reason is the readback
+ * rather than tidiness.
  *
- * `hasToken` is not usable as the fallback for the reason above, so this allows
- * the code to be preceded by anything that is not itself part of a code — a
- * lowercase letter, as in `AirportTPA` — while still requiring a clean end, so
- * `AUD` inside `Audi` stays refused.
+ * A text-based fallback was written for the case where `.airport-code` is
+ * renamed, allowing the code to be preceded by a letter so `AirportTPA` still
+ * matched. It had to go, because **nothing downstream can catch it picking the
+ * wrong branch.** `expected` is derived from the option that matched, so the
+ * post-click check confirms "the branch I clicked is on the page" and never
+ * "the branch is TPA" — and unlike National there is no second chance at it:
+ * measured on the live form, the selected branch renders its *name* outside the
+ * menu but not its code, so the readback has no code to compare.
+ *
+ * So a loosened match would select a neighbouring option that merely mentions
+ * `TPA`, verify it, and price it. That is a real rental at the wrong branch
+ * reported as the user's — the failure class this repo holds to be worse than
+ * no quote at all.
+ *
+ * If `.airport-code` disappears, the right outcome is a loud `form-fill` with
+ * `offered=` naming what the lookup actually returned, which the diagnostics now
+ * give. Fail, and be told why.
  */
-function textOffersCode(option: Element, iata: string): boolean {
-  return new RegExp(`(^|[^A-Z0-9])${iata}([^A-Za-z0-9]|$)`).test(textOf(option));
-}
 
 /**
  * What the page looked like when the location step ran out of time.
@@ -244,21 +255,33 @@ function textOffersCode(option: Element, iata: string): boolean {
  */
 const STATE_TEXT_CAP = 80;
 
+/**
+ * The location field as it stands *now*.
+ *
+ * Never the node `fillLocation` captured. The retry re-queries because this
+ * form is entirely widget-built and a re-render swaps the input out; anything
+ * reading the captured reference describes something already abandoned — after
+ * a remount it reports `field=held` off a detached input while the live field
+ * is empty, inverting every inference drawn from it.
+ */
+function liveField(ctx: DriveContext): HTMLInputElement | undefined {
+  return ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
+}
+
 function autocompleteState(
   ctx: DriveContext,
   iata: string,
   nudges: number,
   elapsed: number,
 ): string {
-  // The *live* field, not the one `fillLocation` captured. Reporting the
-  // captured node describes something the retry deliberately abandoned: after a
-  // remount it can read `field=held` off a detached input while the field the
-  // user's form actually holds is empty, inverting the inference above.
-  const field = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
+  const field = liveField(ctx);
   const menu = ctx.doc.querySelector(LOCATION_MENU);
   const options = menu ? [...menu.querySelectorAll(LOCATION_OPTION)] : [];
+  // Each code sliced, not just the list truncated. `optionCode` returns whatever
+  // `.airport-code` holds, and if that class lands on a wider element it returns
+  // arbitrary page text — six unbounded strings would defeat the cap entirely.
   const codes = options
-    .map((el) => optionCode(el))
+    .map((el) => optionCode(el).slice(0, 8))
     .filter(Boolean)
     .slice(0, 6)
     .join(',');
@@ -352,12 +375,6 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   setNativeValue(pickup, iata);
 
   let nudges = 0;
-  // Whether the component has ever answered us. Once it has, nudging can only
-  // restart a lookup it is already running — the livelock `RETRY_INTERVAL_MS`
-  // describes. This is a real suppression rather than the dead `length > 0`
-  // branch it replaces, which returned `null` down both arms and so let the
-  // retry keep firing at a menu that was plainly listening.
-  let heard = false;
   const startedAt = ctx.now();
   const option = await waitWithRetry(
     ctx,
@@ -367,21 +384,29 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
       if (!menu) return null;
       const offered = [...menu.querySelectorAll<HTMLElement>(LOCATION_OPTION)];
       if (offered.length === 0) return null;
-      // Offered something, ours or not: the component heard us.
-      heard = true;
-      return (
-        offered.find((el) => optionCode(el) === iata) ??
-        offered.find((el) => textOffersCode(el, iata)) ??
-        null
-      );
+      return offered.find((el) => optionCode(el) === iata) ?? null;
     },
+    // **The retry is deliberately unconditional**, and two attempts at gating it
+    // were both wrong. The original `offered.length > 0` branch returned `null`
+    // down both arms, so it suppressed nothing and merely claimed to. Replacing
+    // it with a `heard` latch was worse: `setNativeValue` sets `.value`
+    // synchronously whether or not any component is listening, so a menu left
+    // open from a restored previous search — Enterprise keeps its itinerary in
+    // session state — latches the flag on the first poll and retires the retry
+    // before the dropped keystroke it exists for has even been noticed.
+    //
+    // Nothing needs gating. The concern `RETRY_INTERVAL_MS` records is a nudge
+    // cancelling a lookup already in flight, and Enterprise's lookup is
+    // *measured* at about 1.5s against this 4s interval — so every lookup has
+    // had its chance before another nudge lands. `nudges` then also reads as
+    // elapsed/4s, which makes it a throttling gauge in the diagnostics rather
+    // than an ambiguous one.
     () => {
-      if (heard) return;
       nudges += 1;
       // Re-query rather than reuse `pickup`: this form is entirely widget-built,
       // so a re-render can swap the input out from under us, and nudging the
       // detached node would announce the value to nothing forever.
-      const live = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
+      const live = liveField(ctx);
       if (!live) return;
       if (live.value === iata) nudgeInput(live);
       else setNativeValue(live, iata);
@@ -433,7 +458,7 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     // menus included — means the suggestion itself went away rather than failing
     // to be promoted into a chip.
     if (!(error instanceof DriverError)) throw error;
-    const live = ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0];
+    const live = liveField(ctx);
     const state = [
       `expected=${JSON.stringify(expected.slice(0, STATE_TEXT_CAP))}`,
       `menu=${ctx.doc.querySelector(LOCATION_MENU) ? 'still-open' : 'closed'}`,

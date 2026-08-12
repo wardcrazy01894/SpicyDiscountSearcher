@@ -646,13 +646,15 @@ describe('fillLocation', () => {
     expect(error.message).toContain('offered=PIE');
   });
 
-  it('stops nudging once the component has answered', async () => {
-    // The dead `offered.length > 0` branch replaced by a real suppression. A
-    // component that is plainly listening must not keep being re-prodded: that
-    // is the livelock `RETRY_INTERVAL_MS` exists to describe.
+  it('keeps nudging while the lookup only ever offers somewhere else', async () => {
+    // The retry is unconditional on purpose. A `heard` latch looked right and
+    // was not: `setNativeValue` sets `.value` whether or not anything is
+    // listening, so a menu restored from a previous search retires the retry
+    // before the dropped keystroke it exists for is noticed. At a measured ~1.5s
+    // lookup against a 4s interval there is nothing to protect.
     renderForm({ offerCode: 'PIE' });
     const error = await failureOf(fillLocation(makeContext()));
-    expect(error.message).toContain('nudges=0');
+    expect(error.message).toMatch(/nudges=[1-9]/);
   });
 
   it('nudges the live field after the widget remounts it', async () => {
@@ -1008,6 +1010,12 @@ describe('drive', () => {
 
     expect(window.location.hash).toBe('#car_select');
     expect(document.querySelector<HTMLInputElement>('#cid')?.value).toBe('5666666');
+    // The location, for the same reason the times are asserted below: without
+    // this the whole test passed with `fillLocation` deleted from `drive`, which
+    // is the one step that had actually broken in production.
+    expect(document.querySelector('.location-field')!.textContent).toContain(
+      'Tampa International Airport',
+    );
     expect(
       document.querySelector('#pickupCalendarFocusable')?.getAttribute('aria-label'),
     ).toContain('09/04/2026');

@@ -309,7 +309,7 @@ const UNRENDERED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 
 /** Text nodes under `node`, skipping script source and any excluded subtree. */
 function collectText(node: Node, out: string[], exclude: readonly Element[]): void {
-  if (exclude.length > 0 && exclude.includes(node as Element)) return;
+  if (exclude.includes(node as Element)) return;
   if (node.nodeType === 1 && UNRENDERED.has((node as Element).tagName)) return;
   if (node.nodeType === 3) {
     out.push(node.nodeValue ?? '');
