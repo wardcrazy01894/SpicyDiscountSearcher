@@ -116,16 +116,16 @@ National return real prices and are not work in progress. Car work means Budget
 and Enterprise. See the top of `CLAUDE.md` for why that boundary is written down
 rather than assumed.
 
-| Vendor                    | Searchable | Where it stands                                                                                                                                |
-| ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                 |
-| Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                               |
+| Vendor                    | Searchable | Where it stands                                                                                                                                  |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                   |
+| Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                                 |
 | Sixt                      | no         | **Closed.** Its search URL works and replays; no corporate-code field exists anywhere in its funnel, so a driver has nothing to drive. See below |
-| Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                         |
-| Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below |
-| National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                       |
-| Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                             |
-| Starwood                  | no         | Correctly so; folded into Marriott in 2018, no site to search                                                                                  |
+| Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                           |
+| Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below   |
+| National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                         |
+| Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                               |
+| Starwood                  | no         | Correctly so; folded into Marriott in 2018, no site to search                                                                                    |
 
 ## National — measured 2026-08-08, and the furthest along
 
