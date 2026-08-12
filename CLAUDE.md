@@ -51,8 +51,9 @@ else.
 ## Ground rules
 
 - **Run `npm run verify` before opening a PR.** It is the whole node side of CI
-  in one command — typecheck, eslint, `prettier --check`, vitest, both builds,
-  and `check-dist`. Added on 2026-08-12 because PR #65 failed the
+  in one command — typecheck, eslint, `prettier --check`, vitest, **all three**
+  builds, `check-dist`, and `npm audit --audit-level=moderate`. Added on
+  2026-08-12 because PR #65 failed the
   `build / typecheck / lint` job **twice** on things a local run would have
   caught in seconds: the author ran `vitest` and `tsc` by hand and simply did
   not think of `prettier`, which then failed on a markdown table whose padding
@@ -82,6 +83,42 @@ else.
   `gh pr create` if it fails, so this rule does not depend on anybody
   remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
   for every command that is not a PR creation.
+
+  Three things about that script are load-bearing, all found by reviewing #66
+  after it had already merged:
+
+  - **It matches the phrase as a substring, and that is the second answer.** The
+    first attempt anchored it to a command position so a `grep` mentioning the
+    phrase would not trigger a build. That worked, and it also stopped matching
+    `gh pr create; echo done`, `(gh pr create)`, and a newline-separated
+    `git push` / `gh pr create` — the shape the `pr` skill itself documents. No
+    regex separates running the command from mentioning it, so the question is
+    only which way to be wrong. A needless build beats an unverified PR.
+  - It verifies the tree named by the payload's **`cwd`**, walking up to the
+    nearest `package.json`, and refuses to run anything unless that package is
+    `spicy-discount-searcher`. Agents run in worktrees here, and deriving the
+    root from `BASH_SOURCE` checked the main checkout instead: clean `main`
+    passes, the gate allows, the worktree's broken branch ships. Testing `cwd`
+    alone was not enough either — `<worktree>/src` holds no `package.json` and
+    fell straight back to the same bug.
+  - It **fails closed**, by an `EXIT` trap rather than an `ERR` one, and the
+    difference is the whole point. `ERR` does not run for the error class
+    `set -u` exists to produce — an unbound variable is a fatal that exits 1
+    with empty stdout — and a hook exiting non-zero is treated as a
+    _non-blocking_ error, so the command proceeds. The trap also has to
+    `exit 0`: printing a refusal alongside a non-zero status is not a refusal.
+    A missing `jq`, and a payload `jq` cannot parse, are denials for the same
+    reason — each used to leave `command` empty and allow every PR silently.
+
+    The one hole left is death by signal: bash re-raises after the trap, so the
+    refusal goes out with a non-zero status and is ignored. Adding `TERM` to the
+    trap makes it worse, emitting two documents, so it needs a handler that
+    marks the decision rather than a longer trap list.
+
+  `verify` includes `npm audit`, so it needs the network — which costs nothing,
+  since `gh pr create` posts to GitHub and could not have run offline anyway. An
+  unreachable registry is reported as a network problem rather than a failing
+  check, because `npm audit` exits 1 for both.
 
 - **The icon PNGs are generated, and are the one generated artefact with no
   freshness gate.** `public/icons/*.png` come from `assets/icons/*.svg` via
