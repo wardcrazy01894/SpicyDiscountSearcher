@@ -268,10 +268,10 @@ included: $57.20`, where the negation is invisible to the rule. Both surface a
   above its cards — a filter control whose lower bound is derived from the
   results, so it is at or below every real rate on the page ($42 against a
   cheapest genuine $54/day when measured). `isRangeLine` suppresses it, sharing
-  `isFeeLine`'s shape (lead phrase, then ask what is left, so "Rate range
-  $89/day" survives) and its inheritance, which it needs more: the words and the
-  amount are always in different elements, so suppressing only the label would
-  leave the `$42` leaf emitting.
+  `isFeeLine`'s shape — lead phrase, then ask what is left, so "Rate range
+  $89/day" survives — and its inheritance, which it needs more: on Hertz the
+  words and the amount are in different elements, so suppressing only the label
+  would leave the `$42` leaf emitting.
 
   **"Lead" means anchored, and the first version was not.** `RANGE_LEAD_RE`
   matched the phrase anywhere in the text while its own docstring claimed
@@ -288,24 +288,32 @@ included: $57.20`, where the negation is invisible to the rule. Both surface a
   test and has never been seen on a live page, so it is the heuristic applied to
   a plausible shape, not a measurement like Hertz's `$42`.
 
-  Known escape, and it is the direct flip side of the anchor: a filter whose
-  label and amounts sit in **one** leaf behind a prefix — `Filter by price range
-$42-$90` — no longer matches, because the phrase is not at position 0 and there
-  is no separate ancestor whose own text leads with it for the inheritance walk
-  to catch. Hertz's real markup splits the two across elements, which is why the
-  measured case still works. Accepted on the same trade as `isFeeLine`: admitting
-  a filter bound costs one wrong number in a bucket that usually loses to
-  `total`, while suppressing a real rate drops the vendor out of the race
-  entirely.
+  **Anchoring alone opened a second hole, and the first attempt to write it off
+  got the arithmetic wrong.** A filter whose label and amounts sit in **one** leaf
+  behind a prefix — `Filter by price range $42-$90` — is not at position 0, and
+  unlike Hertz's real markup there is no separate ancestor leading with the bare
+  phrase for the walk to inherit from. That was dismissed here as costing "one
+  wrong number in a bucket that usually loses to `total`". It does not. On a page
+  with no total-basis offer anywhere, `BASIS_PREFERENCE` is
+  `['total', 'unknown', 'per-day']`, nothing requires a `total` to exist, and the
+  escaped `$42` therefore outranks every genuine daily rate and takes the
+  headline outright. Hotel results — the category this codebase has thought about
+  least — are exactly where per-day-only pages live.
 
-  **This changes no answer today, and that is the interesting part.** Hertz also
-  prints "$226 est. total" per card, `total` outranks `unknown` in
-  `BASIS_PREFERENCE`, and a bare `$42` falls to the unknown basis — so the only
-  thing
-  between that filter bound and the headline price is one wording on one
-  vendor's card. The test that matters is therefore the one with the totals
-  removed; the version covering the page as it renders today passes with the
-  guard deleted. Both directions were checked to fail.
+  So it is closed rather than documented, with `isFeeLine`'s own companion rule:
+  the phrase mid-line counts **when the text quotes more than one price**.
+  `priceSites` already pairs `FEE_LEAD_RE` with `prices.length > 1` for the same
+  reason. `Filter by price range $42-$90` is a span between two ends;
+  `AAA Member Rate range $109` is a rate with an awkward label, and the count is
+  what tells them apart. Both directions checked to fail: dropping the mid-string
+  rule loses the prefixed filter, and relaxing the count to `> 0` suppresses both
+  real rates.
+
+  **On Hertz's own page none of this changes an answer**, which is worth keeping
+  in view. That page prints "$226 est. total" per card and `total` outranks
+  `unknown`, so the bound never surfaced there. The test that matters is
+  therefore the one with the totals removed; the version covering the page as it
+  renders today passes with the guard deleted entirely.
 
 - **A digit in a model name.** `PRICE_RE`'s suffix branch is
   `(NUMBER)\s*(CURRENCY)`, and car pages are full of names ending in digits. The

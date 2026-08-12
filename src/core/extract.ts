@@ -347,16 +347,34 @@ function isFeeLine(own: string): boolean {
  * a live page, so it is the heuristic applied to a plausible shape rather than a
  * measurement like Hertz's `$42`.
  *
- * The escape this buys, stated because every other guard in this file states
- * its own: a filter with a prefix and everything in one leaf — `Filter by price
- * range $42-$90` — no longer matches, since the phrase is not at position 0 and
- * no ancestor's own text leads with it for the inheritance walk to catch.
- * Hertz's real markup splits label from amount, which is why the measured case
- * still works. Same trade as `isFeeLine`: a filter bound admitted costs one
- * number in a bucket that usually loses to `total`, a rate suppressed costs the
- * vendor.
+ * Anchoring alone left a hole too big to write off, though, and the arithmetic
+ * is worth spelling out because the first attempt to write it off got it wrong.
+ * A filter with a prefix and everything in one leaf — `Filter by price
+ * range $42-$90` — is not at position 0, and unlike Hertz's real markup there is
+ * no separate ancestor leading with the bare phrase for the inheritance walk to
+ * catch. On a page carrying **no** total-basis offer the escaped `$42` does not
+ * merely join the ranking, it *wins* it: `BASIS_PREFERENCE` is
+ * `['total', 'unknown', 'per-day']`, so `unknown` outranks every genuine daily
+ * rate on the page and nothing requires a `total` to exist. Hotel results, which
+ * this codebase has thought about least, are exactly where per-day-only pages
+ * live.
  */
 const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?\b/i;
+
+/**
+ * The same phrase, unanchored, for the mid-string case.
+ *
+ * Paired with a count of prices rather than used alone, which is the whole
+ * difference between this and the version that suppressed real rates.
+ * `isFeeLine` has the identical companion in `priceSites` — `FEE_LEAD_RE.test(own)
+ * && prices.length > 1` — and for the identical reason: a label mid-line is
+ * ambiguous, and quoting *two* prices is what makes it a span rather than a rate.
+ *
+ * `AAA Member Rate range $109` and `Weekend rate range $129` quote one price
+ * each and survive. `Filter by price range $42-$90` quotes two ends of a range
+ * and does not.
+ */
+const RANGE_ANYWHERE_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?\b/i;
 
 /**
  * Is this element a price *filter* rather than a price?
@@ -366,27 +384,30 @@ const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?
  * derived from the results, so it is at or below every real rate on the page —
  * $42 against a cheapest genuine rate of $54/day when this was measured.
  *
- * It does not win *today*, and the guard is not here on the strength of a bug
- * anybody has seen. It is here because of how narrowly it misses. Hertz also
- * renders "$226 est. total" per card, `total` outranks `unknown` in
- * BASIS_PREFERENCE, and the bare `$42` classifies `unknown` — so the only thing
- * standing between that filter bound and the headline price is one wording on
- * one vendor's card. Drop "est. total" from the markup and `unknown` is next in
- * the preference order, which makes the cheapest number on the page a number
- * that was never an offer. That is the fee-line failure exactly, and it is worth
- * closing while the markup that produces it is in front of us.
+ * On Hertz's own page it does not win, because that page also prints "$226 est.
+ * total" per card and `total` outranks `unknown`. That is one wording on one
+ * vendor's card, and it is the *only* thing standing in the way: on a page with
+ * no total-basis offer anywhere, `unknown` is next in `BASIS_PREFERENCE` and the
+ * filter bound becomes the headline price outright, beating every real rate.
  *
- * Same shape as `isFeeLine`, and for the same reason: lead phrase, then ask what
- * is left. "Rate range" copy on a card ("Savings Rate range $89/day") still says
- * what its number means, so the range words were a modifier and the number
- * stands. Suppression propagates to descendants through the existing walk, which
- * is what actually catches the `$42` — the words and the number are in different
- * elements, `<div>Price range<span>$42-$90</span></div>`, and the leaf carrying
- * the amount says nothing about itself at all.
+ * Two ways in, matching `isFeeLine`'s two:
+ *
+ * 1. **The phrase leads.** Then ask what is left, so a card's own copy survives
+ *    — "Savings Rate range $89/day" still says what its number means, which
+ *    makes the range words a modifier rather than the subject.
+ * 2. **The phrase appears mid-line and the text quotes more than one price.**
+ *    `Filter by price range $42-$90` is a span between two ends; `AAA Member
+ *    Rate range $109` is a rate with an awkward label. The price count is what
+ *    separates them, exactly as it does for fee lines in `priceSites`.
+ *
+ * Suppression propagates to descendants through the existing walk, which is what
+ * catches Hertz's actual markup — `<div>Price range<span>$42-$90</span></div>`,
+ * where the leaf carrying the amount says nothing about itself at all.
  */
-function isRangeLine(own: string): boolean {
-  if (!RANGE_LEAD_RE.test(own)) return false;
-  return classifyBasis(own.replace(RANGE_LEAD_RE, ' ')) === 'unknown';
+function isRangeLine(own: string, priceCount: number): boolean {
+  const leads = RANGE_LEAD_RE.test(own);
+  if (!leads && !(priceCount > 1 && RANGE_ANYWHERE_RE.test(own))) return false;
+  return classifyBasis(own.replace(RANGE_ANYWHERE_RE, ' ')) === 'unknown';
 }
 
 /**
@@ -609,7 +630,7 @@ function priceSites(root: Element): PriceSite[] {
     const suppressed =
       isFeeLine(own) || (FEE_LEAD_RE.test(own) && prices.length > 1)
         ? 'fee-line'
-        : isRangeLine(own)
+        : isRangeLine(own, prices.length)
           ? 'range-line'
           : prices.length > 1 && mixesBases(own)
             ? 'mixed-basis'

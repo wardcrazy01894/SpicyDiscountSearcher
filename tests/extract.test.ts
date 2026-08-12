@@ -623,6 +623,28 @@ describe('a price filter is not an offer', () => {
     },
   );
 
+  it('catches a prefixed filter in one leaf, where the stakes are highest', () => {
+    // Anchoring the phrase closed one hole and opened another, and the second
+    // was worse than the first write-up allowed for. `Filter by price range
+    // $42-$90` puts the label and both amounts in a single leaf behind a
+    // prefix, so the phrase is not at position 0 and — unlike Hertz's real
+    // markup — no ancestor leads with it for the inheritance walk to catch.
+    //
+    // On a page with no total anywhere that is not a stray number in a losing
+    // bucket. BASIS_PREFERENCE is ['total', 'unknown', 'per-day'], nothing
+    // requires a total to exist, so the escaped $42 outranks every genuine
+    // daily rate and takes the headline outright. Measured at exactly that
+    // before the mid-string rule existed.
+    document.body.innerHTML = `<main>
+      <div>Filter by price range $42-$90</div>
+      <div><div>$54/day</div></div>
+      <div><div>$60/day</div></div>
+    </main>`;
+    const best = bestOffer(extract(document, 'hertz').offers);
+    expect(best?.amount).toBe(54);
+    expect(best?.basis).toBe('per-day');
+  });
+
   it('still suppresses a line that leads with the phrase and quotes a spread', () => {
     // "Prices range $99-$180 for your dates" was offered alongside the two
     // above as a rate the anchor ought to rescue. It is not one, and the
