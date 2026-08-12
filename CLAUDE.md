@@ -688,6 +688,15 @@ close). Never pass it a URL or a code.
   known to bite — a differential like National's, which is exactly how National's
   driver was proved ($70.30/day with the code against $74.00 without).
 
+  Avis's `verified` flag survives this, and the distinction is the point.
+  `verified` claims the URL carries the **search**, which rests on the location
+  replay — changing `pickup_location_code` moved the results page to Tampa — and
+  never depended on the banner. `deeplinks.ts` used to cite the banner as
+  "confirming the AWD had applied" and no longer does. The rule it trips over is
+  stated in that file's Hertz builder rather than here: driving the search and
+  applying the discount are two claims, and for a discount-code racer the second
+  is the load-bearing one. For Avis the second currently has nothing behind it.
+
 - Deep-link query params are unverified against live sites for every vendor
   except Avis and Hertz (see README). Beyond that there are now three distinct
   states, and the difference decides what would fix each:
@@ -812,41 +821,38 @@ close). Never pass it a URL or a code.
   leak. Saying so is the honest stopping point.
 
   **So the cap goes on, reversing what two drafts of this entry concluded.** The
-  measurement closes the client-side worry and says nothing about the one that
-  is left; reading "no cap needed" off it was reading a conclusion off the wrong
-  half. A risk that is unfalsifiable is not a risk that is absent, and this
-  codebase already knows what it does with that — `enterprise` carries
-  `maxLanes: 1` on architectural analogy to National with no measurement behind
-  it at all, and the version of this entry that predates the whole
-  investigation said plainly that "capping Avis to one lane is the conservative
-  answer if it turns out to be real".
+  measurement closes the client-side worry and says nothing about the one that is
+  left; reading "no cap needed" off it was reading a conclusion off the wrong
+  half.
 
-  The gap-entry above sharpens it rather than softening it: "no Avis code has
-  been shown to move a price" is _consistent with_ a shared session overriding
-  the URL's `awd_number`, which would make an uncapped Avis actively wrong
-  rather than merely unproven. Halved Avis throughput is a cost the user can
-  see. One company's price under another's code is not, and this whole codebase
-  is organised around that asymmetry.
+  "Unfalsifiable is not absent" is the shape of the argument but cannot be the
+  whole of it — taken alone it would cap every vendor here, including Hertz and
+  the hotels. What makes it an argument is specific to this vendor: **Avis has
+  already leaked across tabs once.** The Tampa/Philadelphia bug is exactly that,
+  a saved booking widget outranking the query string and pricing a journey nobody
+  asked for, and it is why `reset-widget-state.ts` exists. The code and the
+  location live in the same session object, so extending caution from the
+  attribute that demonstrably leaked to the one nothing can check is a narrow
+  inference about Avis rather than a general principle. Hertz stays uncapped
+  because its search rides entirely in the query string and nothing of its has
+  ever leaked.
+
+  Two things sharpen it. "No Avis code has been shown to move a price" is
+  _consistent with_ a shared session overriding the URL's `awd_number`, which
+  would make an uncapped Avis actively wrong rather than merely unproven. And
+  `enterprise` already carries this cap on thinner grounds — analogy to National,
+  with no measurement of its own — while the version of this entry predating the
+  whole investigation said plainly that capping Avis was "the conservative answer
+  if it turns out to be real".
+
+  The cost is the largest of any capped vendor: Avis has 27 codes, more than any
+  other car vendor, and they now serialise. Worth it on the asymmetry this whole
+  codebase is organised around — halved throughput is a cost the user can see,
+  one company's price under another's code is not.
 
   Note what none of this touches: the clearing of `booking-widget.store` is
   still needed, because that store holds the **location**, which is the
   Tampa/Philadelphia bug it was written for.
-
-- **The Avis savings banner proves nothing about the code**, which is a separate
-  and worse finding than the one above. `Z9Z9Z9Z` earns the same "Your savings
-  are reflected below" as a real AWD, at the same prices. `deeplinks.ts` cited
-  that banner as "confirming the AWD had applied" — it confirms only that the URL
-  carried something in `awd_number`.
-
-  Avis's `verified` flag survives, because it is a claim about the URL carrying
-  the **search**, and that rests on the location replay (changing
-  `pickup_location_code` moved the results page to Tampa) rather than on the
-  banner. What has no evidence behind it is the other half, and the rule is
-  stated in `deeplinks.ts`'s Hertz builder rather than here: driving the search
-  and applying the discount are two claims, and for a discount-code racer the
-  second is the load-bearing one. For Avis that second claim is currently
-  unevidenced — no Avis code has been shown to change a price. Worth its own
-  investigation, and not one this section can close.
 
 - One Avis question is still open. **The gate could be made ours rather than
   merely narrow.** `awd_number` is

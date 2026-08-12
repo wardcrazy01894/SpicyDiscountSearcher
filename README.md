@@ -58,6 +58,13 @@ that trip or Avis ignores `awd_number` from a deep link; nothing measured so far
 separates the two. Treat an Avis result as a real price for a real search, and
 not as evidence the discount applied.
 
+Avis is also **capped at one tab at a time**, like National. It has 27 codes —
+more than any other car vendor — so this is the largest throughput cost of any
+cap here, and it is deliberate: Avis has already leaked state between tabs once
+(the saved booking widget that priced the wrong journey), the code lives in the
+same session object as the location that leaked, and no experiment can check
+whether it leaks too while no Avis code moves a price.
+
 Some cannot be deep-linked at all, which is worse than unverified. **Budget,
 Enterprise and National** keep the search in session state. Their URLs carry the
 code and the whole itinerary and the sites ignore all of it — Enterprise's

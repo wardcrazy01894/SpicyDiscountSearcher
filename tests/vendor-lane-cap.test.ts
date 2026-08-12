@@ -13,9 +13,14 @@
  * so the injection is gone and the mechanism is exercised against the shipping
  * configuration instead of a mock of it.
  *
- * `hertz` is the uncapped control for the same reason it is uncapped in
- * production: it carries its whole search in the query string and leaves nothing
- * behind for a second tab to pick up.
+ * `hertz` is the uncapped control, and the reason is comparative rather than
+ * measured: nobody has dumped Hertz's storage the way Avis's was dumped. What
+ * distinguishes them is that **Avis has demonstrably leaked between tabs**, via
+ * the saved booking widget that priced the wrong journey, while Hertz never has
+ * — and Hertz's deep link was replay-proved to drive the search from the query
+ * string alone, differing inventory counts and all. That is evidence of a
+ * stateless search rather than proof of an empty one, and the distinction is
+ * worth keeping honest: if Hertz ever leaks, it earns the same cap.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -198,8 +203,9 @@ describe('the caps that actually ship', () => {
   });
 
   it('leaves the vendors with no such hazard uncapped', () => {
-    // Hertz carries its whole search in the query string and keeps nothing that
-    // a second tab could pick up, so a cap would cost throughput for nothing.
+    // Hertz has never been seen to leak anything between tabs, and its deep link
+    // was replay-proved to drive the search from the query string alone. Not the
+    // same as a storage dump proving it holds nothing — see this file's header.
     const uncapped = VENDORS.filter((v) => v.maxLanes === undefined).map((v) => v.id);
     expect(uncapped).toContain('hertz');
     expect(uncapped).not.toContain('avis');

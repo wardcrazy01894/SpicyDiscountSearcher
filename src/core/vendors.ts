@@ -44,14 +44,24 @@ export const VENDORS: Vendor[] = [
     // nothing: `Z9Z9Z9Z` renders it too, so it echoes our own request rather
     // than reporting a server verdict.
     //
-    // So the risk that matters is unfalsifiable rather than absent, and this
-    // file already knows what to do with that — enterprise above carries
-    // `maxLanes: 1` on architectural analogy alone, with no measurement at all.
-    // Worse, "no Avis code has been shown to move a price" (CLAUDE.md) is itself
-    // consistent with a shared session overriding the URL's `awd_number`, which
-    // would make an uncapped Avis actively wrong rather than merely unproven.
-    // A halved Avis throughput is a cost the user can see; one company's price
-    // under another's code is not.
+    // So the risk that matters is unfalsifiable rather than absent. That alone
+    // would justify capping every vendor in this file, which is not an argument;
+    // what makes it one is specific to Avis. **This vendor has already leaked
+    // across tabs once** — the Tampa/Philadelphia bug, where a saved booking
+    // widget outranked the query string and priced a journey nobody asked for,
+    // which is why `reset-widget-state.ts` exists at all. The code and the
+    // location live in the same session object. Extending caution from the
+    // attribute that demonstrably leaked to the one that cannot be checked is a
+    // narrow inference about one vendor, not a slippery slope; Hertz stays
+    // uncapped because its search rides entirely in the query string and nothing
+    // of its has ever leaked.
+    //
+    // Sharpening it: "no Avis code has been shown to move a price" (CLAUDE.md)
+    // is itself consistent with a shared session overriding the URL's
+    // `awd_number`, which would make an uncapped Avis actively wrong rather than
+    // merely unproven. Halved throughput is a cost the user can see; one
+    // company's price under another's code is not. `enterprise` below takes the
+    // same cap on thinner grounds — analogy to National, no measurement at all.
     maxLanes: 1,
     //
     // The widget clear is still needed and is a separate thing: that store holds
