@@ -217,12 +217,14 @@ It does not support that: a cookie-identified backend session is untouched by it
 and nothing can touch it, because no Avis code was found to change a price and so
 no observable delta exists for a leak to appear in.
 
-What decides it is that **Avis has already leaked across tabs once** — the
-Tampa/Philadelphia booking-widget bug that `reset-widget-state.ts` exists for.
-Extending caution to a second attribute of the same session object is a narrow
-inference about one vendor, not a general principle; Hertz is uncapped because
-its search rides entirely in the query string and it has never leaked anything.
-CLAUDE.md has the full result.
+What decides it is that **Avis has already been caught preferring remembered
+state to the URL** — the Tampa/Philadelphia booking-widget bug that
+`reset-widget-state.ts` exists for. Note what that does not say: the location
+leaked through localStorage and the code lives in sessionStorage, so the
+demonstrated vector provably does not carry the code. What carries over is the
+vendor's disposition rather than the mechanism, and that is a narrow inference
+about one site rather than a general principle. Hertz has never been observed
+doing the same and stays uncapped. CLAUDE.md has the full result.
 
 National's cap is unaffected by any of it: what National shares is form state
 that survives into a fresh tab, a different mechanism and one that was observed

@@ -828,14 +828,20 @@ close). Never pass it a URL or a code.
   "Unfalsifiable is not absent" is the shape of the argument but cannot be the
   whole of it — taken alone it would cap every vendor here, including Hertz and
   the hotels. What makes it an argument is specific to this vendor: **Avis has
-  already leaked across tabs once.** The Tampa/Philadelphia bug is exactly that,
-  a saved booking widget outranking the query string and pricing a journey nobody
-  asked for, and it is why `reset-widget-state.ts` exists. The code and the
-  location live in the same session object, so extending caution from the
-  attribute that demonstrably leaked to the one nothing can check is a narrow
-  inference about Avis rather than a general principle. Hertz stays uncapped
-  because its search rides entirely in the query string and nothing of its has
-  ever leaked.
+  already been caught preferring remembered state to the URL.** The
+  Tampa/Philadelphia bug is exactly that, a saved booking widget outranking the
+  query string and pricing a journey nobody asked for, and it is why
+  `reset-widget-state.ts` exists.
+
+  What that transfers is narrower than a first draft of this paragraph claimed,
+  and the correction matters. The location leaked through `booking-widget.store`,
+  in **localStorage**; the code lives in `reservation.store` and
+  `REACT_QUERY_OFFLINE_CACHE`, in **sessionStorage**. Different stores, and the
+  measurement above proves the demonstrated vector does not carry the code. So
+  what carries over is not the vector but the vendor's disposition: this is a
+  site observed letting remembered state beat an explicit URL parameter, which is
+  precisely the shape of the one risk left untestable. Hertz has never been
+  observed doing anything of the kind, and stays uncapped.
 
   Two things sharpen it. "No Avis code has been shown to move a price" is
   _consistent with_ a shared session overriding the URL's `awd_number`, which

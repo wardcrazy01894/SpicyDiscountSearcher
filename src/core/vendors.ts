@@ -46,15 +46,21 @@ export const VENDORS: Vendor[] = [
     //
     // So the risk that matters is unfalsifiable rather than absent. That alone
     // would justify capping every vendor in this file, which is not an argument;
-    // what makes it one is specific to Avis. **This vendor has already leaked
-    // across tabs once** — the Tampa/Philadelphia bug, where a saved booking
-    // widget outranked the query string and priced a journey nobody asked for,
-    // which is why `reset-widget-state.ts` exists at all. The code and the
-    // location live in the same session object. Extending caution from the
-    // attribute that demonstrably leaked to the one that cannot be checked is a
-    // narrow inference about one vendor, not a slippery slope; Hertz stays
-    // uncapped because its search rides entirely in the query string and nothing
-    // of its has ever leaked.
+    // what makes it one is specific to Avis. **This vendor has already been
+    // caught preferring remembered state to the URL** — the Tampa/Philadelphia
+    // bug, where a saved booking widget outranked the query string and priced a
+    // journey nobody asked for, which is why `reset-widget-state.ts` exists.
+    //
+    // Be precise about what that does and does not transfer, because a first
+    // draft of this comment was not. The location leaked through
+    // `booking-widget.store`, in **localStorage**; the code lives in
+    // `reservation.store` and `REACT_QUERY_OFFLINE_CACHE`, in **sessionStorage**.
+    // Different stores, and the demonstrated leak vector provably does not carry
+    // the code — that is the measurement above. What transfers is not the vector
+    // but the vendor's disposition: Avis is a site that has been observed
+    // letting remembered state beat an explicit URL parameter, which is exactly
+    // the shape of the one risk left untestable here. Hertz has never been
+    // observed doing anything of the kind.
     //
     // Sharpening it: "no Avis code has been shown to move a price" (CLAUDE.md)
     // is itself consistent with a shared session overriding the URL's

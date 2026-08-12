@@ -60,10 +60,11 @@ not as evidence the discount applied.
 
 Avis is also **capped at one tab at a time**, like National. It has 27 codes —
 more than any other car vendor — so this is the largest throughput cost of any
-cap here, and it is deliberate: Avis has already leaked state between tabs once
-(the saved booking widget that priced the wrong journey), the code lives in the
-same session object as the location that leaked, and no experiment can check
-whether it leaks too while no Avis code moves a price.
+cap here. It is deliberate: Avis has been caught once letting remembered state
+beat the URL (the saved booking widget that priced the wrong journey), and while
+that particular route was measured and does not carry the discount code, nothing
+can check whether some other route does while no Avis code moves a price. The
+cap is caution about a vendor with a track record, not a measured fault.
 
 Some cannot be deep-linked at all, which is worse than unverified. **Budget,
 Enterprise and National** keep the search in session state. Their URLs carry the
