@@ -377,6 +377,15 @@ const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?
 const RANGE_ANYWHERE_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?\b/i;
 
 /**
+ * The same, global, for stripping rather than testing.
+ *
+ * Separate constant because a `g` regex carries `lastIndex` across `.test()`
+ * calls and would make the predicate above answer differently on alternate
+ * invocations — a bug this file has no interest in rediscovering.
+ */
+const RANGE_ANYWHERE_ALL_RE = new RegExp(RANGE_ANYWHERE_RE.source, 'gi');
+
+/**
  * Is this element a price *filter* rather than a price?
  *
  * Hertz's results page renders `Price range$42-$90` above the cards, and both
@@ -397,8 +406,20 @@ const RANGE_ANYWHERE_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?
  *    makes the range words a modifier rather than the subject.
  * 2. **The phrase appears mid-line and the text quotes more than one price.**
  *    `Filter by price range $42-$90` is a span between two ends; `AAA Member
- *    Rate range $109` is a rate with an awkward label. The price count is what
- *    separates them, exactly as it does for fee lines in `priceSites`.
+ *    Rate range $109` is a rate with an awkward label.
+ *
+ * The count is a proxy, not a discriminator, and the docstring said otherwise
+ * for one round. A genuine two-tier line reusing the label — `Weekend rate range
+ * $129 $99`, a was-price beside a live one, or member beside non-member — quotes
+ * two prices and is suppressed, losing the real $99. `isFeeLine`'s identical
+ * `prices.length > 1` companion carries exactly this cost, and CLAUDE.md already
+ * takes that trade deliberately: it fails toward an empty offer list rather than
+ * a wrong headline price, which is the direction this file chooses every time.
+ * Worth knowing that here the loss is a whole *card*, not one number on it.
+ *
+ * What saves the was/now case when it is saved at all is `STRUCK_SELECTOR`, and
+ * that is semantic-only — `s`, `del`, `strike`. A was-price struck through in
+ * CSS alone, which is common, is invisible to it and takes the card with it.
  *
  * Suppression propagates to descendants through the existing walk, which is what
  * catches Hertz's actual markup — `<div>Price range<span>$42-$90</span></div>`,
@@ -407,7 +428,11 @@ const RANGE_ANYWHERE_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?
 function isRangeLine(own: string, priceCount: number): boolean {
   const leads = RANGE_LEAD_RE.test(own);
   if (!leads && !(priceCount > 1 && RANGE_ANYWHERE_RE.test(own))) return false;
-  return classifyBasis(own.replace(RANGE_ANYWHERE_RE, ' ')) === 'unknown';
+  // Global, so a line repeating the phrase is fully stripped before the basis
+  // question. Inert today — neither PER_UNIT_RE nor TOTAL_RE matches any word
+  // inside the phrase — but correctness by construction rather than by
+  // coincidence, since either pattern could grow.
+  return classifyBasis(own.replace(RANGE_ANYWHERE_ALL_RE, ' ')) === 'unknown';
 }
 
 /**

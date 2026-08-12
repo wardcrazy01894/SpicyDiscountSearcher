@@ -332,10 +332,22 @@ included: $57.20`, where the negation is invisible to the rule. Both surface a
   the phrase mid-line counts **when the text quotes more than one price**.
   `priceSites` already pairs `FEE_LEAD_RE` with `prices.length > 1` for the same
   reason. `Filter by price range $42-$90` is a span between two ends;
-  `AAA Member Rate range $109` is a rate with an awkward label, and the count is
-  what tells them apart. Both directions checked to fail: dropping the mid-string
-  rule loses the prefixed filter, and relaxing the count to `> 0` suppresses both
-  real rates.
+  `AAA Member Rate range $109` is a rate with an awkward label. Both directions
+  checked to fail: dropping the mid-string rule loses the prefixed filter, and
+  relaxing the count to `> 0` suppresses both real rates.
+
+  Known escapes, stated because the count is a **proxy and not a
+  discriminator** — a claim this bullet made for one round and should not have.
+  A genuine two-tier line reusing the label (`Weekend rate range $129 $99`: a
+  was-price beside a live one, or member beside non-member) quotes two prices and
+  is suppressed, losing the real $99. That is `isFeeLine`'s cost exactly, and the
+  same trade taken deliberately — it fails to an empty offer list rather than a
+  wrong headline price. The difference worth naming is that here the loss is a
+  whole _card_ rather than one number on it.
+
+  What rescues a was/now pair when anything does is `STRUCK_SELECTOR`, which is
+  semantic-only: `s`, `del`, `strike`. A price struck through in CSS alone —
+  common — is invisible to it, and takes the card with it.
 
   **On Hertz's own page none of this changes an answer**, which is worth keeping
   in view. That page prints "$226 est. total" per card and `total` outranks

@@ -645,6 +645,26 @@ describe('a price filter is not an offer', () => {
     expect(best?.basis).toBe('per-day');
   });
 
+  it('loses a genuine two-tier line that reuses the label, and is meant to', () => {
+    // The cost of the mid-string rule, pinned rather than described. The price
+    // count is a proxy, not a discriminator: a was-price beside a live one under
+    // the same label quotes two prices and cannot be told from a filter's two
+    // ends. `isFeeLine`'s identical `prices.length > 1` companion pays this
+    // exact price, and the trade is the one this file takes every time — an
+    // empty offer list rather than a wrong headline price.
+    document.body.innerHTML = `<main><div>Weekend rate range $129 $99</div></main>`;
+    expect(extract(document, 'hertz').offers).toEqual([]);
+  });
+
+  it('keeps the live price when the was-price is struck semantically', () => {
+    // And what rescues it when anything does. STRUCK_SELECTOR is `s, del,
+    // strike` — semantic only, so a price struck through in CSS alone is
+    // invisible to this and the card goes with it. That limit is why the test
+    // above exists rather than this one standing alone.
+    document.body.innerHTML = `<main><div>Weekend rate range <s>$129</s> $99</div></main>`;
+    expect(extract(document, 'hertz').offers.map((o) => o.amount)).toContain(99);
+  });
+
   it('still suppresses a line that leads with the phrase and quotes a spread', () => {
     // "Prices range $99-$180 for your dates" was offered alongside the two
     // above as a rate the anchor ought to rescue. It is not one, and the
