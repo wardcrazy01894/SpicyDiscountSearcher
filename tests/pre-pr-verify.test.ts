@@ -20,7 +20,15 @@
  * and runs, so the seam is the real one.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +96,29 @@ const bash = (command: string, cwd: string) => ({
   cwd,
 });
 
+/**
+ * A PATH holding everything the script needs *except* `jq`.
+ *
+ * `PATH=/bin` looked like it removed jq and only did so on macOS, where jq
+ * lives in `/opt/homebrew/bin`. On Ubuntu — which is what CI runs — `/bin` is
+ * a symlink to `/usr/bin` and jq is right there, so the gate sailed past the
+ * check and denied for the *next* reason. The test passed locally, failed all
+ * three CI Node jobs, and never exercised the branch it names on either.
+ *
+ * Symlinking the externals by name is the portable way: whatever is missing is
+ * missing everywhere.
+ */
+function pathWithoutJq(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'nojq-'));
+  temps.push(dir);
+  for (const tool of ['bash', 'cat', 'tr', 'dirname', 'tail', 'grep', 'npm', 'node', 'sh', 'env']) {
+    const found = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' });
+    const target = found.stdout.trim();
+    if (target) symlinkSync(target, join(dir, tool));
+  }
+  return dir;
+}
+
 describe('the pre-PR gate', () => {
   it('emits exactly one JSON document when verify fails', () => {
     // The regression that made the gate fail open. Two documents parse as
@@ -124,9 +155,37 @@ describe('the pre-PR gate', () => {
       });
     }
 
+    it('catches whitespace variants', () => {
+      // Pinned separately from the list above, which does *not* cover this: the
+      // two-line `git push` case passes even with the normalisation deleted,
+      // because a glob `*` already matches across a newline. Mutation testing
+      // found the fix shipped with a test that could not see it — the same
+      // shape as the round-3 finding it was written for.
+      const repo = fakeRepo('exit 1');
+      for (const command of ['gh  pr   create', 'gh\tpr\tcreate']) {
+        expect(parseDecision(run(bash(command, repo))), JSON.stringify(command)).toBe('deny');
+      }
+    });
+
+    it('catches the gh api route to opening a pull request', () => {
+      // Refusing one route while leaving another open is not a gate, and this
+      // is the obvious fallback the moment the direct command is denied.
+      const repo = fakeRepo('exit 1');
+      expect(parseDecision(run(bash('gh api repos/o/r/pulls -f title=x', repo)))).toBe('deny');
+    });
+
     it('ignores commands that have nothing to do with a PR', () => {
       const repo = fakeRepo('exit 1');
-      for (const command of ['git status', 'ls -la', 'npm test']) {
+      // `gh` subcommands that read rather than create are included on purpose:
+      // the match is deliberately loose, and this is where that would bite.
+      for (const command of [
+        'git status',
+        'ls -la',
+        'npm test',
+        'gh repo view',
+        'gh pr list',
+        'gh api user',
+      ]) {
         expect(parseDecision(run(bash(command, repo))), command).toBe('allow');
       }
     });
@@ -175,7 +234,7 @@ describe('the pre-PR gate', () => {
 
     it('denies when jq is missing, and says so', () => {
       const repo = fakeRepo('exit 0');
-      const stdout = run(bash('gh pr create', repo), { PATH: '/bin' });
+      const stdout = run(bash('gh pr create', repo), { PATH: pathWithoutJq() });
       expect(parseDecision(stdout)).toBe('deny');
       expect(stdout).toContain('jq');
     });
@@ -185,7 +244,7 @@ describe('the pre-PR gate', () => {
       // ahead of the filter, a machine without jq refused *every* Bash call and
       // the repo became unusable rather than merely un-PR-able.
       const repo = fakeRepo('exit 0');
-      expect(parseDecision(run(bash('git status', repo), { PATH: '/bin' }))).toBe('allow');
+      expect(parseDecision(run(bash('git status', repo), { PATH: pathWithoutJq() }))).toBe('allow');
     });
   });
 

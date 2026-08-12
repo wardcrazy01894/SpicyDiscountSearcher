@@ -196,8 +196,14 @@ fi
 # eslint over this repo, and a test named for a network error — or a prettier
 # diff quoting one — would otherwise misreport a real code failure as a
 # connectivity problem. `npm audit` is the last step, so its output is the end.
-if printf '%s' "$output" | tail -15 |
-  grep -qiE 'audit endpoint returned an error|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network error'; then
+# The tail is taken into a variable and matched with a here-string rather than
+# piped into `grep -q`. With `pipefail` set, `grep -q` exits on its first match,
+# `tail` then dies of SIGPIPE, and the pipeline inherits *that* status — so the
+# `if` is false exactly when the pattern matched, and the network case falls
+# through to "the diff failed". Measured: PIPESTATUS was `0 141 0` on a match.
+audit_tail=$(printf '%s' "$output" | tail -15)
+if grep -qiE 'audit endpoint returned an error|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network error' \
+  <<<"$audit_tail"; then
   deny "Refused: \`npm run verify\` failed in $repo_root, and it looks like the network rather than the diff — \`npm audit\` could not reach the registry. Check connectivity and retry.
 
 $(printf '%s' "$output" | tail -20)"
