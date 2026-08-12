@@ -484,15 +484,201 @@ describe("National's results container", () => {
 
   it('shows what the scope is worth, using a vendor whose selectors miss', () => {
     // hyatt's list matches nothing here and falls through to `main`, which is
-    // the state National shipped in. Hertz would *not* show it — its list
-    // happens to contain `.vehicle-list` too, so it scopes correctly by luck,
-    // which is why this control names a vendor deliberately.
+    // the state National shipped in.
     //
-    // It named sixt until that vendor was disabled. A control should not stand
-    // in for a page the probe never visits, and the hotel builders are the
-    // vendors whose containers really are still unchecked.
+    // It named sixt until that vendor was disabled, and then explained itself by
+    // saying Hertz would not show the promo because its list contained
+    // `.vehicle-list` too. That is no longer true in either half: Hertz's entry
+    // is now a measured bare `main`, so it would scope to `main` here exactly as
+    // hyatt does. A control should not stand in for a page the probe never
+    // visits, and the hotel builders are the vendors whose containers really are
+    // still unchecked — which is why this names one of them.
     document.body.innerHTML = PAGE;
     expect(extract(document, 'hyatt').offers.map((o) => o.amount)).toContain(9.99);
+  });
+});
+
+describe("Hertz's and Avis's results containers", () => {
+  // Both measured against the live results pages on 2026-08-11, the same way
+  // National's was, and both had the same thing wrong: the narrow selectors in
+  // front of `main` matched nothing at all. `[data-testid="vehicle-list"]` and
+  // `.vehicle-list` are absent from Hertz; `[data-testid="vehicle-results"]` and
+  // `.car-results` are absent from Avis. Every scope has always fallen through.
+  //
+  // Falling through was survivable here in a way it was not on National, because
+  // `main` on both pages really does wrap the results. What it cost was the
+  // truth of the config: three vendors' entries claimed a scope they did not
+  // have, and the only way to find out was to go and look.
+  //
+  // Markup shapes are copied from what those pages actually render, including
+  // the element boundaries — the boundary between the label and the amount is
+  // the whole reason the filter guard needs to inherit.
+  const HERTZ = `
+    <main>
+      <div><span>Price range</span><span>$42-$90</span></div>
+      <div id="1_5">
+        <span>Midsize SUV 2WD</span>
+        <div><div>$54/day<span>$57</span></div><div>$226 est. total</div></div>
+      </div>
+    </main>
+    <section class="promo">Like-new cars for under $20,000</section>`;
+
+  it('has dropped the selectors that matched nothing', () => {
+    // The honest test for this change, and the only one that can exist. The
+    // markup tests below do *not* pin it: `firstMatch` already fell through to
+    // `main` before the dead selectors were deleted, so reverting them leaves
+    // every one of those tests green. Nothing about a page can distinguish a
+    // container list whose first entries match nothing from one without them.
+    //
+    // So assert the config directly. It reads as a tautology and is not one —
+    // what it pins is that putting a selector back is a deliberate act with a
+    // measurement behind it, which is the standard the rest of this file holds.
+    expect(VENDOR_SELECTORS.hertz?.container).toBe('main');
+    expect(VENDOR_SELECTORS.avis?.container).toBe('main');
+  });
+
+  it('scopes Hertz to main, leaving the marketing line outside it', () => {
+    document.body.innerHTML = HERTZ;
+    const amounts = extract(document, 'hertz').offers.map((o) => o.amount);
+    expect(amounts).toContain(226);
+    // The one price node on the live page that sits outside `main`.
+    expect(amounts).not.toContain(20000);
+  });
+
+  // Avis's cards, where every cheap number is a genuine rate — the reason its
+  // entry needed no guard beyond the scope itself.
+  const AVIS = `
+    <main>
+      <div class="card">
+        <h3>Luxury</h3><div>Cadillac CT5 or Similar</div>
+        <div>Member Rate</div>
+        <div><span>$53.54</span><span>/day</span></div>
+        <div><span>$160.62</span><span>Vehicle total rate</span></div>
+      </div>
+    </main>
+    <section class="promo">Weekend deal from $9.99 per day</section>`;
+
+  it('scopes Avis to main, and reads both bases off one card', () => {
+    document.body.innerHTML = AVIS;
+    const offers = extract(document, 'avis').offers;
+    expect(offers.find((o) => o.amount === 53.54)?.basis).toBe('per-day');
+    expect(offers.find((o) => o.amount === 160.62)?.basis).toBe('total');
+    expect(offers.map((o) => o.amount)).not.toContain(9.99);
+  });
+});
+
+describe('a price filter is not an offer', () => {
+  // Hertz renders `Price range$42-$90` above its cards. The lower bound is
+  // derived from the results, so it is at or below every real rate on the page —
+  // $42 against a cheapest genuine rate of $54/day when this was measured.
+  const filter = '<div><span>Price range</span><span>$42-$90</span></div>';
+
+  it('keeps the filter bound out of the offers', () => {
+    document.body.innerHTML = `<main>
+      ${filter}
+      <div><div>$54/day<span>$57</span></div><div>$226 est. total</div></div>
+    </main>`;
+    const amounts = extract(document, 'hertz').offers.map((o) => o.amount);
+    expect(amounts).not.toContain(42);
+    expect(amounts).not.toContain(90);
+    expect(amounts).toContain(226);
+  });
+
+  it('still keeps it out when the page quotes no total', () => {
+    // The case the guard exists for, and the only one where it changes an
+    // answer. With "est. total" on the cards, `total` outranks `unknown` in
+    // BASIS_PREFERENCE and the bare $42 is never reached — so a test that only
+    // covered the page as it renders today would pass with the guard deleted.
+    // Take the totals away and `unknown` is next, which puts a number that was
+    // never an offer at the head of the race, below every real rate on the page.
+    document.body.innerHTML = `<main>
+      ${filter}
+      <div><div>$54/day</div></div>
+    </main>`;
+    const best = bestOffer(extract(document, 'hertz').offers);
+    expect(best?.amount).toBe(54);
+    expect(best?.basis).toBe('per-day');
+  });
+
+  it('leaves a rate alone when the range words are a modifier', () => {
+    // Same trade as isFeeLine: leading with the phrase is necessary, not
+    // sufficient. If what is left still says what the number means, the number
+    // is a price and suppressing it would drop a vendor out of the running.
+    document.body.innerHTML = `<main><div>Rate range $89/day</div></main>`;
+    expect(extract(document, 'hertz').offers.map((o) => o.amount)).toContain(89);
+  });
+
+  it.each(['AAA Member Rate range $109', 'Weekend rate range $129'])(
+    'leaves %s alone, because a filter label leads and an offer label does not',
+    (copy) => {
+      // The first version of RANGE_LEAD_RE was unanchored while its docstring
+      // claimed it shared isFeeLine's leading-phrase shape. It did not, and
+      // both of these came back as **zero offers** — a vendor dropped out of
+      // the race entirely, which is strictly worse than admitting the filter
+      // bound this guard exists to exclude. Neither carries a basis word for
+      // the second half of the rule to save them with, so the anchor is doing
+      // all the work.
+      document.body.innerHTML = `<main><div>${copy}</div></main>`;
+      expect(extract(document, 'hertz').offers.length).toBeGreaterThan(0);
+    },
+  );
+
+  it('catches a prefixed filter in one leaf, where the stakes are highest', () => {
+    // Anchoring the phrase closed one hole and opened another, and the second
+    // was worse than the first write-up allowed for. `Filter by price range
+    // $42-$90` puts the label and both amounts in a single leaf behind a
+    // prefix, so the phrase is not at position 0 and — unlike Hertz's real
+    // markup — no ancestor leads with it for the inheritance walk to catch.
+    //
+    // On a page with no total anywhere that is not a stray number in a losing
+    // bucket. BASIS_PREFERENCE is ['total', 'unknown', 'per-day'], nothing
+    // requires a total to exist, so the escaped $42 outranks every genuine
+    // daily rate and takes the headline outright. Measured at exactly that
+    // before the mid-string rule existed.
+    document.body.innerHTML = `<main>
+      <div>Filter by price range $42-$90</div>
+      <div><div>$54/day</div></div>
+      <div><div>$60/day</div></div>
+    </main>`;
+    const best = bestOffer(extract(document, 'hertz').offers);
+    expect(best?.amount).toBe(54);
+    expect(best?.basis).toBe('per-day');
+  });
+
+  it('loses a genuine two-tier line that reuses the label, and is meant to', () => {
+    // The cost of the mid-string rule, pinned rather than described. The price
+    // count is a proxy, not a discriminator: a was-price beside a live one under
+    // the same label quotes two prices and cannot be told from a filter's two
+    // ends. `isFeeLine`'s identical `prices.length > 1` companion pays this
+    // exact price, and the trade is the one this file takes every time — an
+    // empty offer list rather than a wrong headline price.
+    document.body.innerHTML = `<main><div>Weekend rate range $129 $99</div></main>`;
+    expect(extract(document, 'hertz').offers).toEqual([]);
+  });
+
+  it('keeps the live price when the was-price is struck semantically', () => {
+    // And what rescues it when anything does. STRUCK_SELECTOR is `s, del,
+    // strike` — semantic only, so a price struck through in CSS alone is
+    // invisible to this and the card goes with it. That limit is why the test
+    // above exists rather than this one standing alone.
+    document.body.innerHTML = `<main><div>Weekend rate range <s>$129</s> $99</div></main>`;
+    expect(extract(document, 'hertz').offers.map((o) => o.amount)).toContain(99);
+  });
+
+  it('still suppresses a line that leads with the phrase and quotes a spread', () => {
+    // "Prices range $99-$180 for your dates" was offered alongside the two
+    // above as a rate the anchor ought to rescue. It is not one, and the
+    // difference is the whole rule rather than an exception to it: this line
+    // *does* lead with the phrase, and what it describes reads as the spread
+    // across the results rather than a rate anybody can book.
+    //
+    // Held with less confidence than the two above, and the comment should say
+    // so: this string was invented for this test and has never been seen on a
+    // live page. Hertz's `$42` was measured. This is the heuristic applied to a
+    // plausible shape, which is enough to pin the behaviour and not enough to
+    // call it a finding.
+    document.body.innerHTML = `<main><div>Prices range $99-$180 for your dates</div></main>`;
+    expect(extract(document, 'hertz').offers).toEqual([]);
   });
 });
 
