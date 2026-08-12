@@ -7,6 +7,7 @@ import { vendorHosts } from '../src/core/vendors.js';
 
 interface Manifest {
   manifest_version: number;
+  version: string;
   permissions: string[];
   host_permissions: string[];
   content_scripts: Array<{ matches: string[]; js: string[]; run_at?: string }>;
@@ -19,11 +20,43 @@ const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL('../public/manifest.json', import.meta.url)), 'utf8'),
 ) as Manifest;
 
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+) as { version: string };
+
+const lock = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package-lock.json', import.meta.url)), 'utf8'),
+) as { version: string; packages: Record<string, { version?: string }> };
+
 const expected = vendorHosts().map((host) => `https://${host}/*`);
 
 describe('manifest.json', () => {
   it('is MV3', () => {
     expect(manifest.manifest_version).toBe(3);
+  });
+
+  it('carries the same version as package.json', () => {
+    // The manifest's version is the one Chrome shows on the extensions page,
+    // so it is what tells you a reload actually picked up your build. The two
+    // drifting would make that check quietly meaningless — you would read
+    // package.json's number in the diff and Chrome would show the other.
+    expect(manifest.version).toBe(pkg.version);
+  });
+
+  it('is the version the lockfile records too', () => {
+    // Bumping the version every PR means the lockfile drifts every PR unless
+    // it moves with them — and then any `npm install` silently rewrites it into
+    // an unrelated diff. Both of the lockfile's self-references, not its
+    // dependencies.
+    expect(lock.version).toBe(pkg.version);
+    expect(lock.packages['']?.version).toBe(pkg.version);
+  });
+
+  it('uses a plain three-part version Chrome will accept', () => {
+    // Chrome requires one to four dot-separated integers, each 0-65535, and
+    // refuses to load the extension otherwise — a suffix like `-rc1` or
+    // `0.1.1+build` is a hard failure at load time, not a warning.
+    expect(manifest.version).toMatch(/^\d{1,5}(\.\d{1,5}){0,3}$/);
   });
 
   it('requests exactly the hosts the vendor registry needs', () => {

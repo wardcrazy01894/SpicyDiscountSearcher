@@ -204,6 +204,19 @@ describe('a quote that landed somewhere other than the search', () => {
     expect(unrankedQuotes([landed(), real()]).map((q) => q.id)).toContain('sixt');
   });
 
+  it('excludes a price swept from outside the results container too', () => {
+    // `scope-lost` is the second reason a quote is unrankable, and it reaches
+    // exactly the same machinery — `pricedOnly` tests `suspect` by truthiness
+    // rather than by value, so a new reason is excluded the day it is added.
+    // The Hertz case: $20,000 from a Car Sales advert on a page that landed
+    // precisely where it was asked to, so `landedElsewhere` cannot see it.
+    const swept = quote('hertz', 'ok', [['Economy', 5, 'per-day']]);
+    swept.suspect = 'scope-lost';
+    const genuine = quote('avis', 'ok', [['Economy', 60, 'per-day']]);
+    expect(cheapestComparable([swept, genuine])?.id).toBe('avis');
+    expect(unrankedQuotes([swept, genuine]).map((q) => q.id)).toContain('hertz');
+  });
+
   it('does not become the saving', () => {
     // Two real quotes plus the suspect one. The spread must be 100 against 60,
     // not against the home page's 35.

@@ -314,6 +314,85 @@ describe('waiting for the page to settle', () => {
   });
 });
 
+describe("a price outside the vendor's container", () => {
+  // The Hertz regression, reproduced. Its results page is entirely
+  // client-rendered — the server sends ~17KB with no `<main>` — and a Car Sales
+  // promo reading "Like-new cars for under $20,000" sits outside the results
+  // container. It never changes, so the settle check was satisfied on the
+  // second poll and every quote came back at $20,000.
+  //
+  // Note the fixture used by the tests above wraps its card in `<main>`, which
+  // is why none of them saw this.
+  const PROMO = '<div class="footer-promo">Like-new cars for under $20,000</div>';
+
+  it('does not settle early on a promo while no container holds prices', async () => {
+    document.body.innerHTML = PROMO;
+    await run(POLL * 6);
+    expect(sent).toEqual([]);
+  });
+
+  it('still labels it body-fallback when the deadline arrives', async () => {
+    // Run to the *deadline*, not for six polls. The six-poll version of this
+    // asserted only that the promo does not settle early, and read as though
+    // the regression were reproduced — it was not. At the deadline the promo
+    // does go out, and what stops it being ranked is the label plus the
+    // `scope-lost` marking the background applies from it.
+    document.body.innerHTML = PROMO;
+    await run(TIMEOUT_MS + POLL);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
+  });
+
+  it('does not settle early once an empty container renders either', async () => {
+    // The case that killed the first version of this fix, which asked whether a
+    // container *existed* rather than whether the prices came from one. Hertz
+    // commits its shell before the rates arrive, so `<main>` is there and empty
+    // while the advert is still the only price on the page.
+    document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
+    await run(POLL * 6);
+    expect(sent).toEqual([]);
+  });
+
+  it('labels the empty-container case body-fallback at the deadline too', async () => {
+    document.body.innerHTML = `${PROMO}<main><div class="skeleton">Loading vehicles</div></main>`;
+    await run(TIMEOUT_MS + POLL);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
+  });
+
+  it('reports the container price once the page finally renders it', async () => {
+    document.body.innerHTML = PROMO;
+    await run(POLL * 3);
+    expect(sent).toEqual([]);
+
+    document.body.innerHTML = PROMO + CARD('$29.99');
+    await run(POLL * 2);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([29.99]);
+  });
+
+  it('still reports a body sweep at the deadline rather than losing it', async () => {
+    // The half that makes waiting safe. A vendor whose results page genuinely
+    // has no container we know about would otherwise go from priced to
+    // `probe-empty` — real prices thrown away to protect against somebody
+    // else's promo. Waiting gives a late container the rest of the budget to
+    // appear and win; if none ever does, this is still the answer.
+    document.body.innerHTML = '<div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>';
+    await run(TIMEOUT_MS + POLL);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([29.99]);
+  });
+
+  it('says in the report that the scope was lost', async () => {
+    // `body-fallback` is what makes the above readable afterwards: without it a
+    // sweep that reached a footer is indistinguishable from an ordinary one.
+    document.body.innerHTML = '<div class="card"><h3>Economy</h3><div>$29.99 per day</div></div>';
+    await run(TIMEOUT_MS + POLL);
+    expect(sent[0]?.report?.path).toBe('body-fallback');
+  });
+});
+
 describe('running out of time', () => {
   it('sends a partial result rather than nothing', async () => {
     // The page never settles — the price moves on every single read — so the
