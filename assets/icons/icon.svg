@@ -21,8 +21,17 @@
     this is ever published to the Chrome Web Store, redraw from an openly
     licensed set (Twemoji is CC-BY 4.0, Noto Emoji is OFL) rather than shipping
     these.
+    **No rounded corners, and no transparency.** `qlmanage` flattens whatever it
+    rasterises onto an opaque white ground, so an `rx` here did not round the
+    tile — it left four opaque *white* corners around a cream inset, which on a
+    dark toolbar reads as a white square with something floating in it. That was
+    a regression against the old percent-sign icons, which had genuine alpha.
+    The tile is therefore full-bleed: the cream covers every pixel, so there is
+    no ground for the flatten to show through. Restoring real transparency needs
+    a rasteriser that preserves it, which is a different toolchain than "ships
+    with macOS".
   -->
-  <rect width="128" height="128" rx="28" fill="#FFF3E0" />
+  <rect width="128" height="128" fill="#FFF3E0" />
   <text
     x="22"
     y="34"

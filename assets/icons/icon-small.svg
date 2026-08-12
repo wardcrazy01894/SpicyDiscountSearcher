@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!--
+    The 32px and 16px artwork, deliberately not the same drawing as icon.svg.
+
+    Same 🌶 emoji, but the coin is dropped and the pepper is scaled up to fill
+    the tile. Measured by looking at the rendered tiles rather than by shrinking
+    and hoping: at 16px the coin is three pixels of noise on the pod's tip, and
+    the padding that frames the 128 is most of a 16px icon.
+    **No rounded corners, and no transparency.** `qlmanage` flattens whatever it
+    rasterises onto an opaque white ground, so an `rx` here did not round the
+    tile — it left four opaque *white* corners around a cream inset, which on a
+    dark toolbar reads as a white square with something floating in it. That was
+    a regression against the old percent-sign icons, which had genuine alpha.
+    The tile is therefore full-bleed: the cream covers every pixel, so there is
+    no ground for the flatten to show through. Restoring real transparency needs
+    a rasteriser that preserves it, which is a different toolchain than "ships
+    with macOS".
+  -->
+  <rect width="128" height="128" fill="#FFF3E0" />
+  <text
+    x="64"
+    y="101"
+    font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"
+    font-size="104"
+    text-anchor="middle"
+  >🌶</text>
+</svg>

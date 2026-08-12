@@ -75,6 +75,16 @@ else.
   remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
   for every command that is not a PR creation.
 
+- **The icon PNGs are generated, and are the one generated artefact with no
+  freshness gate.** `public/icons/*.png` come from `assets/icons/*.svg` via
+  `npm run icons`. Every other generated file in this repo is pinned by CI —
+  the `data` job re-runs `extract_codes.py` and diffs the result — but this one
+  cannot be, because it needs macOS's `qlmanage` and `sips`. So editing an SVG
+  without re-running the script leaves the repo permanently inconsistent and
+  nothing anywhere says so. The sources live in `assets/` rather than `public/`
+  because vite copies `public/` verbatim into `dist/`, which shipped the
+  artwork inside the packaged extension.
+
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
   `scripts/extract_codes.py` or the workbook and re-run `npm run codes`. CI
   fails the `data` job if the committed JSON doesn't match a fresh run.
