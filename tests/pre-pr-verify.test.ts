@@ -19,8 +19,8 @@
  * script does whatever the case needs. That is exactly what the gate resolves
  * and runs, so the seam is the real one.
  */
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,23 @@ function run(payload: unknown, env: NodeJS.ProcessEnv = {}): string {
     encoding: 'utf8',
     env: { ...process.env, ...env },
   });
+}
+
+/**
+ * Run it expecting the process itself to survive, and report exit code too.
+ *
+ * `run` uses `execFileSync`, which throws on a non-zero exit — and a non-zero
+ * exit is precisely a fail-open, since the hook runner treats it as a
+ * non-blocking error and lets the command through. So the cases below need to
+ * see the code rather than have it thrown at them.
+ */
+function runRaw(payload: unknown, env: NodeJS.ProcessEnv = {}): { status: number; stdout: string } {
+  const result = spawnSync('bash', [SCRIPT], {
+    input: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
+  return { status: result.status ?? -1, stdout: result.stdout };
 }
 
 /**
@@ -169,6 +186,79 @@ describe('the pre-PR gate', () => {
       // the repo became unusable rather than merely un-PR-able.
       const repo = fakeRepo('exit 0');
       expect(parseDecision(run(bash('git status', repo), { PATH: '/bin' }))).toBe('allow');
+    });
+  });
+
+  describe('the last-resort backstop', () => {
+    // These exist because mutation testing found the round-2 fail-open was
+    // still *invisible*: deleting `exit 0` from the trap — literally that bug —
+    // left all nineteen other tests green, as did deleting the trap outright.
+    // A backstop nothing makes fire is not a backstop.
+
+    it('denies, once, when the script hits a fatal', () => {
+      // A copy of the script with a deliberate `set -u` fatal spliced in right
+      // after the backstop is installed. Contrived on purpose: the backstop
+      // exists for the errors nobody enumerated, so the only faithful test is
+      // to cause one. Driving an *anticipated* failure instead — a missing
+      // `dirname`, an unresolvable cwd — takes a normal `deny` path and leaves
+      // the trap untested, which is exactly how the round-2 bug survived a
+      // green suite. An earlier version of this test did that and let the
+      // trap-deleted mutant live.
+      const source = readFileSync(SCRIPT, 'utf8');
+      const marker = 'trap finish EXIT';
+      expect(source, 'the backstop this test exercises has moved').toContain(marker);
+      const dir = mkdtempSync(join(tmpdir(), 'gate-fatal-'));
+      temps.push(dir);
+      const broken = join(dir, 'gate.sh');
+      writeFileSync(broken, source.replace(marker, `${marker}\necho "$NOT_SET_ANYWHERE"`));
+
+      const result = spawnSync('bash', [broken], {
+        input: JSON.stringify({ tool_input: { command: 'gh pr create' }, cwd: '/tmp' }),
+        encoding: 'utf8',
+      });
+
+      // Exit 0, or the hook runner treats it as a non-blocking error and lets
+      // the command through — which is the fail-open itself.
+      expect(result.status).toBe(0);
+      expect(() => JSON.parse(result.stdout) as unknown).not.toThrow();
+      expect(parseDecision(result.stdout)).toBe('deny');
+    });
+
+    it('never emits two documents on any reachable path', () => {
+      // The shape of the round-2 bug rather than one instance of it: whatever
+      // happens, stdout is either empty (allow) or exactly one JSON object.
+      const repo = fakeRepo('exit 1');
+      const payloads: unknown[] = [
+        bash('gh pr create', repo),
+        bash('git status', repo),
+        bash('gh pr create', '/nonexistent/deep'),
+        '{"tool_input":{"command":,}} gh pr create',
+        '',
+        { tool_input: { command: 'gh pr create' }, cwd: null },
+      ];
+      for (const payload of payloads) {
+        const { status, stdout } = runRaw(payload);
+        expect(status, JSON.stringify(payload)).toBe(0);
+        if (stdout.trim() !== '') {
+          expect(() => JSON.parse(stdout) as unknown, JSON.stringify(payload)).not.toThrow();
+        }
+      }
+    });
+
+    it('denies when jq writes something and then fails', () => {
+      // A jq that emits a fragment *and* exits non-zero used to put that
+      // fragment on stdout ahead of the fallback — two documents again.
+      const stub = mkdtempSync(join(tmpdir(), 'jqstub-'));
+      temps.push(stub);
+      writeFileSync(join(stub, 'jq'), '#!/bin/sh\necho "jq: partial output"\nexit 3\n');
+      chmodSync(join(stub, 'jq'), 0o755);
+      const repo = fakeRepo('exit 1');
+      const { status, stdout } = runRaw(bash('gh pr create', repo), {
+        PATH: `${stub}:${process.env.PATH ?? ''}`,
+      });
+      expect(status).toBe(0);
+      expect(() => JSON.parse(stdout) as unknown).not.toThrow();
+      expect(parseDecision(stdout)).toBe('deny');
     });
   });
 

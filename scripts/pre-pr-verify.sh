@@ -15,39 +15,64 @@
 # matching note below. A wasted build is an annoyance; an unverified PR is the
 # thing this exists to stop.
 
-set -uo pipefail
+set -uEo pipefail
 
 # Any unexpected exit is a refusal, not an allow. Without this, "fails closed"
 # held only while the script ran to completion: a crash exits non-zero, which a
 # PreToolUse hook treats as a *non-blocking* error, and the command proceeds.
 # Cleared explicitly on every intended exit path.
 UNEXPECTED='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Refused: the pre-PR gate exited unexpectedly, so npm run verify did not complete. A bug in scripts/pre-pr-verify.sh rather than a problem with the diff."}}'
-# The `exit 0` is load-bearing. Without it the trap printed and *fell through*,
-# so a failing verify emitted this document and then the real deny — two JSON
-# objects on stdout, which the hook parser cannot parse, so it treats the whole
-# thing as plain text, finds no decision, and **allows the command**. A gate
-# that fails open on precisely the path it exists for. Measured, not theorised.
-trap 'printf "%s\n" "$UNEXPECTED"; exit 0' ERR
+
+# **EXIT, not ERR, and this distinction is the whole backstop.** An `ERR` trap
+# does not run for the error class `set -u` exists to produce: an unbound
+# variable is a fatal that exits 1 with empty stdout, and a hook exiting
+# non-zero is treated as a *non-blocking* error — so the command proceeds. Same
+# for a `set -e` fatal inside a function without `set -E`.
+#
+# An EXIT trap runs for all of them. `decided` is what keeps it from printing a
+# second document alongside a real answer, which was the round-2 fail-open:
+# stdout carrying two JSON objects parses as neither, so the hook is ignored
+# entirely and the PR is created unverified.
+decided=0
+finish() {
+  [ "$decided" = 1 ] && return 0
+  printf '%s\n' "$UNEXPECTED"
+  # `exit 0` from inside the EXIT trap, because printing a refusal is not
+  # enough: a `set -u` fatal exits 1, and a hook exiting non-zero is a
+  # *non-blocking* error whose decision the runner ignores entirely. The
+  # document has to be accompanied by a zero status or it is not a refusal.
+  exit 0
+}
+trap finish EXIT
 
 allow() {
-  trap - ERR
+  decided=1
   exit 0
 }
 
 # `deny <reason>` — refuse the tool call and say why.
 deny() {
-  trap - ERR
-  # Falls back rather than trusting jq to work. Every refusal in this script is
-  # formatted by jq, and `trap - ERR` above means a jq that exits non-zero here
-  # printed *nothing* and allowed the command — the same fail-open, reached
-  # through a present-but-broken jq instead of a missing one.
-  jq -n --arg reason "$1" '{
+  # Captured before printing, not piped straight to stdout. A jq that writes
+  # something *and then* fails — partial output, then exit 3 — otherwise put its
+  # fragment on stdout ahead of the fallback, giving two documents and the same
+  # fail-open this trap exists to prevent, through a different door.
+  #
+  # The reason is truncated because `--arg` dies with E2BIG on a very long
+  # single line, and a refusal that cannot be formatted is worth less than a
+  # slightly shortened one.
+  local formatted
+  if formatted=$(jq -n --arg reason "$(printf '%.8000s' "$1")" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: $reason
     }
-  }' || printf '%s\n' "$UNEXPECTED"
+  }' 2>/dev/null); then
+    printf '%s\n' "$formatted"
+  else
+    printf '%s\n' "$UNEXPECTED"
+  fi
+  decided=1
   exit 0
 }
 
@@ -56,12 +81,14 @@ payload=$(cat)
 # **Filter on the raw payload first, before jq is needed at all.** This hook is
 # registered against `Bash`, so it sees every command in the project. With the
 # jq guards ahead of the match, a machine without jq refused *every Bash call*
-# — the repo became unusable rather than merely un-PR-able. A substring test on
-# the whole JSON blob is strictly broader than the same test on the extracted
-# command, so it cannot leak a PR creation; it just costs nothing on the
-# overwhelming majority of calls.
+# — the repo became unusable rather than merely un-PR-able.
+#
+# Deliberately loose: any `gh` at all, so whitespace variants and `gh api`
+# reach the precise check below. It is not a proof, only a cheap skip — a
+# command JSON-escaped as `\u0067h` would slip past it, which `JSON.stringify`
+# never emits but which nothing here enforces.
 case "$payload" in
-*"gh pr create"*) ;;
+*gh*) ;;
 *) allow ;;
 esac
 
@@ -69,7 +96,7 @@ esac
 # mean "not a PR command". Written by hand rather than through `deny`, which
 # needs the very tool that is missing.
 if ! command -v jq >/dev/null 2>&1; then
-  trap - ERR
+  decided=1
   echo 'pre-pr-verify: jq not found on PATH; cannot read the hook payload' >&2
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Refused: this repo'"'"'s pre-PR gate needs `jq` to read the hook payload and it is not on PATH, so `npm run verify` never ran. Install it (`brew install jq`) and retry. An environment problem, not a failing check."}}'
   exit 0
@@ -94,8 +121,15 @@ fi
 # separates "runs the command" from "mentions the phrase" in a raw string, so
 # the only choice is which way to be wrong: a build that need not have run, or
 # a PR that was never verified. The build is much the cheaper mistake.
-case "$command" in
+# Whitespace is collapsed first, so `gh  pr   create` and tab-separated forms
+# match too — measured as silent allows before this. And `gh api …/pulls` is
+# matched because it is the obvious fallback the moment `gh pr create` is
+# denied: refusing one route to opening a PR while leaving another open is not
+# a gate.
+normalised=$(printf '%s' "$command" | tr '\t\n' '  ' | tr -s ' ')
+case "$normalised" in
 *"gh pr create"*) ;;
+*"gh api"*pulls*) ;;
 *) allow ;;
 esac
 
@@ -138,10 +172,6 @@ if ! command -v npm >/dev/null 2>&1; then
   deny "Refused: \`npm\` is not on PATH for this hook, so \`npm run verify\` could not run and this PR was not opened. An environment problem, not a test failure — nothing in the diff needs fixing."
 fi
 
-# Disarmed here because a failing `verify` is the expected case, not an
-# unexpected one — leaving the trap armed over this assignment is what made the
-# gate fail open.
-trap - ERR
 output=$(cd "$repo_root" && npm run verify 2>&1)
 status=$?
 
