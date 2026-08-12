@@ -209,10 +209,12 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
     // read has assigned it. eslint 10's no-useless-assignment spotted the dead
     // [] this used to carry.
     let offers: Offer[];
+    let containerFound: boolean;
     try {
       const extraction = extract(document, assignment.vendor);
       offers = extraction.offers;
       path = extraction.path;
+      containerFound = extraction.containerFound;
     } catch (error) {
       await send({
         type: 'PROBE_FAILED',
@@ -225,6 +227,26 @@ async function probe(assignment: Extract<ProbeAssignment, { type: 'PROBE_START' 
 
     if (offers.length === 0) {
       // Still loading, or the search never ran. Keep waiting.
+      previous = '';
+      stableReads = 0;
+      continue;
+    }
+
+    // **A price found outside the vendor's container is not a result yet.**
+    // Hertz's results page is entirely client-rendered: the server sends 17KB
+    // with no `<main>`, so at `document_idle` no container exists, the sweep
+    // falls through to `doc.body`, and the only price on the page is a Car
+    // Sales promo — "Like-new cars for under $20,000". It is perfectly stable
+    // between polls, so the settle check below was satisfied immediately and
+    // every Hertz quote came back at $20,000. Observed in a real run.
+    //
+    // Waiting costs nothing when the container is merely late, which is the
+    // common case: `<main>` appears a second or two later and the very next
+    // poll reads real prices from inside it. If it never appears the quote
+    // times out with `probe-empty` instead — a visible failure rather than a
+    // confident wrong number, which is the trade this codebase makes
+    // everywhere else.
+    if (!containerFound) {
       previous = '';
       stableReads = 0;
       continue;

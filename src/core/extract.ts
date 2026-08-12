@@ -792,6 +792,23 @@ function sweep(root: Element): Offer[] {
 export interface Extraction {
   offers: Offer[];
   path: 'vendor-selectors' | 'generic-sweep';
+  /**
+   * Whether any container this vendor names was actually in the document.
+   *
+   * False means the prices below — if any — came from sweeping `doc.body`
+   * because nothing matched, which is a different thing from sweeping the
+   * results container and finding no `offer` selector. The caller needs to tell
+   * those apart: on a page that has not finished rendering, the whole-body
+   * sweep reaches banners and promos that the container would have excluded.
+   *
+   * Measured on Hertz. Its results page is entirely client-rendered — the
+   * server sends 17KB with no `<main>` at all — so at `document_idle` no
+   * container exists, the sweep falls to `doc.body`, and the only price on the
+   * page is a Car Sales promo reading "Like-new cars for under $20,000". It
+   * does not change between polls, so the probe concluded prices had settled
+   * and reported $20,000 for every code.
+   */
+  containerFound: boolean;
 }
 
 /**
@@ -826,16 +843,22 @@ function containerRoots(doc: Document, selector: string | undefined): Element[] 
 
 export function extract(doc: Document, vendor: VendorId): Extraction {
   const config = VENDOR_SELECTORS[vendor] ?? {};
-  for (const root of containerRoots(doc, config.container)) {
+  const roots = containerRoots(doc, config.container);
+  for (const root of roots) {
     const found = extractFrom(root, config);
-    if (found.offers.length > 0) return found;
+    if (found.offers.length > 0) return { ...found, containerFound: true };
   }
   // Nothing any named container could price. The sweep over the whole body is
-  // the honest default because it is the branch that would have run.
-  return doc.body ? extractFrom(doc.body, config) : { offers: [], path: 'generic-sweep' };
+  // the honest default because it is the branch that would have run — but the
+  // caller is told whether a container existed at all, because "the container
+  // is there and holds no prices" and "the page has not rendered its container
+  // yet" want opposite responses.
+  const containerFound = roots.length > 0;
+  if (!doc.body) return { offers: [], path: 'generic-sweep', containerFound };
+  return { ...extractFrom(doc.body, config), containerFound };
 }
 
-function extractFrom(root: Element, config: VendorSelectors): Extraction {
+function extractFrom(root: Element, config: VendorSelectors): Omit<Extraction, 'containerFound'> {
   const offerNodes = allMatches(root, config.offer);
   if (offerNodes.length > 0) {
     const offers: Offer[] = [];

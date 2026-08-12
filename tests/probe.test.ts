@@ -314,6 +314,49 @@ describe('waiting for the page to settle', () => {
   });
 });
 
+describe("a price outside the vendor's container", () => {
+  // The Hertz regression, reproduced. Its results page is entirely
+  // client-rendered — the server sends ~17KB with no `<main>` at all — so at
+  // `document_idle` the container selector misses, `extract` sweeps `doc.body`
+  // instead, and the only price on the page is a Car Sales promo reading
+  // "Like-new cars for under $20,000". It never changes, so the settle check
+  // was satisfied on the second poll and every quote came back at $20,000.
+  //
+  // Note the fixture used by the tests above wraps its card in `<main>`, which
+  // is why none of them saw this.
+  const PROMO = '<div class="footer-promo">Like-new cars for under $20,000</div>';
+
+  it('does not report a promo found while the container is still missing', async () => {
+    document.body.innerHTML = PROMO;
+    await run(POLL * 6);
+    expect(sent).toEqual([]);
+  });
+
+  it('reports the container price once the page finally renders it', async () => {
+    // The common case: the container is merely late. The promo is on the page
+    // throughout, and must not win once real prices exist.
+    document.body.innerHTML = PROMO;
+    await run(POLL * 3);
+    expect(sent).toEqual([]);
+
+    document.body.innerHTML = PROMO + CARD('$29.99');
+    await run(POLL * 2);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe('PROBE_RESULT');
+    expect(sent[0]?.offers?.map((o) => o.amount)).toEqual([29.99]);
+  });
+
+  it('times out rather than reporting the promo, if the container never comes', async () => {
+    // The trade this makes: a vendor whose container genuinely disappears goes
+    // from a confident wrong number to a visible failure. That is the same
+    // choice `deeplinks.ts` makes when it throws on a malformed date.
+    document.body.innerHTML = PROMO;
+    await run(TIMEOUT_MS + POLL);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.failure).toBe('probe-empty');
+  });
+});
+
 describe('running out of time', () => {
   it('sends a partial result rather than nothing', async () => {
     // The page never settles — the price moves on every single read — so the

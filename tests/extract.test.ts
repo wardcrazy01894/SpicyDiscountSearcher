@@ -1010,3 +1010,36 @@ describe('currency codes written without a space', () => {
     expect(findPrices(text)).toEqual([]);
   });
 });
+
+describe('whether the vendor container was there at all', () => {
+  // `containerFound` exists so the probe can tell "the container is present and
+  // holds no prices" from "the page has not rendered its container yet". Only
+  // the second means keep waiting — and getting it wrong shipped $20,000 Hertz
+  // quotes, because a whole-body sweep reaches banners the container excludes.
+
+  it('is false when nothing the vendor names is in the document', () => {
+    document.body.innerHTML = '<div class="promo">Like-new cars for under $20,000</div>';
+    const result = extract(document, 'hertz');
+    expect(result.containerFound).toBe(false);
+    // The sweep still finds the promo — that is why the flag is needed rather
+    // than an empty result being enough on its own.
+    expect(result.offers.map((o) => o.amount)).toContain(20000);
+  });
+
+  it('is true once the container renders, and the promo is then out of scope', () => {
+    document.body.innerHTML =
+      '<div class="promo">Like-new cars for under $20,000</div>' +
+      '<main><div><h3>Economy</h3><div>$48.00 per day</div></div></main>';
+    const result = extract(document, 'hertz');
+    expect(result.containerFound).toBe(true);
+    expect(result.offers.map((o) => o.amount)).toEqual([48]);
+  });
+
+  it('is true when the container is present but empty', () => {
+    // Not the same as missing: this page has rendered and simply has no prices,
+    // so the probe should keep polling on its own terms rather than because the
+    // container is absent.
+    document.body.innerHTML = '<main><p>No vehicles available</p></main>';
+    expect(extract(document, 'hertz').containerFound).toBe(true);
+  });
+});
