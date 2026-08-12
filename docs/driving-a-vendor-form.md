@@ -8,8 +8,9 @@ Budget, Enterprise and National keep the itinerary in session state. No query
 string carries it, so the only route to a price is to open their form and fill
 it in. `src/core/form-driver.ts` is the framework, `src/core/drivers/index.ts`
 the registry, and **`src/core/drivers/national.ts` is the worked example** — the
-first driven vendor to ship, proved against the live site. Budget and Enterprise
-are still `searchable: false`.
+first driven vendor to ship, proved against the live site. `drivers/enterprise.ts`
+is the second, and the one to read for a form whose date control is a range
+picker. Budget is the only car vendor still `searchable: false`.
 
 ## The rule that matters
 
@@ -20,9 +21,11 @@ one field stale and returns a real price for a rental nobody asked for. A step
 that cannot be verified must fail the quote — `form-fill` is visible in the
 popup, a wrong price is not.
 
-This is why `enterpriseDriver` refuses to run today. Everything about it is
-measured except the date control, so it stops there rather than submit a search
-for the form's default dates.
+`enterpriseDriver` refused to run for months on exactly this principle:
+everything about it was measured except the date control, so it stopped there
+rather than submit a search for the form's default dates. That refusal was
+deleted on 2026-08-12 by measuring the control, not by deciding the risk was
+acceptable — which is the only way one of these should ever be removed.
 
 ## Recon: what to capture
 
@@ -82,6 +85,51 @@ Then type defensively anyway. A marker narrows the race, it does not close it,
 and one event into a component that is not listening leaves nothing to wait for
 — so re-apply the value while the thing you expect has not appeared.
 
+Enterprise is the sharper version of that lesson rather than an exception to it:
+its served `/en/reserve.html` (200, 453,800 bytes, brand nav and `booking-widget`
+styles present) contains **zero `<input>` elements at all**, so every field is
+widget-built and every one is subject to this race. Record the status and a
+positive fact or two alongside a finding like that — an error body would also
+contain no inputs, and Enterprise serves 403s to `curl`.
+
+## The suggestion menu you can see is not always the one you match
+
+Enterprise's driver failed its first live run here, and the diagnosis that first
+looked obvious — a lost keystroke — was wrong. The vendor renders its
+suggestions **twice**:
+
+| element                           | tag   | box     | contents                        |
+| --------------------------------- | ----- | ------- | ------------------------------- |
+| `location-dropdown__aria-items`   | `ul`  | **0x0** | `li` mirrors for screen readers |
+| `location-dropdown auto-complete` | `div` | 855x400 | the real, clickable options     |
+
+`[class*="location-dropdown"]` matches both, and `querySelector` returns the
+**first in document order** — the mirror. So the driver found an `li` whose text
+contained the airport code, clicked it, and nothing happened: a screen-reader
+element has no handler. The visible symptom is a dropdown that is plainly open
+while the driver reports it never found one.
+
+Three habits fall out of it, and all three are cheap:
+
+- **Check how many elements your menu selector matches**, not just that it
+  matches one. A comma list or a `[class*=…]` is not a preference order.
+- **Click the innermost thing that is actually a control.** Enterprise's
+  `li.location-group__item` carries `role="option"` and swallows the click;
+  only the `button` inside it selects. National's `<li>` does the same.
+- **Exclude every copy of the menu from the readback.** With only the visible
+  one excluded, the mirror still renders the branch name — so "the name appears
+  outside the menu" is satisfied by a click that selected nothing, which is the
+  exact check that verification was supposed to be.
+
+Prefer a field's own element to text matching where the markup offers one.
+Enterprise puts the code in `<small class="airport-code">TPA</small>`, which is
+exact; the option's _text_ glues it to the branch name
+(`Tampa International AirportTPA`), where `hasToken` refuses it. A probe tab
+hides that — no layout means `innerText` is `''`, so `textOf` falls back to
+`visibleText`, which re-spaces the text nodes and makes the match work by
+accident. Code that only works in a tab with no layout is not code you want to
+find out about later.
+
 **Test in a hidden tab.** Probe tabs live in a minimised window, so
 `setTimeout` is throttled to roughly once a second: a 250 ms poll costs 1 s of
 budget. Open the page, switch to another tab, and drive it from there. National's
@@ -111,9 +159,9 @@ and what "nothing happened" looks like.
 
 ## Vendor state
 
-The three car vendors marked **yes** below are **finished** — Hertz, Avis and
-National return real prices and are not work in progress. Car work means Budget
-and Enterprise. See the top of `CLAUDE.md` for why that boundary is written down
+The four car vendors marked **yes** below are **finished** — Hertz, Avis,
+National and Enterprise return real prices and are not work in progress. Car work
+means Budget. See the top of `CLAUDE.md` for why that boundary is written down
 rather than assumed.
 
 | Vendor                    | Searchable | Where it stands                                                                                                                                  |
@@ -121,7 +169,7 @@ rather than assumed.
 | Avis                      | yes        | Deep link `verified`, replay-proved, widget-reset + trip-check                                                                                   |
 | Hertz                     | yes        | Deep link `verified`, differential-replay-proved                                                                                                 |
 | Sixt                      | no         | **Closed.** Its search URL works and replays; no corporate-code field exists anywhere in its funnel, so a driver has nothing to drive. See below |
-| Enterprise                | no         | Driver written and tested; blocked on the date control                                                                                           |
+| Enterprise                | **yes**    | Driven, not deep-linked. Range-picker calendar and time dropdowns driven and verified; capped at one lane; 120s probe budget                     |
 | Budget                    | no         | Form fully mapped and the easiest to fill; submitting raises a bot check, which `#budget-captcha-btn` now puts the user in front of. See below   |
 | National                  | **yes**    | Driven, not deep-linked. Proved against the live site with a controlled differential; capped at one lane                                         |
 | Hilton / Marriott / Hyatt | yes        | `best-effort`, never checked against the live site                                                                                               |
@@ -350,13 +398,29 @@ guess:
   `unsearchable()` is what `makeQuote` catches today, and a caught throw settles
   the quote at plan time so it never reaches a lane at all — which is why a
   driver alone changes nothing.
-- **Check `PROBE_TIMEOUT_MS` against the vendor's hydration.** Deliberately
-  _not_ raised for National: its widget mounted in about 8s, and `DRIVE_SHARE`
-  of 0.6 leaves the driver ~27s of the 45s budget, which its measured runs fit
-  inside comfortably. Enterprise is the one that will force the question — ~40s
-  on one measured load leaves nothing for filling, submitting or pricing.
-  `KEEPALIVE_CEILING_MS` is derived from this constant, so raising it is a
-  deliberate change rather than a nudge, and `DRIVE_SHARE` is still a guess.
+- **Check the probe budget against the vendor's hydration.** Deliberately not
+  raised for National: its widget mounted in about 8s, and `DRIVE_SHARE` of 0.6
+  leaves the driver ~27s of the 45s default, which its measured runs fit inside
+  comfortably.
+
+  **Enterprise forced the question, as this list predicted it would**, and the
+  answer was a per-vendor `probeTimeoutMs` rather than a bigger default. Its
+  widget took ~40s to mount on one measured load, which leaves nothing for
+  filling, submitting or pricing. The default stays 45s because it is also a
+  politeness setting — it bounds how long a tab sits open on _every_ vendor's
+  site, and Hertz, Avis and National answer well inside it. Paying Enterprise's
+  cost everywhere would have been the lazy version of this fix.
+
+  Note `KEEPALIVE_CEILING_MS` still derives from the **default**, not from the
+  longest budget any vendor asks for — and leave it that way. This paragraph
+  said the opposite for a while, on the theory that a ceiling shorter than a
+  single quote's own budget would let slow quotes trip their own inactivity
+  guard. The arithmetic refutes it: `13 x (45s + 750ms)` is 9.9 minutes against
+  a 120s quote, five times over. Deriving from the longest pushed the ceiling to
+  26 minutes, which is how long a _wedged_ run pins the worker with a minimised
+  window open, for no benefit. There is headroom for a vendor budget of about
+  eight minutes before the reasoning changes. `DRIVE_SHARE` is still a guess.
+
 - **Admit `form-fill`, `form-submit` and `code-rejected`** to `PROBE_FAILURES`.
   Done — National's driver is a reachable emitter for all three, and each is
   something only the page can witness. They were held out while no reachable

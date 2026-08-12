@@ -58,6 +58,8 @@ export interface ChromeHarness {
    * tell a polite run from a run that hijacks the user's browser.
    */
   windowOptions: chrome.windows.CreateData[];
+  /** Every `windows.update`, in order, so a state transition can be asserted. */
+  windowUpdates: ({ windowId: number } & chrome.windows.UpdateInfo)[];
   tabOptions: Array<{ options: chrome.tabs.CreateProperties; at: number }>;
   session: Map<string, unknown>;
   local: Map<string, unknown>;
@@ -121,6 +123,7 @@ export function installChromeMock(): ChromeHarness {
   const local = new Map<string, unknown>();
   const broadcasts: unknown[] = [];
   const windowOptions: chrome.windows.CreateData[] = [];
+  const windowUpdates: ({ windowId: number } & chrome.windows.UpdateInfo)[] = [];
   const tabOptions: Array<{ options: chrome.tabs.CreateProperties; at: number }> = [];
   let nextTabId = 100;
   let nextWindowId = 1;
@@ -251,6 +254,15 @@ export function installChromeMock(): ChromeHarness {
         }
         return Promise.resolve({ id });
       },
+      // Modelled rather than stubbed, and it rejects for an unknown id exactly
+      // as Chrome does. Without this the namespace had no `update` at all, so
+      // the paint-gated window logic threw `is not a function` in every test
+      // that reached it — which is the class of gap a mock is for.
+      update: (windowId: number, info: chrome.windows.UpdateInfo) => {
+        if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));
+        windowUpdates.push({ windowId, ...info });
+        return Promise.resolve({ id: windowId });
+      },
       // The background asks this after a failed close, to tell "already gone"
       // from "still there and I could not close it" — which need opposite
       // handling for the stored id.
@@ -295,6 +307,7 @@ export function installChromeMock(): ChromeHarness {
     windows,
     windowsCreated,
     windowOptions,
+    windowUpdates,
     tabOptions,
     session,
     local,

@@ -5,9 +5,14 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * a search.
  *
  * Budget, Enterprise and National keep the itinerary in session state, so no
- * query string can carry it and `deeplinks.ts` refuses to build one for them.
- * The only way to price a code at those vendors is to open their form and fill
- * it in, which is what this file is the framework for.
+ * query string can carry it. The only way to price a code at those vendors is
+ * to open their form and fill it in, which is what this file is the framework
+ * for.
+ *
+ * `deeplinks.ts` still refuses to build a search URL for any of them — nothing
+ * about driving a form makes one possible. What it does for the two that are
+ * driven is return the page the form lives on, marked `'driven'`: not a deep
+ * link, and deliberately not graded as one.
  *
  * **The doctrine `deeplinks.ts` follows applies here unchanged, and matters
  * more.** A deep link that rots usually lands somewhere obviously wrong; a
@@ -17,8 +22,13 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  * worked, and a step that cannot be verified fails the quote instead of
  * continuing. `form-fill` is visible in the popup; a wrong price is not.
  *
- * National is live on this path (`drivers/national.ts`); Budget and Enterprise
- * are not, and `drivers/enterprise.ts` records what is still missing for it.
+ * National and Enterprise are both live on this path (`drivers/national.ts`,
+ * `drivers/enterprise.ts`). Budget is not: its form is mapped but submitting it
+ * raises a bot check, so nothing drives it yet.
+ *
+ * Read Enterprise's for a form whose date control is a range picker, and
+ * National's for one whose submit ends in a real navigation — the two shapes a
+ * third driver is most likely to meet.
  */
 
 /**
@@ -68,6 +78,31 @@ export interface DriveContext {
   deadline: number;
   now(): number;
   sleep(ms: number): Promise<void>;
+  /**
+   * Tell the background this page no longer needs to be painted. Optional.
+   *
+   * Exists for one measured reason. Enterprise lazy-mounts its booking widget
+   * behind something that needs a **painted frame** — an unpainted tab renders
+   * the page shell and never the form. Measured 2026-08-12: a hidden tab left
+   * alone for 153s had zero `<input>` elements, and one forced repaint produced
+   * all five and `#cid` immediately, with `visibilityState` still `hidden`
+   * throughout. So it is not visibility state and not timer throttling (polls
+   * were running at the documented ~1/s); it is whether Chrome drew the tab.
+   *
+   * A window that is minimised is never painted, and — measured the same day,
+   * in a window known to be painted — neither is a tab that is not the selected
+   * one. So for such a vendor the run's window is opened visible and the probe
+   * tab is *selected*, both reverted the moment this fires. The vendor's page is
+   * on the user's screen until it does.
+   *
+   * **Call it when the driver is finished, not when the form mounts.** Only the
+   * mount was measured; a lazily-rendered popup — an autocomplete menu, a
+   * calendar — could be paint-gated too, and releasing early would move the
+   * same failure one step later and cost another round of live testing to find.
+   * Tightening this to the mount is a real saving in visible-window time and
+   * wants its own measurement first.
+   */
+  releasePaint?(): void;
 }
 
 export interface FormDriver {
@@ -130,6 +165,36 @@ export async function waitFor<T>(
     }
     await ctx.sleep(POLL_MS);
   }
+}
+
+/**
+ * `waitFor`, but never satisfied by the state on the calling tick.
+ *
+ * **For reading a value back after writing it, where `waitFor` cannot fail.**
+ * `setNativeValue` writes through the prototype setter, so `el.value` already
+ * equals what was written by the time the next statement runs — and `waitFor`
+ * reads before its first sleep. A controlled component that rejects the value
+ * does so a microtask or a render later, which is *after* the check has
+ * returned successfully.
+ *
+ * So a read-back written as `waitFor(..., () => el.value === wanted)` tests our
+ * own assignment rather than the page's acceptance of it, and passes on a form
+ * that threw the value away. That is a wrong price rather than a failed quote:
+ * the field falls back to its default, the search runs, and the number comes
+ * back as the user's. Measured against a select that reverts in a resolved
+ * promise — the check passed and the form was back at its default.
+ *
+ * One poll of delay is the entire difference, and it is cheap: the driver is
+ * already polling at this rate for everything else.
+ */
+export async function waitForSettled<T>(
+  ctx: DriveContext,
+  describe: string,
+  read: () => T | null | undefined,
+  failure: DriverFailure = 'form-fill',
+): Promise<T> {
+  await ctx.sleep(POLL_MS);
+  return waitFor(ctx, describe, read, failure);
 }
 
 /**
@@ -267,9 +332,9 @@ export function textOf(el: Element | null | undefined): string {
  */
 const UNRENDERED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 
-/** Text nodes under `node`, skipping script source and one excluded subtree. */
-function collectText(node: Node, out: string[], exclude: Element | null): void {
-  if (exclude && node === exclude) return;
+/** Text nodes under `node`, skipping script source and any excluded subtree. */
+function collectText(node: Node, out: string[], exclude: readonly Element[]): void {
+  if (exclude.includes(node as Element)) return;
   if (node.nodeType === 1 && UNRENDERED.has((node as Element).tagName)) return;
   if (node.nodeType === 3) {
     out.push(node.nodeValue ?? '');
@@ -288,7 +353,7 @@ function collectText(node: Node, out: string[], exclude: Element | null): void {
 export function visibleText(root: Element | null | undefined): string {
   if (!root) return '';
   const parts: string[] = [];
-  collectText(root, parts, null);
+  collectText(root, parts, []);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
@@ -308,11 +373,23 @@ export function visibleText(root: Element | null | undefined): string {
  * text in a *non*-leaf — so the check could never pass, and the driver would
  * fail `form-fill` on a form it had filled correctly. Walking text nodes makes
  * no assumption about the shape at all.
+ *
+ * **Takes a list, because one exclusion is not always enough.** Enterprise
+ * renders its suggestions *twice* — a visible `location-dropdown auto-complete`
+ * and a 0x0 `location-dropdown__aria-items` mirror for screen readers, measured
+ * on the live form 2026-08-12. Excluding only the visible one leaves the mirror
+ * holding the branch name, so the readback passes on a click that selected
+ * nothing: precisely the "verifying that a dropdown once opened" failure this
+ * function exists to prevent, through a second copy of the menu.
  */
-export function textOutside(root: Element | null, exclude: Element | null): string {
+export function textOutside(
+  root: Element | null,
+  exclude: Element | readonly Element[] | null,
+): string {
   if (!root) return '';
+  const skip = exclude === null ? [] : Array.isArray(exclude) ? exclude : [exclude as Element];
   const parts: string[] = [];
-  collectText(root, parts, exclude);
+  collectText(root, parts, skip as readonly Element[]);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 

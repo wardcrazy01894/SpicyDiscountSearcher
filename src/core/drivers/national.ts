@@ -30,8 +30,8 @@ import type { CarTrip } from '../types.js';
  *
  * Same vehicle, same result count, different price. That is the pair of facts
  * that rules out "the form submitted and the code did nothing" — the same
- * standard `deeplinks.ts` holds Hertz to, and the reason this file exists while
- * `enterprise.ts` still refuses to run.
+ * standard `deeplinks.ts` holds Hertz to, and the reason this file shipped
+ * first, while `enterprise.ts` still refused to run.
  *
  * The form is on `/en/home.html`, not a `/reserve` route, and is a different
  * shape from Enterprise's despite the two sharing a backend (National's own

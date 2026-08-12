@@ -18,7 +18,16 @@ export type ProbeRequest =
   // Both carry a report: the facts that separate a real quote from a deep link
   // that quietly landed on the vendor's home page are the same either way.
   | { type: 'PROBE_RESULT'; offers: Offer[]; report: ProbeReport }
-  | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport };
+  | { type: 'PROBE_FAILED'; failure: QuoteFailure; message: string; report: ProbeReport }
+  /**
+   * This page no longer needs painting, so its window and tab can go back.
+   *
+   * Only paint-gated vendors ever cause a visible window (see
+   * `Vendor.needsPaintedWindow`), and this is what ends that. It settles
+   * nothing and carries no evidence — a forged one costs at most a window
+   * minimised early, which is the direction that is safe.
+   */
+  | { type: 'PROBE_PAINT_DONE' };
 
 export type BackgroundRequest = PopupRequest | ProbeRequest;
 
@@ -34,9 +43,10 @@ export type ProbeAssignment =
        *
        * Needed by the vendors whose URL cannot express a search: Budget,
        * Enterprise and National, whose sites ignore the query string entirely.
-       * Their builders now refuse to produce a URL at all and they are
-       * `searchable: false`, so nothing routes a run to them — the fields exist
-       * for the driver that will.
+       * National and Enterprise are driven and `searchable: true`, so these
+       * fields carry real runs. Budget's builder still refuses to produce a URL
+       * and it is `searchable: false`, so nothing routes a run to it — the
+       * fields wait for the driver that will.
        *
        * Not a new exposure. `buildDeepLink` already puts the code and every
        * trip field into `location.search` for every vendor it does build for,

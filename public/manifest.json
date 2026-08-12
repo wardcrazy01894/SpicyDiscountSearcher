@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spicy Discount Searcher",
-  "version": "0.1.1",
+  "version": "0.3.2",
   "description": "Race corporate discount codes against each other to find the cheapest rental car or hotel rate.",
   "minimum_chrome_version": "116",
   "permissions": ["storage"],
@@ -11,7 +11,8 @@
     "https://www.hilton.com/*",
     "https://www.hyatt.com/*",
     "https://www.marriott.com/*",
-    "https://www.nationalcar.com/*"
+    "https://www.nationalcar.com/*",
+    "https://www.enterprise.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -25,7 +26,8 @@
         "https://www.hilton.com/*",
         "https://www.hyatt.com/*",
         "https://www.marriott.com/*",
-        "https://www.nationalcar.com/*"
+        "https://www.nationalcar.com/*",
+        "https://www.enterprise.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

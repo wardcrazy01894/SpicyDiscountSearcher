@@ -33,6 +33,30 @@ export interface Vendor {
    */
   alsoTryAs?: VendorId[];
   /**
+   * How long a quote at this vendor may take, if the default is not enough.
+   *
+   * Exists for Enterprise, whose booking widget is not merely slow but
+   * *variably* slow: it mounted instantly on one profile, took about forty
+   * seconds on another, and on a third never mounted at all. The default 45s
+   * budget, of which a driver gets `DRIVE_SHARE`, cannot absorb that.
+   *
+   * Per-vendor rather than a raised global, because the global is also a
+   * politeness setting: it bounds how long a tab sits open on *every* vendor's
+   * site, and Hertz, Avis and National answer well inside it. Slowing them down
+   * to accommodate Enterprise would be paying for one vendor's problem
+   * everywhere.
+   *
+   * `KEEPALIVE_CEILING_MS` is **not** derived from these — it stays on the
+   * default, and that was checked rather than assumed. Its job is to exceed the
+   * longest legitimate gap between two quotes settling, and `13 x (45s + 750ms)`
+   * is 9.9 minutes against a 120s quote: five times over. Deriving it from the
+   * largest instead pushed it to 26 minutes, which is how long a *wedged* run
+   * would pin the worker with a minimised window open. See the constant's own
+   * comment; there is room for a vendor budget of about eight minutes before
+   * this stops being true.
+   */
+  probeTimeoutMs?: number;
+  /**
    * How many tabs may be open at this vendor at once, if fewer than the run's
    * own concurrency.
    *
@@ -50,6 +74,28 @@ export interface Vendor {
    * bound.
    */
   maxLanes?: number;
+  /**
+   * This vendor's form does not mount unless Chrome actually paints the tab.
+   *
+   * The probe window is minimised, and a minimised window is never painted — so
+   * for a vendor with this flag the window is opened *visible* (never focused)
+   * and minimised again as soon as the driver reports the form has mounted, via
+   * `DriveContext.hydrated`.
+   *
+   * Enterprise is the measured case, and it is not throttling or
+   * `visibilityState`. A hidden tab left for 153 seconds had **zero `<input>`
+   * elements** while the page shell rendered normally; one forced repaint
+   * produced all five and `#cid` immediately, with `visibilityState` still
+   * `hidden` and timers running at the documented ~1/s throughout. The standard
+   * "hydrate when scrolled into view" pattern does exactly this, and no
+   * content-script API can force a frame in a window Chrome is not drawing.
+   *
+   * Deliberately per-vendor and deliberately narrow. It is the one thing in
+   * this file that puts a window on the user's screen, so it costs politeness
+   * and must be paid only where it buys a vendor that otherwise cannot run at
+   * all. Do not set it to make a slow vendor faster.
+   */
+  needsPaintedWindow?: boolean;
 }
 
 /** One discount code for one company at one vendor, as parsed from the workbook. */

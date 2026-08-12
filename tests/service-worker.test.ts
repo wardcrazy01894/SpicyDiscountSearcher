@@ -26,6 +26,23 @@ function plan(concurrency = 2): SearchPlan {
   };
 }
 
+/** A one-code plan at the only vendor whose form needs a painted window. */
+function enterprisePlan(): SearchPlan {
+  return {
+    trip: TRIP,
+    candidates: [
+      {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'enterprise',
+        code: '5666666',
+        note: null,
+      },
+    ],
+    concurrency: 1,
+  };
+}
+
 const OFFER: Offer = { label: 'Compact', amount: 200, currency: 'USD', basis: 'total' };
 
 const REPORT: ProbeReport = {
@@ -174,7 +191,13 @@ describe('surviving MV3 suspension', () => {
     // exists to fix, reintroduced by the guard meant to bound it.
     await bootWorker();
     const many = { ...plan(1) };
-    many.candidates = Array.from({ length: 30 }, (_, index) => ({
+    // Enough candidates to outlast the loop below, which runs for the ceiling
+    // plus three minutes and settles one every 30s. Derived rather than a flat
+    // 30: once `probeTimeoutMs` pushed the ceiling from ~10 to ~26 minutes, a
+    // fixed count drained the run early and this failed claiming the keepalive
+    // had died when in truth the race had simply finished.
+    const settlesNeeded = Math.ceil((CEILING_MS + 3 * 60_000) / 30_000) + 2;
+    many.candidates = Array.from({ length: settlesNeeded }, (_, index) => ({
       companySlug: `c${index}`,
       companyName: `Company ${index}`,
       vendor: 'hertz' as const,
@@ -559,6 +582,11 @@ describe('politeness', () => {
   });
 
   it('never steals focus with a probe tab', async () => {
+    // Still `active: false` for every vendor that does not need painting, which
+    // is all of them but Enterprise — see the paint-gated test above for the
+    // exception and why it is narrow. Note this is tab *selection* within our
+    // own window; `focused: false` on the window is never relaxed for anyone,
+    // so the user's keyboard stays where it was either way.
     await bootWorker();
     await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
     await settle();
@@ -596,6 +624,118 @@ describe('politeness', () => {
       .map((tab, index) => tab.at - chromeMock.tabOptions[index]!.at);
     expect(gaps.length).toBeGreaterThan(0);
     expect(Math.min(...gaps)).toBeGreaterThanOrEqual(750);
+  });
+
+  it('still opens minimised when no vendor needs the window painted', async () => {
+    // The invariant above, restated as the *default* now that an exception
+    // exists. A run of ordinary vendors must be untouched by the paint logic:
+    // minimised at creation and never raised.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(2) });
+    await settle();
+
+    expect(chromeMock.windowOptions[0]).toMatchObject({ state: 'minimized' });
+    expect(chromeMock.windowUpdates.filter((u) => u.state === 'normal')).toHaveLength(0);
+  });
+
+  it('selects the tab for a paint-gated vendor, and only for that one', async () => {
+    // A visible *window* is not enough and this is the measurement that cost a
+    // build: in a window known to be painted, Enterprise as a background tab had
+    // zero inputs after 75s, and selecting that same tab mounted the form
+    // immediately. A non-selected tab is `visibilityState: hidden` and Chrome
+    // draws no frames for it.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    expect(chromeMock.tabOptions).toHaveLength(1);
+    expect(chromeMock.tabOptions[0]!.options.active).toBe(true);
+  });
+
+  it('opens visible — never focused — for a vendor whose form needs painting', async () => {
+    // Enterprise's booking widget does not mount in a tab Chrome never paints,
+    // and a minimised window is never painted. Measured 2026-08-12: 153s hidden
+    // gave zero inputs, one forced repaint gave all five. So the window starts
+    // visible, and the politeness cost is bounded by minimising it again the
+    // moment the form reports it has mounted.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    expect(chromeMock.windowOptions).toHaveLength(1);
+    expect(chromeMock.windowOptions[0]).toMatchObject({ state: 'normal', focused: false });
+  });
+
+  it('minimises as soon as the form reports it has mounted', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+
+    await chromeMock.fromTab(tabId, { type: 'PROBE_PAINT_DONE' });
+    await settle();
+
+    const minimised = chromeMock.windowUpdates.filter((u) => u.state === 'minimized');
+    expect(minimised).toHaveLength(1);
+    // And still never focused, on the way down as well as the way up.
+    expect(minimised[0]).toMatchObject({ focused: false });
+  });
+
+  it('minimises even when the quote dies before the form ever mounts', async () => {
+    // The case the user is most likely to see, since a paint-gated vendor that
+    // cannot mount is exactly what this flag exists for. Without `finishQuote`
+    // releasing the quote, a failed Enterprise quote leaves the window sitting
+    // on the user's screen for the rest of the run.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'form-fill',
+      message: 'timed out waiting for the booking widget',
+      report: REPORT,
+    });
+    await settle();
+
+    expect(chromeMock.windowUpdates.filter((u) => u.state === 'minimized')).toHaveLength(1);
+  });
+
+  it('raises a window another lane had already created minimised', async () => {
+    // The interleaving the first version got wrong. `setAwaitingPaint` applies
+    // the state immediately, but a lane registering while `windows.create` is
+    // still in flight finds `run.windowId` null and applies nothing — and
+    // `ensureWindow` decides `state` when it *calls* create, so a Hertz lane
+    // that got there a moment earlier fixes the window minimised. Nothing then
+    // re-applied it, the Enterprise tab opened into an unpainted window, and
+    // its form never mounted: the exact production failure, reintroduced by the
+    // fix for it.
+    await bootWorker();
+    chromeMock.delayWindowCreate(50);
+    const mixed: SearchPlan = {
+      trip: TRIP,
+      candidates: [
+        { companySlug: 'acme', companyName: 'Acme', vendor: 'hertz', code: 'H1', note: null },
+        {
+          companySlug: 'ibm',
+          companyName: 'IBM',
+          vendor: 'enterprise',
+          code: '5666666',
+          note: null,
+        },
+      ],
+      concurrency: 2,
+    };
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
+    await settle(200);
+
+    // However the race fell out, the window must end up painted while the
+    // Enterprise quote is mounting — whether by being created that way or by
+    // being raised afterwards.
+    const createdNormal = chromeMock.windowOptions[0]?.state === 'normal';
+    const raised = chromeMock.windowUpdates.some((u) => u.state === 'normal');
+    expect(createdNormal || raised).toBe(true);
   });
 
   it('caps concurrency at six however many the popup asks for', async () => {
@@ -1225,6 +1365,54 @@ describe('a run the browser interrupted', () => {
 
     expect(chromeMock.windows.has(orphan.id)).toBe(false);
     expect(chromeMock.session.has('runWindow')).toBe(false);
+  });
+});
+
+describe('a vendor that asks for a longer probe budget', () => {
+  // Enterprise's booking widget can take ~40s to mount, so `vendors.ts` gives
+  // it `probeTimeoutMs: 120_000`. Nothing asserted that it took effect, and it
+  // did not: the *deadline* honoured the vendor while the background's own kill
+  // timer stayed on the 45s default, so the tab was closed seventy seconds
+  // before the probe's budget expired and `probeTimeoutMs` changed nothing
+  // observable. Replacing `probeTimeoutFor`'s body with the default left all
+  // 546 tests green.
+
+  const enterprisePlan = (): SearchPlan => ({
+    trip: TRIP,
+    candidates: [
+      {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'enterprise',
+        code: '5666666',
+        note: null,
+      },
+    ],
+    concurrency: 1,
+  });
+
+  it('is still alive well past the default deadline', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+
+    // Comfortably past 45s, comfortably short of 120s. A vendor on the default
+    // budget is long dead here.
+    await settle(PROBE_TIMEOUT_MS + 20_000);
+
+    const quote = (await getState())?.quotes[0];
+    expect(quote?.finishedAt, 'killed at the default deadline').toBeUndefined();
+    expect(chromeMock.tabs.size, 'its tab was closed early').toBe(1);
+  });
+
+  it('does time out eventually, at its own deadline', async () => {
+    // The other half: a longer budget is not an unbounded one.
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterprisePlan() });
+    await settle();
+    await settle(130_000);
+
+    expect((await getState())?.quotes[0]?.failure).toBe('probe-timeout');
   });
 });
 

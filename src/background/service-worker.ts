@@ -13,6 +13,7 @@ import type {
   QuoteFailure,
   RunState,
   SearchPlan,
+  VendorId,
 } from '../core/types.js';
 
 /**
@@ -27,6 +28,14 @@ import type {
 const STATE_KEY = 'runState';
 /** Window id of a run in flight, so a restarted worker can close the orphan. */
 const WINDOW_KEY = 'runWindow';
+/**
+ * How long a quote gets, unless its vendor asks for longer.
+ *
+ * Also a politeness setting, not only a correctness one: it bounds how long a
+ * tab sits open on a vendor's site. That is why a vendor needing more asks for
+ * it by name in `vendors.ts` rather than this number being raised for
+ * everybody — Enterprise's 40s hydration should not slow Hertz down.
+ */
 const PROBE_TIMEOUT_MS = 45_000;
 /** Time the background keeps in hand after the probe's own deadline passes. */
 const PROBE_GRACE_MS = 5_000;
@@ -81,11 +90,35 @@ const KEEPALIVE_MS = 20_000;
  * how many codes are in the run. Thirteen times that is ~10 minutes today and
  * shrinks automatically if the deadline does.
  *
+ * **Still derived from the default, not from the longest vendor budget**, and
+ * that was checked rather than assumed. A version of this briefly used the
+ * longest, on the theory that a ceiling shorter than a single quote's own
+ * budget would let a run of slow quotes trip its own inactivity guard. The
+ * arithmetic says otherwise: `13 x (45s + 750ms)` is **9.9 minutes** against
+ * Enterprise's 120s quote — five times over, not short. Using the longest
+ * instead pushed the ceiling to 26 minutes, which is how long a *wedged* run
+ * would pin the worker and hold a minimised window open, for no benefit.
+ *
+ * The property to preserve if a slower vendor is ever added: this must exceed
+ * one lane's longest deadline plus its stagger. At 9.9 minutes there is room
+ * for a vendor budget of about eight minutes before that stops being true.
+ *
  * Tripping it returns the worker to Chrome's ordinary suspension rules, which
  * is what shipped before this keepalive existed — the worst case is the old
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
+/**
+ * This vendor's probe deadline.
+ *
+ * `findVendor` rather than the throwing `getVendor`: a quote whose vendor is
+ * somehow unknown should get the default budget and fail on its own merits, not
+ * take the whole run down from inside a timing calculation.
+ */
+function probeTimeoutFor(vendor: VendorId): number {
+  return findVendor(vendor)?.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+}
+
 interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
@@ -105,6 +138,16 @@ interface ActiveRun {
   windowId: number | null;
   /** In-flight window creation, so concurrent lanes share one window. */
   windowPromise: Promise<number> | null;
+  /**
+   * Quotes whose vendor needs a painted window and whose form has not mounted.
+   *
+   * The window is visible while this is non-empty and minimised the moment it
+   * empties. A set rather than a counter so a duplicate `PROBE_PAINT_DONE` — the
+   * probe re-runs on every document, and a forged one is possible — cannot
+   * decrement past zero and minimise the window out from under another quote
+   * that is still mounting.
+   */
+  awaitingPaint: Set<string>;
   cancelled: boolean;
   /** Resolvers waiting on a quote to finish, keyed by quote id. */
   waiters: Map<string, () => void>;
@@ -228,6 +271,12 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // Whatever happened, this quote is no longer mounting a form. Without it a
+  // quote that fails or times out before its driver ever reports hydration
+  // leaves the window visible for the rest of the run — which is the failure
+  // the user is most likely to see, since a paint-gated vendor that cannot
+  // mount is exactly the case this flag exists for.
+  void setAwaitingPaint(run, quoteId, false);
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
@@ -408,11 +457,13 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
  *
  * No longer blind for avis, whose builder targets
  * /en/reservation/vehicle-availability, so a landing on the root is the same
- * unambiguous tell it is everywhere else. Budget, enterprise and sixt are out
- * of scope entirely — they build no URL and produce no candidate. National is
- * not: it builds one (`confidence: 'driven'`, the page its form lives on) and
- * races, but its driver checks the results page itself, which is a stronger
- * signal than this flag can give.
+ * unambiguous tell it is everywhere else. Budget and sixt are out of scope
+ * entirely — they build no URL and produce no candidate. National and
+ * enterprise are not: both build one (`confidence: 'driven'`, the page the
+ * form lives on) and race, so this flag *can* fire for them if the vendor ever
+ * 302s to its root. Their drivers check the results page themselves, which is
+ * a stronger signal than this flag can give — but "out of scope" would be
+ * wrong, and reading it that way would dismiss a real `suspect` badge.
  *
  * Still blind to a link that reaches a real page which is not the search we
  * asked for. Sixt used to be the live example and is `searchable: false` now;
@@ -528,7 +579,14 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
   const pending = (run.windowPromise ??= (async () => {
     // Minimised keeps a dozen rental-car pages out of the user's face while
     // they load. Brave and Chrome both still render and run scripts in it.
-    const created = await chrome.windows.create({ state: 'minimized', focused: false });
+    //
+    // Except that a minimised window is never *painted*, and one vendor's form
+    // will not mount without a frame — so if a paint-gated quote is already
+    // waiting when the window is created, it starts visible. Never focused
+    // either way: appearing on screen is the cost being paid, stealing the
+    // user's keyboard is not.
+    const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+    const created = await chrome.windows.create({ state, focused: false });
     // windows.create can resolve undefined — @types/chrome 0.2 says so and the
     // older typings did not, so this was a live "cannot read id of undefined"
     // waiting for the one call that failed.
@@ -555,6 +613,48 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
     if (run.windowPromise === pending) run.windowPromise = null;
     throw error;
   }
+}
+
+/**
+ * Put the window into the state the run's paint-gated quotes require.
+ *
+ * Visible while any of them is still mounting, minimised otherwise. Called on
+ * every transition rather than only on the edges, because the alternative is
+ * tracking which edge we last took and the two drift: a quote that fails before
+ * `PROBE_PAINT_DONE` and one that hydrates normally must both end minimised.
+ *
+ * Failures are swallowed. The window may already be gone — the user can close
+ * it, and it is a real window they can see now — and a run whose politeness
+ * nicety could not be applied is not a run worth failing. It is never *closed*
+ * from here; only `closeWindow` does that.
+ */
+async function applyWindowState(run: ActiveRun): Promise<void> {
+  const windowId = run.windowId;
+  if (windowId === null) return;
+  const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+  try {
+    await chrome.windows.update(windowId, { state, focused: false });
+  } catch {
+    // Nothing to do and nothing worth logging: `warn` is for failures that
+    // belong to no quote and cost the user something, and this costs a window
+    // left in the wrong state on a run that is otherwise fine.
+  }
+}
+
+/**
+ * Note that a quote needs the window painted, or no longer does.
+ *
+ * `finishQuote` calls this too, with `false`, and that is the half that makes it
+ * safe: a quote that fails or times out before its driver ever reports
+ * hydration would otherwise hold the window on the user's screen for the rest
+ * of the run.
+ */
+async function setAwaitingPaint(run: ActiveRun, quoteId: string, awaiting: boolean): Promise<void> {
+  const had = run.awaitingPaint.has(quoteId);
+  if (awaiting === had) return;
+  if (awaiting) run.awaitingPaint.add(quoteId);
+  else run.awaitingPaint.delete(quoteId);
+  await applyWindowState(run);
 }
 
 /** Close the run's window, if it still has one, and forget it. */
@@ -623,19 +723,54 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
 
   let tabId: number | undefined;
   try {
+    // Registered *before* the window exists, so `ensureWindow` can create it
+    // visible rather than creating it minimised and raising it a moment later —
+    // the tab starts loading immediately, and a form that has already decided
+    // not to mount is not persuaded by a later repaint.
+    const needsPaint = findVendor(quote.candidate.vendor)?.needsPaintedWindow === true;
+    if (needsPaint) await setAwaitingPaint(run, quote.id, true);
     const windowId = await ensureWindow(run);
+    // Re-applied *after* the window exists, and this is not belt-and-braces.
+    // `setAwaitingPaint` above can only apply a state to a window that is
+    // already there, and `ensureWindow` fixes `state` at the moment it calls
+    // `windows.create` — so a lane that got there a moment earlier creates it
+    // minimised, this quote registers into the gap while that create is still
+    // in flight, and nothing ever raises it. The tab then opens into an
+    // unpainted window and the form never mounts: the production failure this
+    // whole flag exists to fix, reintroduced by the fix for it. Pinned by
+    // "raises a window another lane had already created minimised".
+    if (needsPaint) await applyWindowState(run);
     // Cancel can land while the window is still opening. Without this the run
     // goes on to load vendor pages *after* the user pressed Cancel, which is
     // exactly the hijacking the minimised window exists to avoid.
     if (run.cancelled || quote.finishedAt) return;
-    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: false });
+    // `active` is false for every vendor but the paint-gated one, and that
+    // exception is measured rather than defensive. A *window* being visible is
+    // not enough: a non-selected tab is `visibilityState: hidden` and Chrome
+    // draws no frames for it, so Enterprise's form does not mount in one.
+    // Measured 2026-08-12 in a window known to be painted (its sibling tab was
+    // rendering): 75s as a background tab gave zero `<input>` elements;
+    // selecting that same tab gave all five and `#cid` immediately.
+    //
+    // Selecting a tab inside our own unfocused window does not take the user's
+    // keyboard or raise the window over their work — `focused: false` is
+    // preserved everywhere — but it does mean the vendor's page is on screen
+    // until the driver releases the hold.
+    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: needsPaint });
     tabId = tab.id;
     if (tabId === undefined) throw new Error('tab did not open');
     run.tabs.set(tabId, quote.id);
     // Absolute, so a vendor that bounces through a consent interstitial and
     // re-injects the probe cannot hand it a fresh budget the background will
     // not honour — the tab used to be killed 5s into a "40s" probe deadline.
-    run.deadlines.set(quote.id, Date.now() + PROBE_TIMEOUT_MS - PROBE_GRACE_MS);
+    // Read once and used for *both* the probe's deadline and the kill timer
+    // below. They were allowed to disagree once: the deadline honoured the
+    // vendor's budget while the timer stayed on the default, so an Enterprise
+    // tab was closed at 45s against a 115s deadline — `PROBE_GRACE_MS`
+    // inverted by seventy seconds, and `probeTimeoutMs` with no observable
+    // effect at all. The one number is why that cannot recur.
+    const budget = probeTimeoutFor(quote.candidate.vendor);
+    run.deadlines.set(quote.id, Date.now() + budget - PROBE_GRACE_MS);
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -645,7 +780,7 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
           message: 'the tab never reported back before the deadline',
         });
         resolve();
-      }, PROBE_TIMEOUT_MS);
+      }, budget);
 
       run.waiters.set(quote.id, () => {
         clearTimeout(timer);
@@ -911,6 +1046,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     state,
     tabs: new Map(),
     retiredTabs: new Map(),
+    awaitingPaint: new Set(),
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
@@ -1114,6 +1250,19 @@ chrome.runtime.onMessage.addListener(
         }
         case 'GET_STATE': {
           sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
+          return;
+        }
+        case 'PROBE_PAINT_DONE': {
+          // Only ever un-sets, and only for the quote that owns the sending
+          // tab. So the worst a forged one can do is minimise the window early,
+          // which costs at most the sender's own quote — a page cannot use it
+          // to keep the window on the user's screen, and cannot reach another
+          // quote's. `retiredTabs` is deliberately not consulted: a tab past
+          // its deadline has already been settled, and its entry cleared.
+          const tabId = sender.tab?.id;
+          const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
+          if (active && quoteId !== undefined) await setAwaitingPaint(active, quoteId, false);
+          sendResponse({ ok: true });
           return;
         }
         case 'PROBE_READY': {

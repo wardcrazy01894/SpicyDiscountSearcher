@@ -1079,12 +1079,13 @@ describe('the popup half of the double-run guard', () => {
       ),
     );
     expect(listed.size).toBeGreaterThan(0);
-    // Labels now, not raw ids — and National belongs here: it is searchable via
-    // its driver, so a saved selection naming it survives. Budget and
-    // Enterprise are what must not, which is the invariant this test is for.
-    // Sixt joins Budget and Enterprise here: its deep link reaches no search,
-    // so a saved selection naming it must not survive either.
-    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National']);
+    // Labels now, not raw ids. National and Enterprise both belong here: each
+    // is searchable via its driver, so a saved selection naming either
+    // survives. **Budget and Sixt are what must not** — Budget's form is
+    // undriven and Sixt has nowhere to put a code — and that is the invariant
+    // this test exists for. Enterprise moved from the second group to the first
+    // on 2026-08-12 when its calendar was measured and driven.
+    expect([...listed].sort()).toEqual(['Avis', 'Enterprise', 'Hertz', 'National']);
   });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {

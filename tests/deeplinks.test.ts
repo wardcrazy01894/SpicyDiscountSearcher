@@ -196,11 +196,25 @@ describe('buildDeepLink', () => {
     // page whose "from $19/day" is read as a real price and, being cheapest,
     // wins. link-build is visible; that is not.
     //
-    // Belt and braces: they are `searchable: false` too, so nothing routes a
-    // plan here in the first place. This pins the inner guard on its own.
-    for (const vendor of ['budget', 'enterprise'] as const) {
-      expect(() => buildDeepLink(vendor, 'X1', CAR), vendor).toThrow(/session state/);
-    }
+    // Belt and braces: it is `searchable: false` too, so nothing routes a plan
+    // here in the first place. This pins the inner guard on its own.
+    //
+    // Budget alone now. Enterprise left on 2026-08-12 — its search still is not
+    // in the URL, but it no longer needs to be, because its form is driven.
+    expect(() => buildDeepLink('budget', 'X1', CAR)).toThrow(/session state/);
+  });
+
+  it('opens the reservation page for Enterprise, which its driver fills in', () => {
+    // `driven`, not `verified`: the URL carries no itinerary and no code, so it
+    // is not on the reverse-engineering scale at all. Same treatment National
+    // has had since it got a driver.
+    const { url, confidence } = buildDeepLink('enterprise', 'X1', CAR);
+    expect(confidence).toBe('driven');
+    expect(url).toBe('https://www.enterprise.com/en/reserve.html');
+    expect(url).not.toContain('?');
+    // That the builder and the driver agree is pinned in
+    // `tests/drivers.enterprise.test.ts`, where National's equivalent lives —
+    // this file does not import the drivers.
   });
 
   it('refuses for sixt, naming the code rather than the URL as the obstacle', () => {
@@ -215,7 +229,7 @@ describe('buildDeepLink', () => {
     // reading this one knows the obstacle is a business-account login and stops.
     expect(() => buildDeepLink('sixt', 'X1', CAR)).toThrow(/corporate code/);
 
-    // Still not "session state", which is budget and enterprise's reason and
+    // Still not "session state", which is Budget's reason and
     // would be the wrong diagnosis here — Sixt's query string expresses a
     // search perfectly well.
     expect(() => buildDeepLink('sixt', 'X1', CAR)).not.toThrow(/session state/);
@@ -256,7 +270,7 @@ describe('buildDeepLink', () => {
     // plan either. Pinned by count so a vendor silently dropping out of the
     // registry fails here rather than shrinking the loop unnoticed.
     const built = searchableVendors();
-    expect(built.filter((v) => v.category === 'car')).toHaveLength(3);
+    expect(built.filter((v) => v.category === 'car')).toHaveLength(4);
     for (const vendor of built) {
       const trip = vendor.category === 'car' ? CAR : HOTEL;
       const { url, confidence } = buildDeepLink(vendor.id, 'TESTCODE', trip);
