@@ -243,8 +243,21 @@ describe('the pre-PR gate', () => {
       // The collateral damage of guarding before matching: with the jq check
       // ahead of the filter, a machine without jq refused *every* Bash call and
       // the repo became unusable rather than merely un-PR-able.
+      //
+      // The last three carry the letters "gh" inside ordinary words. A bare
+      // `*gh*` prefilter refused all of them with a message about a PR, which
+      // is the same nonsense diagnosis this gate was rewritten to stop giving.
       const repo = fakeRepo('exit 0');
-      expect(parseDecision(run(bash('git status', repo), { PATH: pathWithoutJq() }))).toBe('allow');
+      for (const command of [
+        'git status',
+        'npm run lighthouse',
+        'cat notes/highlights.md',
+        'grep -rn TODO through/the/tree',
+      ]) {
+        expect(parseDecision(run(bash(command, repo), { PATH: pathWithoutJq() })), command).toBe(
+          'allow',
+        );
+      }
     });
   });
 
@@ -330,6 +343,24 @@ describe('the pre-PR gate', () => {
       const stdout = run(bash('gh pr create', repo));
       expect(parseDecision(stdout)).toBe('deny');
       expect(stdout).toContain('network');
+    });
+
+    it('sees a match even when the tail is big enough to fill a pipe', () => {
+      // The reason the classifier reads from a variable rather than piping into
+      // `grep -q`. With `pipefail`, grep exits on its first match, `tail` then
+      // takes SIGPIPE, and the pipeline inherits *that* status — so the check
+      // was false exactly when it matched. It only shows up once the tail fills
+      // the pipe buffer, which is why a one-line fixture missed it entirely and
+      // the buggy form passed the test written for it.
+      const repo = fakeRepo(
+        // The match must land on the FIRST of the last fifteen lines, so grep
+        // exits with fourteen big lines still unwritten behind it.
+        'echo "npm error audit endpoint returned an error"; ' +
+          'for i in $(seq 14); do printf "%020000d\\n" 0; done; exit 1',
+      );
+      const stdout = run(bash('gh pr create', repo));
+      expect(parseDecision(stdout)).toBe('deny');
+      expect(stdout).toContain('looks like the network');
     });
 
     it('does not cry network over a test that merely mentions one', () => {

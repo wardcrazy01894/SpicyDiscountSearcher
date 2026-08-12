@@ -87,8 +87,15 @@ payload=$(cat)
 # reach the precise check below. It is not a proof, only a cheap skip — a
 # command JSON-escaped as `\u0067h` would slip past it, which `JSON.stringify`
 # never emits but which nothing here enforces.
+#
+# Note it is `gh` followed by `pr` or `api`, not a bare `gh`. A bare one
+# refused anything carrying the digraph — `highlights`, `through`,
+# `npm run lighthouse` — which on a machine without jq is a nonsense refusal
+# about a PR, for a command that has nothing to do with one. This keeps every
+# shape the precise check below can match while dropping ordinary prose.
 case "$payload" in
-*gh*) ;;
+*gh*pr*) ;;
+*gh*api*) ;;
 *) allow ;;
 esac
 
