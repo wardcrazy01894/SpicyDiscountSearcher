@@ -115,18 +115,6 @@ export async function readRejected(storage: RejectionStore): Promise<RejectedCod
 }
 
 /**
- * The stored list, treating an unreadable store as an empty one.
- *
- * For readers: storage being unavailable costs a wasted tab, not correctness —
- * the run simply re-asks, and never worth failing a race over. Writers must use
- * `readRejected` instead and skip the write, or they overwrite what they could
- * not read.
- */
-export async function loadRejected(storage: RejectionStore): Promise<RejectedCode[]> {
-  return (await readRejected(storage)) ?? [];
-}
-
-/**
  * Every write, in order.
  *
  * `recordRejected` is read-modify-write, and `chrome.storage` gives it no

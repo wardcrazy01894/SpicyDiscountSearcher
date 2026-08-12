@@ -677,32 +677,44 @@ describe('the popup half of the double-run guard', () => {
     expect(reported).toBe(hiltonCompanies + 1 - 60);
   });
 
-  it('keeps saying a clear failed when the recheck finds it still has', async () => {
-    // `reloadRejected` sets `ui.clearFailed = false` unconditionally, on the
-    // stated understanding that its caller sets it again from what it read.
-    // `recheckClear` was the one caller that did not — so six seconds after
-    // correctly reporting a failure it read the same unchanged list and erased
-    // the message, and a user who looked away saw no sign the button had done
-    // nothing. The opposite of what the recheck is for.
-    vi.useFakeTimers();
-    try {
-      savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
-      installChrome();
-      sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
-      await import('../src/popup/popup.js');
-      await vi.advanceTimersByTimeAsync(50);
+  it('leaves a true failed-clear warning standing while a second clear runs', async () => {
+    // Named and timed for `recheckClear` until this branch deleted it, at which
+    // point "past the recheck" advanced past nothing and all it asserted was
+    // that a rendered message is not spontaneously erased — coverage it
+    // advertised and no longer had.
+    //
+    // What it pins now is the real hazard in that shape: pressing the button a
+    // second time suppresses the verdict while the new clear is out, and
+    // suppressing used to mean *overwriting* — so any unrelated read landing in
+    // that window wiped a warning that was still true, and it only came back
+    // when the second clear's own read did, up to the worker's ceiling later.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = () => Promise.reject(new Error('worker is gone'));
+    await boot();
 
-      document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
-      await vi.advanceTimersByTimeAsync(500);
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
       expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    });
 
-      // Past the recheck. The clear still has not happened, so the message must
-      // still be there.
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
-    } finally {
-      vi.useRealTimers();
+    // A second press, answered by nothing, and a finished run landing inside it.
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) =>
+      message.type === 'CLEAR_REJECTED'
+        ? new Promise((resolve) => {
+            answer = () => resolve({ type: 'RUN_STATE', state: null });
+          })
+        : fakeBackground(message);
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
     }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The earlier failure is still true and still on screen.
+    expect(document.querySelector('#rejected-note')?.textContent).toMatch(/not been cleared yet/);
+    answer?.();
   });
 
   it('retires the unreachable-background state on a clear the worker answered', async () => {
@@ -951,6 +963,48 @@ describe('the popup half of the double-run guard', () => {
     await vi.waitFor(() => expect(run().disabled).toBe(false));
   });
 
+  it('applies a successful read even when a newer one fails', async () => {
+    // The other ordering. Comparing against the *issue* counter meant a result
+    // could be discarded in favour of a read that then failed, so nothing was
+    // ever applied: boot's read succeeds slowly, a broadcast issues a newer
+    // ticket, boot's result is thrown away as superseded, the newer read fails —
+    // and `ui.rejected` stays empty for the session, so the chips are inflated
+    // and the next Run re-races every refused code.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    const chromeStub = (
+      globalThis as {
+        chrome: { storage: { local: { get: () => Promise<Record<string, unknown>> } } };
+      }
+    ).chrome;
+    const real = chromeStub.storage.local.get;
+    let call = 0;
+    chromeStub.storage.local.get = () => {
+      call += 1;
+      // 1 is boot's refusal read: slow, and succeeds. 2 is the broadcast's,
+      // issued while that one is still out, and fails. Everything after — the
+      // saved-form read `main` does next — must work, or boot never finishes and
+      // the test measures a dead popup rather than the ordering.
+      if (call === 1) {
+        return new Promise((resolve) => setTimeout(() => void real().then(resolve), 150));
+      }
+      if (call === 2) return Promise.reject(new Error('no storage'));
+      return real();
+    };
+
+    const started = import('../src/popup/popup.js');
+    await vi.waitFor(() => expect(broadcastListeners.length).toBeGreaterThan(0));
+    // A newer read is issued while boot's is still out, and it will fail.
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    await started;
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-count')?.textContent).toMatch(/1 code has/);
+    });
+  });
+
   it('lets a slower successful read land after a failed one', async () => {
     // `reloadRejected` takes its supersede ticket before the read and kept it on
     // failure — so an unreadable read still discarded a slower read that had
@@ -1142,6 +1196,35 @@ describe('the popup half of the double-run guard', () => {
     await boot();
 
     expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
+      /not been cleared yet/,
+    );
+  });
+
+  it('still re-reads the list when rendering the reply throws', async () => {
+    // `applyReply` ran before the storage re-read, so a throw skipped the read
+    // entirely — and the outer `.catch` then reported the clear failed while
+    // `ui.rejected` kept the *pre-clear* list for the rest of the session: chips
+    // showing the reduced counts, the plan still skipping codes the store no
+    // longer refuses.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        // The clear really happens; only the run-state render is broken.
+        return fakeBackground(message).then(() => ({
+          type: 'RUN_STATE',
+          state: { plan: null, quotes: null },
+        }));
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-note')?.hasAttribute('hidden')).toBe(true);
+    });
     expect(document.querySelector('#rejected-note')?.textContent).not.toMatch(
       /not been cleared yet/,
     );

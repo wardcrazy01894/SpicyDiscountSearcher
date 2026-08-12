@@ -1051,7 +1051,6 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       // In a finally so that a lane throwing cannot skip teardown and strand
       // the run with its window open and the popup showing "Racing codes…".
       if (active === run) {
-        run.state.finishedAt = Date.now();
         try {
           await closeWindow(run);
           // Before the broadcast, because the broadcast is what tells the popup
@@ -1063,6 +1062,14 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
           // the same under-counting the `links` argument exists for, which only
           // the CLEAR_REJECTED path was using.
           await settleWrites(run.pendingWrites, 'a run announcement', pendingWrites());
+          // Stamped *after* the wait, not before it. `currentState()` returns
+          // `active.state`, so a run marked finished while the broadcast is
+          // still held back was reported finished to GET_STATE and
+          // CLEAR_REJECTED too — a popup opened in that window read refusals
+          // written before the writes landed, got a finished state, and re-armed
+          // Run. That is the re-race this wait exists to prevent, arriving
+          // through the direct reply instead of the broadcast.
+          run.state.finishedAt = Date.now();
           await publish();
         } finally {
           // Last, after the closes and the final publish, so teardown itself is

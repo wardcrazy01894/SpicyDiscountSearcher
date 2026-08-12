@@ -663,6 +663,9 @@ let rejectedRead = 0;
  * derived from this on every read rather than set by whichever caller happens
  * to notice.
  */
+/** The newest read whose result was actually stored — see `reloadRejected`. */
+let appliedRead = 0;
+
 let clearAttempt: { keys: ReadonlySet<string>; at: number } | null = null;
 
 /**
@@ -706,15 +709,18 @@ async function reloadRejected(): Promise<Reload> {
   // nothing to explain them, which is the outcome `rejected-codes.ts` calls
   // unacceptable for a clear.
   const entries = await readRejected(chrome.storage.local);
-  if (mine !== rejectedRead) return { ok: false, reason: 'superseded' };
-  if (entries === null) {
-    // Hand the ticket back. A read that failed has nothing to supersede anyone
-    // *with*, and holding the latest ticket made it discard a slower read that
-    // had actually succeeded — leaving `ui.rejected` stale with nothing left to
-    // correct it until the popup is reopened.
-    rejectedRead -= 1;
-    return { ok: false, reason: 'unreadable' };
-  }
+  if (entries === null) return { ok: false, reason: 'unreadable' };
+  // Against what was last *applied*, not what was last issued. Comparing to the
+  // issue counter meant a read could be discarded in favour of one that then
+  // failed, and nothing was ever applied: boot's read succeeds slowly, a
+  // finished-run broadcast issues a newer ticket, boot's result is thrown away
+  // as superseded, the newer read fails — and `ui.rejected` stays empty for the
+  // session, so the chips are inflated and the next Run re-races every refused
+  // code. Handing the ticket back on failure fixed only the ordering where the
+  // failure resolved first; applying monotonically fixes both, because a result
+  // is only ever discarded in favour of one that actually landed.
+  if (mine <= appliedRead) return { ok: false, reason: 'superseded' };
+  appliedRead = mine;
   ui.rejected = entries;
   // Judged here rather than by each caller, which is the third attempt at this
   // flag and the first that cannot drift. Setting it `false` here and relying
@@ -723,8 +729,12 @@ async function reloadRejected(): Promise<Reload> {
   // of the RUN_STATE listener — each time erasing a warning while every code it
   // named was still refused. As a function of (what the user asked to clear,
   // what is stored now) there is nothing left for a caller to forget.
-  // No verdict while the clear is still out: see `clearInFlight`.
-  const attempted = clearInFlight ? null : clearAttempt;
+  // No verdict while the clear is still out: see `clearInFlight`. Withheld,
+  // not overwritten — forcing it false erased a *still-true* warning from an
+  // earlier failed clear the moment any unrelated read ran, and it only came
+  // back when the new clear's own read landed, up to the worker's ceiling
+  // later.
+  const attempted = clearAttempt;
   // `at`, not just the key. A refusal recorded *after* the clear is a new
   // answer from the vendor, not a survivor of it — and re-asking is the whole
   // point of the button, so this is an ordinary outcome rather than a corner.
@@ -732,19 +742,21 @@ async function reloadRejected(): Promise<Reload> {
   // the same code back and the popup called a clear that demonstrably worked a
   // failure, permanently: the 31s recheck reads the same list and leaves the
   // flag exactly where it was.
-  ui.clearFailed =
-    attempted !== null &&
-    entries.some(
-      (entry) =>
-        attempted.keys.has(rejectionKey(entry.vendor, entry.code)) && entry.at <= attempted.at,
-    );
+  if (!clearInFlight) {
+    ui.clearFailed =
+      attempted !== null &&
+      entries.some(
+        (entry) =>
+          attempted.keys.has(rejectionKey(entry.vendor, entry.code)) && entry.at <= attempted.at,
+      );
+  }
   // Retired the moment a read finds none of them, or the derivation outlives the
   // question it answers: re-asking a vendor is the whole point of the button,
   // and a vendor refusing the same code again is the *expected* outcome. Kept,
   // the next finished run would see that key back in the list and print "those
   // codes have not been cleared yet" about a clear that demonstrably worked and
   // a refusal that postdates it.
-  if (attempted !== null && !ui.clearFailed) clearAttempt = null;
+  if (!clearInFlight && attempted !== null && !ui.clearFailed) clearAttempt = null;
   return { ok: true, entries };
 }
 
@@ -1667,7 +1679,20 @@ rejectedClear.addEventListener('click', () => {
       // non-delivery, which is exactly why that message and the disabled button
       // are supposed to stay until the popup is reopened. Leaving them alone
       // here is the pre-existing behaviour, and it was right.
-      if (reply && !ui.pendingStart) applyReply(reply);
+      if (reply && !ui.pendingStart) {
+        try {
+          applyReply(reply);
+        } catch {
+          // Isolated, because a throw here used to skip the storage re-read
+          // below entirely — and the outer `.catch` then reported the clear
+          // failed while `ui.rejected` kept the *pre-clear* list for the rest
+          // of the session: chips showing the reduced counts, the plan still
+          // skipping codes the store no longer refuses. `renderRun` is the
+          // named thrower (it walks a `chrome.storage.session` state an older
+          // build may have written), and drawing the run is not what this click
+          // was about. The next broadcast or GET_STATE redraws it.
+        }
+      }
       // Cleared before this read, not in `finish()`: the suppression is there
       // to stop *other* readers judging a clear that has not been answered yet,
       // and this is the read that is entitled to judge it.

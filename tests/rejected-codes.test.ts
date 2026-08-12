@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   clearRejected,
-  loadRejected,
+  readRejected,
   recordRejected,
   rejectionKey,
   rejectionSet,
@@ -63,7 +63,7 @@ describe('recordRejected', () => {
   it('remembers a refusal so the code is not raced again', async () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1_000);
-    const entries = await loadRejected(store);
+    const entries = (await readRejected(store))!;
     expect(entries).toEqual([{ vendor: 'national', code: 'XZ15J55', at: 1_000 }]);
     expect(rejectionSet(entries).has(rejectionKey('national', 'XZ15J55'))).toBe(true);
   });
@@ -72,7 +72,7 @@ describe('recordRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1_000);
     await recordRejected(store, 'national', 'XZ15J55', 9_000);
-    const entries = await loadRejected(store);
+    const entries = (await readRejected(store))!;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.at).toBe(1_000);
   });
@@ -100,7 +100,7 @@ describe('recordRejected', () => {
     held.open();
     await both;
 
-    const codes = (await loadRejected(store)).map((entry) => entry.code);
+    const codes = (await readRejected(store))!.map((entry) => entry.code);
     expect(codes.sort()).toEqual(['XZ15J55', 'XZ45B65']);
   });
 
@@ -118,7 +118,7 @@ describe('recordRejected', () => {
     held.open();
     await Promise.all([recording, clearing]);
 
-    expect(await loadRejected(store)).toEqual([]);
+    expect(await readRejected(store)).toEqual([]);
   });
 
   it('moves on from a write that never settles', async () => {
@@ -141,7 +141,7 @@ describe('recordRejected', () => {
       await Promise.all([stuck, after]);
 
       // The clear behind it ran, which is the whole point.
-      expect(await loadRejected(store)).toEqual([]);
+      expect(await readRejected(store)).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -177,7 +177,7 @@ describe('recordRejected', () => {
       // The record is abandoned mid-read; the clear runs and empties the store.
       await vi.advanceTimersByTimeAsync(6_000);
       await clearing;
-      expect(await loadRejected(store)).toEqual([]);
+      expect(await readRejected(store)).toEqual([]);
 
       // Now the abandoned read finally returns, holding the pre-clear list.
       releaseRead?.();
@@ -186,7 +186,7 @@ describe('recordRejected', () => {
 
       // Still empty. Losing that refusal is the accepted cost; putting `OLD`
       // back after the user cleared it is not.
-      expect(await loadRejected(store)).toEqual([]);
+      expect(await readRejected(store)).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -219,7 +219,7 @@ describe('recordRejected', () => {
       // A is abandoned mid-read; B runs and lands.
       await vi.advanceTimersByTimeAsync(6_000);
       await second;
-      expect((await loadRejected(store)).map((e) => e.code)).toEqual(['B']);
+      expect((await readRejected(store))!.map((e) => e.code)).toEqual(['B']);
 
       // A's read finally returns, holding the list from before B.
       releaseRead?.();
@@ -228,7 +228,7 @@ describe('recordRejected', () => {
 
       // B survives. Losing A is the accepted cost of the timeout; losing B —
       // a refusal that was recorded successfully — is not.
-      expect((await loadRejected(store)).map((e) => e.code)).toEqual(['B']);
+      expect((await readRejected(store))!.map((e) => e.code)).toEqual(['B']);
     } finally {
       vi.useRealTimers();
     }
@@ -248,7 +248,7 @@ describe('recordRejected', () => {
     // write replacing everything with one entry.
     const unreadable = { ...store, get: () => Promise.reject(new Error('no storage')) };
     expect(await recordRejected(unreadable, 'national', 'C', 4)).toBe('unreadable');
-    expect((await loadRejected(store)).map((e) => e.code)).toEqual(['A']);
+    expect((await readRejected(store))!.map((e) => e.code)).toEqual(['A']);
 
     vi.useFakeTimers();
     try {
@@ -276,20 +276,20 @@ describe('recordRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1);
     await recordRejected(store, 'enterprise', 'XZ15J55', 1);
-    expect(await loadRejected(store)).toHaveLength(2);
+    expect(await readRejected(store)).toHaveLength(2);
   });
 });
 
-describe('loadRejected', () => {
+describe('readRejected', () => {
   it('is empty when nothing has been refused', async () => {
-    expect(await loadRejected(fakeStore())).toEqual([]);
+    expect(await readRejected(fakeStore())).toEqual([]);
   });
 
   it('survives whatever an older build left behind', async () => {
     // Persisted state outlives the code that wrote it, and a throw here would
     // take the popup's whole startup with it.
     const store = fakeStore({ rejectedCodes: 'not an array' });
-    expect(await loadRejected(store)).toEqual([]);
+    expect(await readRejected(store)).toEqual([]);
   });
 
   it('drops malformed entries rather than trusting the shape', async () => {
@@ -309,16 +309,18 @@ describe('loadRejected', () => {
         { vendor: 'national', code: 'BADSTAMP', at: 'yesterday' },
       ],
     });
-    expect(await loadRejected(store)).toEqual([{ vendor: 'national', code: 'GOOD', at: 1 }]);
+    expect(await readRejected(store)).toEqual([{ vendor: 'national', code: 'GOOD', at: 1 }]);
   });
 
-  it('returns empty rather than throwing when storage is unavailable', async () => {
-    // Costs a wasted tab, not correctness — the run simply re-asks the vendor.
+  it('says null rather than empty when storage is unavailable', async () => {
+    // The distinction the store is built on. Collapsed to `[]`, one failed read
+    // let `recordRejected` write a single-entry list over everything the vendors
+    // had already refused, and let the popup report a failed clear as a success.
     const broken = {
       get: () => Promise.reject(new Error('no storage')),
       set: () => Promise.resolve(),
     };
-    expect(await loadRejected(broken)).toEqual([]);
+    expect(await readRejected(broken)).toBeNull();
   });
 });
 
@@ -329,6 +331,6 @@ describe('clearRejected', () => {
     const store = fakeStore();
     await recordRejected(store, 'national', 'XZ15J55', 1);
     await clearRejected(store);
-    expect(await loadRejected(store)).toEqual([]);
+    expect(await readRejected(store)).toEqual([]);
   });
 });

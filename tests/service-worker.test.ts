@@ -436,6 +436,48 @@ describe('surviving MV3 suspension', () => {
     expect(atFinish[0]).toHaveLength(2);
   });
 
+  it('does not report the run finished while it is still holding the broadcast', async () => {
+    // `currentState()` returns `active.state`, so stamping `finishedAt` before
+    // the write wait reported the run finished to GET_STATE and CLEAR_REJECTED
+    // while the broadcast was still held back. A popup opened in that window
+    // read refusals written before the writes landed, got a finished state, and
+    // re-armed Run — the re-race this wait exists to prevent, arriving through
+    // the direct reply instead of the broadcast.
+    chromeMock = installChromeMock();
+    // Under the per-link bound, deliberately. At 8s a write outlives it, the
+    // link is abandoned, and the *next* one reads a store the first has not
+    // written yet — the clobber ordering the module documents as knowingly
+    // open. That is a different bug, and constructing it here left the run with
+    // one refusal instead of two and this test measuring nothing it claims to.
+    chromeMock.delayLocalWrites(3_000);
+    vi.resetModules();
+    await import('../src/background/service-worker.js');
+    await vi.advanceTimersByTimeAsync(0);
+
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+    await settle();
+    for (let i = 0; i < 2; i += 1) {
+      const tabId = [...chromeMock.tabs.keys()][0];
+      if (tabId === undefined) break;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      await settle(1_000);
+    }
+
+    // Inside the wait: the tabs are gone, but the run is not finished yet.
+    await settle(1_000);
+    expect((await getState())?.finishedAt).toBeUndefined();
+
+    // After it: finished, with the writes landed.
+    await settle(60_000);
+    expect((await getState())?.finishedAt).toBeTypeOf('number');
+    expect(chromeMock.local.get('rejectedCodes')).toHaveLength(2);
+  });
+
   it('gives up on a storage write rather than leaving the run unannounced', async () => {
     // Teardown waits for a settling quote's refusal write so the finished
     // broadcast cannot outrun it. Waiting *unboundedly* buys a worse failure
