@@ -203,12 +203,17 @@ function unsearchable(
   // prefix, because the vendors do not share one and the difference decides
   // what would fix each. Budget and enterprise keep the search in session
   // state, so no query string can express it and no builder for them can ever
-  // work. Sixt's URL simply reaches the wrong page — one path measured once,
-  // and another may work.
+  // work. Sixt's URL searches perfectly well and has nowhere to put the code.
   //
   // A fixed "cannot be searched by URL" prefix made that distinction
-  // unsayable: it asserted the impossibility for Sixt in the one string a user
-  // actually sees, the `link-build` tooltip.
+  // unsayable, and it would now be flatly wrong for Sixt rather than merely
+  // unprovable — in the one string a user actually sees, the `link-build`
+  // tooltip. (This comment said "Sixt's URL simply reaches the wrong page —
+  // one path measured once, and another may work" until 2026-08-12, when
+  // another path was measured and the vendor closed on the code instead.)
+  //
+  // `vendor` is prepended, so a reason must read as its continuation and must
+  // not name the vendor again.
   return () => {
     throw new Error(`${vendor} ${because}`);
   };
@@ -472,7 +477,7 @@ const BUILDERS: Record<VendorId, Builder> = {
     // `link-build` tooltip, so it names the actual obstacle: someone reading it
     // should not go hunting for a better URL, which is what the previous
     // wording sent one person off to do.
-    'has no field for a corporate code — its search URL works, but Sixt appears to apply corporate rates only through a business account login',
+    'has no field for a corporate code — its search URL works, but corporate rates there appear to need a business account login',
   ),
 
   hilton: (code, trip) => {
