@@ -1,13 +1,15 @@
-import { airportCode } from '../deeplinks.js';
+import { airportCode, clock12, isoParts } from '../deeplinks.js';
 import {
   DriverError,
   type DriveContext,
   type FormDriver,
   hasToken,
+  POLL_MS,
   setNativeValue,
   textOf,
   textOutside,
   waitFor,
+  waitWithRetry,
 } from '../form-driver.js';
 import type { CarTrip } from '../types.js';
 
@@ -48,14 +50,34 @@ import type { CarTrip } from '../types.js';
  *
  * ## Why this is not registered in `FORM_DRIVERS` yet
  *
- * `applyDates` is not implemented, because the date control was never
- * exercised — both live runs used the form's own defaults. Everything else here
- * is measured, but a driver that silently accepted default dates would race a
- * code against a trip the user did not ask for and report the price as theirs,
- * which is the precise failure this codebase is organised around refusing.
+ * **The date control is driven now** — that sentence used to be the whole
+ * reason, and on 2026-08-12 it was measured and implemented. `applyDates`
+ * carries what the calendar turned out to be, `applyTimes` the dropdowns
+ * beside it. Every step here is now filled *and verified against what the form
+ * renders back*.
  *
- * So the driver exists, is tested, and **always fails at the date step today**.
- * Finishing it is one function plus the verification described on it.
+ * Three things still stand between that and `searchable: true`, and none of
+ * them is code in this file:
+ *
+ * 1. **The probe budget.** The widget took ~40s to mount on the load that
+ *    worked, against a `PROBE_TIMEOUT_MS` of 45s of which `DRIVE_SHARE` leaves
+ *    the driver ~27s. It does not fit. A per-vendor timeout is the shape of the
+ *    fix — the background already sets a deadline per quote — but
+ *    `KEEPALIVE_CEILING_MS` derives from that constant, so it lands with the
+ *    flag rather than before it.
+ * 2. **A bot check.** The form carries a hidden `g-recaptcha-response` field
+ *    and its reCAPTCHA loader came back empty on the load that never mounted.
+ *    Whether that was Enterprise throttling or a blocker in the measuring
+ *    profile is *not established* — the analytics and consent scripts were
+ *    empty too, and those are ordinary blocker targets. Either way, minimised
+ *    automated tabs are what bot checks exist to catch, and Budget is already
+ *    stopped for exactly this.
+ * 3. **One clean live run.** Nothing here has been driven end to end in a probe
+ *    tab. The unit tests exercise every branch against jsdom, which is not the
+ *    same claim.
+ *
+ * So the driver is complete and unreachable, which is a different state from
+ * the one this paragraph used to describe: it no longer refuses on purpose.
  */
 
 /** Where the form lives. Carries no itinerary — that is the whole point. */
@@ -184,43 +206,339 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   });
 }
 
+/** The pick-up date toggle. Stable id, unlike the time selects below it. */
+const PICKUP_TOGGLE = '#pickupCalendarFocusable';
+/** The return date toggle. Enterprise calls it "dropoff" here and "Return" on screen. */
+const RETURN_TOGGLE = '#dropoffCalendarFocusable';
+/** One day in the open calendar. Carries `data-test-id="MM/DD/YYYY"`. */
+const DAY = 'button.rs-calendar__day';
+/** The month-paging arrows. Two of each — one per displayed month. */
+const ARROW = 'button.calendar-control-arrow';
+/** "August 2026", above each displayed month. */
+const MONTH_HEADER = '.calendar-control-header';
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * Two years of paging before giving up.
+ *
+ * Past any rental anybody books, and far short of clicking forever if the
+ * control stops advancing. Same bound and same reasoning as National's.
+ */
+const MAX_MONTH_STEPS = 24;
+
+/**
+ * Enterprise's own name for a day: `08/13/2026` from `2026-08-13`.
+ *
+ * Exported for the tests, which pin the conversion rather than the calendar —
+ * a US-format date built from ISO parts is exactly the kind of thing that
+ * silently transposes month and day.
+ */
+export function calendarId(iso: string): string {
+  const { year, month, day } = isoParts(iso);
+  return `${month}/${day}/${year}`;
+}
+
+/** "August 2026" as a sortable number, or null if unreadable. */
+function monthKey(label: string): number | null {
+  const match = /^([A-Za-z]+)\s+(\d{4})$/.exec(label.replace(/\s+/g, ' ').trim());
+  if (!match) return null;
+  const index = MONTH_NAMES.indexOf(match[1] ?? '');
+  if (index < 0) return null;
+  return Number(match[2]) * 12 + index;
+}
+
+/** The month a `MM/DD/YYYY` id falls in, on the same scale as `monthKey`. */
+function monthOf(id: string): number {
+  const [month, , year] = id.split('/');
+  return Number(year) * 12 + (Number(month) - 1);
+}
+
+/** The months on screen right now. */
+function shownMonths(ctx: DriveContext): number[] {
+  return [...ctx.doc.querySelectorAll<HTMLElement>(MONTH_HEADER)]
+    .map((el) => monthKey(textOf(el)))
+    .filter((key): key is number => key !== null);
+}
+
+/**
+ * The clickable cell for a date, if one is on screen.
+ *
+ * **Filters out disabled duplicates, and that is the whole point of this
+ * function.** The two month grids overlap: September 1st appears both as a
+ * greyed spillover cell at the foot of August and as a real cell in September,
+ * so `querySelector` alone returns *two* matches and the first is the dead one.
+ * Taking it would report a perfectly bookable date as one Enterprise refuses.
+ *
+ * A date that is present but disabled everywhere is a different answer from one
+ * that is not on screen at all — the first is a refusal, the second means page
+ * the calendar — so the caller distinguishes them rather than this returning
+ * null for both.
+ */
+function dayCell(ctx: DriveContext, id: string): HTMLButtonElement | null {
+  const cells = [...ctx.doc.querySelectorAll<HTMLButtonElement>(`${DAY}[data-test-id="${id}"]`)];
+  return cells.find((cell) => !cell.disabled) ?? null;
+}
+
+/** Whether the date is on screen at all, enabled or not. */
+function dayPresent(ctx: DriveContext, id: string): boolean {
+  return ctx.doc.querySelector(`${DAY}[data-test-id="${id}"]`) !== null;
+}
+
+/**
+ * A usable paging arrow, or null.
+ *
+ * **Disabled is spelled `invisible` here, not `disabled`.** At the current
+ * month "Previous" is rendered as `arrow-left invisible` with its `disabled`
+ * property still false, so a `.disabled` test reads an unusable control as
+ * usable and pages against a wall until the budget is gone. Measured on the
+ * live form.
+ */
+function arrow(ctx: DriveContext, want: 'Next' | 'Previous'): HTMLButtonElement | null {
+  return (
+    [...ctx.doc.querySelectorAll<HTMLButtonElement>(ARROW)].find(
+      (el) =>
+        new RegExp(want, 'i').test(el.getAttribute('aria-label') ?? '') &&
+        !el.classList.contains('invisible') &&
+        !el.disabled,
+    ) ?? null
+  );
+}
+
+/** Open a calendar, re-clicking if the first click landed while it was settling. */
+async function openCalendar(ctx: DriveContext, toggle: string, which: string): Promise<void> {
+  const button = ctx.doc.querySelector<HTMLElement>(toggle);
+  if (!button) throw new DriverError('form-fill', `no ${which} date control on the form`);
+  if (!ctx.doc.querySelector(DAY)) button.click();
+  // Only re-clicked while closed: this toggle closes the calendar when clicked
+  // a second time, so an unconditional retry would shut what it just opened.
+  await waitWithRetry(
+    ctx,
+    `the ${which} calendar to open`,
+    () => ctx.doc.querySelector(DAY),
+    () => {
+      if (!ctx.doc.querySelector(DAY)) button.click();
+    },
+  );
+}
+
+/** Page the calendar to a date's month and click it. */
+async function clickDay(ctx: DriveContext, id: string, which: string): Promise<void> {
+  const want = monthOf(id);
+
+  for (let step = 0; step <= MAX_MONTH_STEPS; step += 1) {
+    const cell = dayCell(ctx, id);
+    if (cell) {
+      cell.click();
+      return;
+    }
+    if (dayPresent(ctx, id)) {
+      // On screen and dead in every grid: the vendor's answer, not a paging
+      // problem. Enterprise disables dates in the past and beyond its booking
+      // horizon, and no amount of paging changes either.
+      throw new DriverError('form-fill', `enterprise will not accept the ${which} date ${id}`);
+    }
+
+    const shown = shownMonths(ctx);
+    if (shown.length > 0) {
+      const direction =
+        want > Math.max(...shown) ? 'Next' : want < Math.min(...shown) ? 'Previous' : null;
+      // Neither past nor before what is displayed, yet no cell exists — the
+      // grid is still redrawing. Fall through to the sleep and look again.
+      if (direction) {
+        const control = arrow(ctx, direction);
+        if (!control) {
+          throw new DriverError(
+            'form-fill',
+            `enterprise's calendar will not page ${direction.toLowerCase()} to reach ${id}`,
+          );
+        }
+        control.click();
+      }
+    }
+
+    if (ctx.now() >= ctx.deadline) break;
+    await ctx.sleep(POLL_MS);
+  }
+  throw new DriverError('form-fill', `timed out reaching ${id} in the ${which} calendar`);
+}
+
+/**
+ * What a toggle says is selected, as `MM/DD/YYYY`.
+ *
+ * Read from `aria-label` ("Selected Pick-Up Date 08/13/2026") rather than from
+ * the rendered text ("13 Aug 2026"). Two reasons, and the second is the one
+ * that matters: the attribute is already in the format we asked for, so no
+ * month-name parsing can go wrong — and **attributes survive a minimised tab**,
+ * where `innerText` is `''`. A text-based readback would compare `''` against
+ * `''` on an empty page and pass. See "Reading a page that has no layout" in
+ * `docs/driving-a-vendor-form.md`.
+ */
+function selectedDate(ctx: DriveContext, toggle: string): string | null {
+  const label = ctx.doc.querySelector(toggle)?.getAttribute('aria-label') ?? '';
+  return /(\d{2}\/\d{2}\/\d{4})/.exec(label)?.[1] ?? null;
+}
+
 /**
  * Set the trip's dates, and confirm the form took them.
  *
- * **Not implemented, and the reason Enterprise is still `searchable: false`.**
+ * **This is a range picker, not two independent date fields**, which is the
+ * single thing worth knowing before touching it and the trap National's first
+ * driver fell into. Measured on the live form:
  *
- * Both live runs used the form's default dates — tomorrow to the day after —
- * because the date control is a custom widget rather than a `select` and
- * driving it was never measured. Filling everything else and letting this pass
- * silently would submit a search for dates the user never asked for and return
- * its price as the answer: a real page, a real number, the wrong rental. That
- * is the exact shape `verify-trip.ts` exists to catch for Avis and the exact
- * trade `deeplinks.ts` makes when it throws on a malformed date.
+ * | after | pick-up | return |
+ * | --- | --- | --- |
+ * | (default) | 08/13/2026 | 08/14/2026 |
+ * | click 08/20 in the pick-up calendar | **08/20/2026** | *(blank)* |
+ * | click 08/24 in the return calendar | 08/20/2026 | **08/24/2026** |
  *
- * To finish it, on a browser Enterprise is not throttling:
+ * So choosing a pick-up **clears the return** and closes the calendar; the
+ * return is a second pass through a freshly opened one. A driver that set the
+ * pick-up, checked it, and stopped would submit a form with no return date at
+ * all.
  *
- * 1. Dump the control's DOM — it sits between the location field and `#age`,
- *    rendering as `09 Aug 2026` with a chevron. Find out whether it is backed
- *    by a real `input`, a set of `select`s, or a calendar popover only.
- * 2. Drive it, whichever it turns out to be.
- * 3. **Read the rendered dates back and compare them against the trip**, and
- *    throw `form-fill` here when they disagree. That readback is not optional
- *    polish; it is what makes the step trustworthy, and it is cheap because the
- *    form prints the dates in its own summary.
- *
- * The two time `select`s alongside it are ordinary `<select>` elements and
- * should fall to `setNativeValue`, but they are unverified too and belong in
- * the same measurement.
+ * The verification is the point of the step, not decoration. Both toggles are
+ * read back from `aria-label` and compared against the trip, so a date the
+ * widget silently declined fails the quote instead of pricing whatever the form
+ * happened to be holding. That is what this function refused to do until it was
+ * measured, and the reason Enterprise sat `searchable: false` for so long.
  */
-export function applyDates(ctx: DriveContext): Promise<void> {
+export async function applyDates(ctx: DriveContext): Promise<void> {
   const trip = carTrip(ctx);
-  return Promise.reject(
-    new DriverError(
-      'form-fill',
-      `enterprise date control is not driven yet, so ${trip.pickupDate}..${trip.dropoffDate} ` +
-        'cannot be set — refusing rather than pricing the form default',
-    ),
+  const pickup = calendarId(trip.pickupDate);
+  const dropoff = calendarId(trip.dropoffDate);
+
+  await openCalendar(ctx, PICKUP_TOGGLE, 'pick-up');
+  await clickDay(ctx, pickup, 'pick-up');
+
+  // Deliberately not asserting the return is blank here. That it clears is
+  // measured, but it is the widget's business rather than ours, and a check
+  // that fails when Enterprise makes its range picker tidier would cost a good
+  // quote to prove a point we do not need proved.
+  await waitFor(
+    ctx,
+    `the form to show the pick-up date ${pickup}`,
+    () => selectedDate(ctx, PICKUP_TOGGLE) === pickup,
   );
+
+  await openCalendar(ctx, RETURN_TOGGLE, 'return');
+  await clickDay(ctx, dropoff, 'return');
+
+  // Both, together, at the end. Picking the return is what can disturb the
+  // pick-up — the widget re-derives the range from the two clicks — so checking
+  // only the return would miss a pick-up that moved underneath it.
+  await waitFor(ctx, `the form to show the trip ${pickup}..${dropoff}`, () => {
+    return (
+      selectedDate(ctx, PICKUP_TOGGLE) === pickup && selectedDate(ctx, RETURN_TOGGLE) === dropoff
+    );
+  });
+}
+
+/**
+ * The two time dropdowns, found by `aria-label`.
+ *
+ * **Their ids are freshly generated UUIDs** — `9b20166e-c5ec-…` on the load
+ * this was measured against — so an id selector would work exactly once. The
+ * `aria-label`s ("Pick-Up Time Selector", "Return Time Selector") are stable
+ * and are the only durable handle on the page.
+ */
+function timeSelect(ctx: DriveContext, which: 'Pick-Up' | 'Return'): HTMLSelectElement | null {
+  return (
+    [...ctx.doc.querySelectorAll<HTMLSelectElement>('select')].find((el) =>
+      new RegExp(`${which}\\s+Time`, 'i').test(el.getAttribute('aria-label') ?? ''),
+    ) ?? null
+  );
+}
+
+/**
+ * The option holding a time, accepting either zero-padded or bare hours.
+ *
+ * Enterprise renders `12:00 PM`, which says nothing about whether nine in the
+ * morning is `09:00 AM` or `9:00 AM` — twelve is two digits either way, and
+ * that is the only value that was seen. Rather than pick one and be wrong half
+ * the time, both are matched. Options are checked by `value` *and* by text
+ * because which one carries the label was not measured either.
+ */
+function timeOption(select: HTMLSelectElement, hhmm: string): HTMLOptionElement | null {
+  const { hour, minute, ampm } = clock12(hhmm);
+  const wanted = new Set([
+    `${hour}:${minute} ${ampm}`.toUpperCase(),
+    `${Number(hour)}:${minute} ${ampm}`.toUpperCase(),
+  ]);
+  return (
+    [...select.options].find(
+      (option) =>
+        wanted.has(option.value.trim().toUpperCase()) ||
+        wanted.has((option.text || '').trim().toUpperCase()),
+    ) ?? null
+  );
+}
+
+/**
+ * Set the trip's pick-up and return times, and confirm the form took them.
+ *
+ * **Not cosmetic, and not optional.** The form defaults to 12:00 PM at both
+ * ends. Leaving that alone turns an 09:00–17:00 rental into a different
+ * rental of a different length, and Enterprise prices by duration — so the
+ * quote would be real, plausible and about somebody else's trip. Exactly the
+ * failure `applyDates` refused to ship for, one field along.
+ *
+ * A time the dropdown does not offer fails the quote rather than falling back.
+ * Enterprise's list is half-hourly, so an 09:15 pick-up has no option at all,
+ * and rounding it silently would reintroduce the same lie in miniature.
+ *
+ * **The selects were observed but never driven**, which is why the readback
+ * below is a `waitFor` rather than an assertion: `setNativeValue` is the right
+ * recipe for a React-controlled `<select>` and works on every other field on
+ * this form, but that it takes *here* is inference. If it does not, this fails
+ * `form-fill` loudly instead of submitting the default.
+ */
+export async function applyTimes(ctx: DriveContext): Promise<void> {
+  const trip = carTrip(ctx);
+
+  for (const [which, hhmm] of [
+    ['Pick-Up', trip.pickupTime],
+    ['Return', trip.dropoffTime],
+  ] as const) {
+    const select = timeSelect(ctx, which);
+    if (!select) {
+      throw new DriverError('form-fill', `no ${which} time control on the form`);
+    }
+
+    let option: HTMLOptionElement | null;
+    try {
+      option = timeOption(select, hhmm);
+    } catch (error) {
+      throw new DriverError('form-fill', error instanceof Error ? error.message : String(error));
+    }
+    if (!option) {
+      throw new DriverError(
+        'form-fill',
+        `enterprise offers no ${which} time of ${hhmm} — refusing rather than renting for a different span`,
+      );
+    }
+
+    const value = option.value;
+    setNativeValue(select, value);
+    await waitFor(
+      ctx,
+      `the ${which} time control to keep ${hhmm}`,
+      () => timeSelect(ctx, which)?.value === value,
+    );
+  }
 }
 
 /** Put the code in the Corporate Account Number field, and confirm it stuck. */
@@ -309,11 +627,13 @@ export const enterpriseDriver: FormDriver = {
   async drive(ctx) {
     await awaitHydration(ctx);
     await fillLocation(ctx);
-    // Always throws today. Deliberately placed before the code and the submit:
-    // there is no point typing a discount code into a form that is about to be
-    // submitted for the wrong dates, and stopping here means a half-driven form
-    // is never sent.
+    // The itinerary before the code, and both before the submit: there is no
+    // point typing a discount code into a form that is about to be submitted
+    // for the wrong trip, and failing here means a half-driven form is never
+    // sent. `applyDates` used to throw unconditionally and this ordering is
+    // what made that safe; it still holds now that both steps really run.
     await applyDates(ctx);
+    await applyTimes(ctx);
     await fillAccountNumber(ctx);
     await submitSearch(ctx);
   },

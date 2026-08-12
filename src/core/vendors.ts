@@ -38,18 +38,30 @@ export const VENDORS: Vendor[] = [
     category: 'car',
     codeLabel: 'Corporate account',
     host: 'www.enterprise.com',
-    // Not searchable: the site ignores the query string entirely, so no deep
-    // link can express a search. Same treatment as starwood — the codes stay in
-    // the database, but the vendor gets no chip, no candidates and no host
-    // permission. Leaving it searchable while its builder throws was worse than
-    // either: interleaveByVendor round-robins one candidate per vendor, so
-    // three doomed vendors took *half* the default cap of 12 and the plan line
-    // promised codes the popup already knew could not run.
-    searchable: false,
-    // The workbook stores one shared "Enterprise / National" column. Kept even
-    // though both ends are unsearchable today, because it is a fact about the
-    // data rather than about whether we can search it.
+    // Searchable since 2026-08-12, by **driver rather than deep link** — its
+    // URL still carries nothing and never will, exactly like National's. What
+    // changed is that `drivers/enterprise.ts` can now express the whole trip:
+    // the calendar was measured and driven, and so were the time dropdowns it
+    // used to leave at their noon defaults.
+    //
+    // The three things that had to land with this flag: the driver registered
+    // in `FORM_DRIVERS`, the builder returning its start URL instead of
+    // throwing, and `probeTimeoutMs` below.
+    searchable: true,
+    // The workbook stores one shared "Enterprise / National" column, and it is
+    // the *only* place these codes live — there is no `vendor: 'national'`
+    // record at all, so National's 19 codes all arrive through here.
     alsoTryAs: ['national'],
+    // Enterprise's widget hydrates slowly and unpredictably: instant on one
+    // profile, ~40s on another, never on a third. 45s of total budget, of which
+    // a driver gets `DRIVE_SHARE`, cannot cover a 40s mount plus a fill plus a
+    // priced results page. 120s can, and costs nothing at the vendors that
+    // answer quickly because it is per-vendor.
+    //
+    // Not a fix for the never-mounted case, which is a bot check or a blocked
+    // script rather than slowness — that surfaces as `form-fill` naming the
+    // hydration wait, which is the honest answer.
+    probeTimeoutMs: 120_000,
     // Enterprise keeps its search in session state the same way National does,
     // so the same cap applies for the same reason — set now, while the evidence
     // is written down, rather than discovered again when its driver lands.

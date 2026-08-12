@@ -10,7 +10,7 @@ import {
   interleaveByVendor,
   searchCompanies,
 } from '../src/core/codes.js';
-import type { Candidate } from '../src/core/types.js';
+import type { Candidate, VendorId } from '../src/core/types.js';
 import { VENDORS, getVendor, vendorsFor } from '../src/core/vendors.js';
 
 const VENDOR_IDS = new Set(VENDORS.map((v) => v.id));
@@ -153,17 +153,28 @@ describe('countCodesFor', () => {
         (code) => code.code && codeReaches(code.vendor, 'national'),
       );
       expect(reachable, name).toBe(true);
-      // And they have nothing at any other *reachable* car vendor, which is what
-      // made the omission total rather than cosmetic. Derived from the registry
-      // rather than listed: it named sixt until that vendor was disabled, and a
-      // hard-coded list quietly asserts something about vendors nothing routes
-      // to — passing today, and failing on a workbook edit with a message
-      // claiming a code is reachable when it is not.
-      const otherCarVendors = VENDORS.filter(
-        (v) => v.category === 'car' && v.searchable && v.id !== 'national',
+      // And they have nothing at a car vendor reached by a **deep link**, which
+      // is what made the omission total rather than cosmetic: their only car
+      // codes are the Enterprise-filed ones, so when neither Enterprise nor
+      // National could run, these companies disappeared from the car list
+      // entirely.
+      //
+      // Enterprise is excluded alongside National now that its form is driven.
+      // Until 2026-08-12 only National was, and the same Enterprise-filed code
+      // that reaches National reaches Enterprise directly — so leaving it in
+      // would assert these companies have a code "elsewhere" on the strength of
+      // the very code this test is about.
+      //
+      // Derived from the registry rather than listed: a hard-coded list quietly
+      // asserts something about vendors nothing routes to, passing today and
+      // failing on a workbook edit with a message claiming a code is reachable
+      // when it is not.
+      const driven = new Set<VendorId>(['national', 'enterprise']);
+      const deepLinkCarVendors = VENDORS.filter(
+        (v) => v.category === 'car' && v.searchable && !driven.has(v.id),
       ).map((v) => v.id);
       const elsewhere = company!.codes.some(
-        (code) => code.code && otherCarVendors.some((v) => codeReaches(code.vendor, v)),
+        (code) => code.code && deepLinkCarVendors.some((v) => codeReaches(code.vendor, v)),
       );
       expect(elsewhere, name).toBe(false);
     }
@@ -195,18 +206,23 @@ describe('buildCandidates', () => {
     expect(shared?.companyName).toContain('PwC');
   });
 
-  it('proposes nothing for Enterprise, whose search cannot be reached', () => {
-    // Enterprise is still `searchable: false` — its site ignores the query
-    // string and its driver cannot set the trip's dates yet.
-    //
-    // "Nothing" means no *Enterprise* candidate, not an empty list. Asking for
-    // Enterprise now returns National ones, because `wanted` is widened by
-    // `alsoTryAs` before the search: a contract id filed under Enterprise is
-    // worth trying at National, and National can be reached. That is the
-    // intended behaviour rather than a leak — the codes are the same codes, and
-    // nothing is routed to the vendor that cannot run them.
+  it('proposes Enterprise candidates now that its form is driven', () => {
+    // This test asserted the opposite until 2026-08-12, when the date control
+    // was measured and `enterpriseDriver` was registered. Enterprise is reached
+    // by driving its form, not by a deep link — its URL still carries nothing.
     const candidates = buildCandidates({ vendors: ['enterprise'] });
-    expect(candidates.some((c) => c.vendor === 'enterprise')).toBe(false);
+    expect(candidates.some((c) => c.vendor === 'enterprise')).toBe(true);
+    // IBM's, the code the driver was proved against on the live site.
+    expect(candidates.map((c) => c.code)).toContain('5666666');
+  });
+
+  it('still fans an Enterprise request out to National as well', () => {
+    // `wanted` is widened by `alsoTryAs` before the search, so asking for
+    // Enterprise returns both. That was true while Enterprise was unreachable
+    // and stays true now — the codes are the same codes, and the fan-out is
+    // about the data rather than about which end can be searched.
+    const candidates = buildCandidates({ vendors: ['enterprise'] });
+    expect(candidates.some((c) => c.vendor === 'national')).toBe(true);
   });
 
   it('races an Enterprise contract id at National, which can be reached', () => {

@@ -31,9 +31,13 @@ browser tab rather than in the probe's own environment. Both broke production �
 Hertz priced every quote at $20,000 and Avis returned one price for every code —
 and both were reverted.
 
-**Left — Budget and Enterprise.** These two cannot run at all, so they are where
-car work goes. Neither is reachable at the moment: Enterprise's booking app 503s
-instead of mounting, and Budget raises a bot check when its form is submitted.
+**Left — Budget.** It is the last car vendor that cannot run at all, so it is
+where car work goes, and it is not reachable at the moment: submitting its form
+raises a bot check.
+
+**Enterprise went live on 2026-08-12**, driven rather than deep-linked, the same
+way National is. Its URL still carries nothing; what changed is that its form is
+now filled in and verified field by field.
 
 **Sixt is closed rather than outstanding.** It was investigated on 2026-08-12
 and the answer was no: its search URL works, but there is nowhere in Sixt's
@@ -89,10 +93,13 @@ National keeps the previous search — including the account number — in state
 shared across tabs, it is capped at **one tab at a time** however wide the rest
 of the race runs.
 
-Budget and Enterprise are still **hidden from the popup entirely** — no vendor
-chip, no candidates, no host permission — the same treatment Starwood has always
-had. Their builders also refuse to produce a URL, but that is a backstop; in an
-ordinary run nothing reaches them.
+Enterprise is capped the same way and for the same reason — its form remembers
+the last search too.
+
+Budget is still **hidden from the popup entirely** — no vendor chip, no
+candidates, no host permission — the same treatment Starwood has always had. Its
+builder also refuses to produce a URL, but that is a backstop; in an ordinary run
+nothing reaches it.
 
 **Sixt is hidden too, and for a reason that is now settled.** This paragraph
 used to say the opposite — that nothing proved a Sixt URL impossible, and that
@@ -104,13 +111,14 @@ to require a business-account login. A form driver does not help, because there
 is no field to drive. That costs **3 codes**, and no company disappears — every
 company with a Sixt code has one at another car vendor.
 
-For Budget and Enterprise, returning a URL was the worse option: the
+For Budget, returning a URL was the worse option: the
 landing page shows a marketing "from $19/day", the probe reads it as a real price, and nothing downstream can
 tell — ranking never looks at `confidence`, so it would be compared
-head-to-head with the verified vendors and win on being cheapest. Leaving them
-merely _selectable_ was nearly as bad: they took half the default cap of twelve
-codes while the plan line promised twelve that would run. (Sixt was in neither
-of those episodes — its page shows `$35`, and it was searchable throughout.)
+head-to-head with the verified vendors and win on being cheapest. Leaving it
+merely _selectable_ was nearly as bad: three such vendors took half the default
+cap of twelve codes while the plan line promised twelve that would run. (Sixt was
+in neither of those episodes — its page shows `$35`, and it was searchable
+throughout.)
 
 The cost was real and worth stating: **27 codes and six companies disappeared
 from the popup** (`Government of Canada`, `Imaginus`, `Michigan State
@@ -120,8 +128,11 @@ survived under hotels.
 
 National coming back recovers **19 of those codes**, and all of them arrive by
 the Enterprise-to-National fan-out described below — the workbook files every one
-under Enterprise and has no National record at all. The rest stay in the database
-for whenever a driver reaches Budget and Enterprise.
+under Enterprise and has no National record at all.
+
+**Enterprise going live recovers the same codes at their own vendor**, so those
+19 are now raced at both ends of that shared column rather than only at National.
+Everything still in the database and unreachable is waiting on a Budget driver.
 
 Because both verified builders address a branch by IATA code, **pick-up must be
 an airport code** (`TPA`), and **one-way rentals are refused** — leave drop-off

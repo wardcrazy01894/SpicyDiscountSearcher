@@ -33,6 +33,25 @@ export interface Vendor {
    */
   alsoTryAs?: VendorId[];
   /**
+   * How long a quote at this vendor may take, if the default is not enough.
+   *
+   * Exists for Enterprise, whose booking widget is not merely slow but
+   * *variably* slow: it mounted instantly on one profile, took about forty
+   * seconds on another, and on a third never mounted at all. The default 45s
+   * budget, of which a driver gets `DRIVE_SHARE`, cannot absorb that.
+   *
+   * Per-vendor rather than a raised global, because the global is also a
+   * politeness setting: it bounds how long a tab sits open on *every* vendor's
+   * site, and Hertz, Avis and National answer well inside it. Slowing them down
+   * to accommodate Enterprise would be paying for one vendor's problem
+   * everywhere.
+   *
+   * `KEEPALIVE_CEILING_MS` is derived from the largest of these rather than
+   * from the default, since its job is to exceed the longest legitimate gap
+   * between two quotes settling.
+   */
+  probeTimeoutMs?: number;
+  /**
    * How many tabs may be open at this vendor at once, if fewer than the run's
    * own concurrency.
    *

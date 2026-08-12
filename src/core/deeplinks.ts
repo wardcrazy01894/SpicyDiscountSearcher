@@ -374,19 +374,29 @@ const BUILDERS: Record<VendorId, Builder> = {
    * and a one-way trip: a visible failure beats an invisible wrong price. They
    * come back when something drives their forms.
    *
-   * For Enterprise that is now closer than this comment used to imply, and the
-   * detail is in CLAUDE.md rather than repeated here. In short: `/en/reserve.html`
-   * is a single visible step carrying `#cid`, "Corporate Account Number", and it
-   * drives to a priced `#car_select` with synthetic events. Its results page
-   * even names the account holder, which is a per-code check Avis's does not
-   * offer. What is still missing is the date control — both live runs used the
-   * form's defaults — so a driver today would price whatever dates Enterprise
-   * felt like, which is the failure this file exists to refuse. `?cid=` does not
-   * pre-fill the field either, so none of it makes a URL work and this builder
-   * stays as it is.
+   * **Enterprise left this group on 2026-08-12**, the same way National did and
+   * for the same reason: it has a driver now. Its URL still carries nothing —
+   * `?cid=` does not even pre-fill the account field — so this is not a deep
+   * link and is not graded as one. `'driven'` says the search is not in the URL
+   * at all.
+   *
+   * Only Budget is left here, and only because nothing drives its form yet.
    */
   budget: unsearchable('budget'),
-  enterprise: unsearchable('enterprise'),
+
+  /**
+   * Enterprise's reservation page, which carries no itinerary.
+   *
+   * Same shape as `national` below: the URL is where the form lives, and
+   * `drivers/enterprise.ts` fills it in. Written out rather than read from
+   * `enterpriseDriver.startUrl()` because that module imports this one for
+   * `airportCode`, `clock12` and `isoParts`, so reaching back the other way is
+   * a cycle. `tests/deeplinks.test.ts` asserts the two agree.
+   */
+  enterprise: () => ({
+    confidence: 'driven',
+    url: 'https://www.enterprise.com/en/reserve.html',
+  }),
 
   /**
    * National is the exception, because it has a driver.

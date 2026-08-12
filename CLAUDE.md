@@ -7,10 +7,12 @@ covers things that aren't obvious from the code.
 ## Where the work actually is
 
 **Hertz, Avis and National are done. Leave them alone.** They run and they
-return real prices. The remaining rental-car work is **Budget and Enterprise** —
-the two that cannot run at all. If someone asks what is left to do on cars, that
-list is the answer, and it does not include re-measuring a container, tightening
-an extraction rule or capping a lane on a vendor that works.
+return real prices. **Enterprise joined them on 2026-08-12** — driven, not
+deep-linked, the same way National is. The remaining rental-car work is
+**Budget**, alone: the one vendor left that cannot run at all. If someone asks
+what is left to do on cars, that is the answer, and it does not include
+re-measuring a container, tightening an extraction rule or capping a lane on a
+vendor that works.
 
 **Sixt used to be on that list and is now closed.** Investigated 2026-08-12: its
 search URL works and replays, but no corporate-code field exists anywhere in its
@@ -112,8 +114,8 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget and Enterprise throw instead of building.** They were
-  observed ignoring the query string entirely, and returning a URL for them was
+  **Budget throws instead of building.** It was observed ignoring the query
+  string entirely, and returning a URL for it was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
   can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
@@ -122,6 +124,13 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `reservation.html#car_select` therefore compares equal to the path asked for.
   `link-build` is visible; that is not. Same trade as the malformed date and
   the one-way trip.
+
+  Enterprise was the other half of this paragraph until 2026-08-12. Everything
+  above is still true of _its URL_ — that is exactly why its builder returns
+  `'driven'` rather than a search link, and why the `finalPath` truncation note
+  is worth keeping: `reservation.html#car_select` is Enterprise's own results
+  hash, and it is still invisible to `landedElsewhere`. What changed is that
+  nothing now depends on that URL carrying a search.
 
   **Sixt throws too, and deliberately not for these reasons.** Its landing page
   shows `$35` rather than `from $19/day`, and — the part that matters —
@@ -143,10 +152,11 @@ encode other people's websites. They will break. Both are deliberately isolated:
   permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
 
-  **National left this group.** It has a driver now
-  (`src/core/drivers/national.ts`), so its builder returns the page the form
-  lives on rather than throwing, and it is `searchable: true` with its host back
-  in the manifest. Its confidence is `'driven'` — a third value meaning the URL
+  **National left this group, and Enterprise followed on 2026-08-12.** Each has
+  a driver now (`src/core/drivers/national.ts`, `drivers/enterprise.ts`), so its
+  builder returns the page the form lives on rather than throwing, and each is
+  `searchable: true` with its host back
+  in the manifest. Their confidence is `'driven'` — a third value meaning the URL
   is not carrying the search at all, so it is not graded on the
   reverse-engineering scale and is not counted among the popup's "unverified"
   links. See `docs/driving-a-vendor-form.md`; the checklist there is now a
@@ -651,15 +661,27 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 Read the top of this file first: **none of what follows is a reason to touch
-Hertz, Avis or National.** Those three work. The open rental-car work is Budget
-and Enterprise, and the entries below describe what each of those needs. Sixt is
-described below too, but as a closed question rather than as work.
+Hertz, Avis, National or Enterprise.** Those four work. The open rental-car work
+is Budget, and the entry below describes what it needs. Sixt is described below
+too, but as a closed question rather than as work.
 
-- **The two car vendors that cannot run.** **Budget and Enterprise** are worse
-  than unverified: both keep the search in session state, so no query string can
-  express it and the builders they have today cannot ever work. They need
-  drivers. Neither is reachable at the moment — Enterprise's booking app 503s
-  rather than mounting, and Budget raises a bot check on submit.
+- **The one car vendor that cannot run.** **Budget** is worse than unverified:
+  it keeps the search in session state, so no query string can express it and
+  the builder it has today can never work. It needs a driver, and it is not
+  reachable at the moment — submitting its form raises a bot check.
+
+  **Enterprise left this entry on 2026-08-12.** It was the other half of this
+  bullet for months, on the same grounds, and the thing that changed was not the
+  URL — that still carries nothing — but that its form is now driven end to end.
+  Its calendar turned out to be a range picker whose day cells carry
+  `data-test-id="MM/DD/YYYY"`, which made the dates both drivable and exactly
+  verifiable. See `drivers/enterprise.ts`.
+
+  Two things it needed that National did not, both worth knowing before the same
+  is attempted for Budget: a **per-vendor probe timeout**, because its widget can
+  take ~40s to mount against a 45s default; and time dropdowns driven explicitly,
+  because the form defaults to noon at both ends and a wrong time is a wrong
+  rental length, which is a wrong price.
 
   **Sixt is no longer one of them, and this entry is the cautionary tale.** It
   used to read "measured-broken but not impossible — it returns the day someone
@@ -675,13 +697,13 @@ described below too, but as a closed question rather than as work.
   branch at all, and a hand-captured lookup table would rot silently.
 
   `unsearchable()` still takes its reason as a whole sentence, which now earns
-  its keep twice over — Sixt's refusal borrows neither the other two's "cannot
-  be searched by URL" nor its own previous claim to have no working one.
+  its keep twice over — Sixt's refusal borrows neither Budget's "cannot be
+  searched by URL" nor its own previous claim to have no working one.
 
-  National keeps its search in session state exactly like Budget and Enterprise
-  and is searchable anyway, because it is driven rather than deep-linked. It is
-  listed here only as the worked example the other two should follow, not as
-  work outstanding.
+  National and Enterprise both keep their search in session state exactly like
+  Budget, and both are searchable anyway, because they are driven rather than
+  deep-linked. They are listed here only as the worked examples Budget should
+  follow, not as work outstanding.
 
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices

@@ -1,4 +1,5 @@
 import type { FormDriverRegistry } from '../form-driver.js';
+import { enterpriseDriver } from './enterprise.js';
 import { nationalDriver } from './national.js';
 
 /**
@@ -13,11 +14,12 @@ import { nationalDriver } from './national.js';
  * returns a URL — `unsearchable()` throws, `makeQuote` catches, and the quote is
  * settled at plan time before any lane sees it. National satisfies all three.
  *
- * `enterpriseDriver` is deliberately absent. Its `applyDates` is unimplemented
- * and always throws, so registering it would route runs to a driver that cannot
- * express the trip's dates. It joins the day that function is measured and
- * driven, in the same change.
+ * `enterpriseDriver` joined on 2026-08-12, once its calendar and time dropdowns
+ * were measured and driven. It was held out while `applyDates` threw
+ * unconditionally, because registering it then would have routed runs to a
+ * driver that could not express the trip's dates.
  */
 export const FORM_DRIVERS: FormDriverRegistry = {
+  enterprise: enterpriseDriver,
   national: nationalDriver,
 };

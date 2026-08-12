@@ -3,7 +3,7 @@ import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
 import { recordRejected } from '../core/rejected-codes.js';
-import { findVendor } from '../core/vendors.js';
+import { findVendor, VENDORS } from '../core/vendors.js';
 import type {
   Candidate,
   Offer,
@@ -13,6 +13,7 @@ import type {
   QuoteFailure,
   RunState,
   SearchPlan,
+  VendorId,
 } from '../core/types.js';
 
 /**
@@ -27,6 +28,14 @@ import type {
 const STATE_KEY = 'runState';
 /** Window id of a run in flight, so a restarted worker can close the orphan. */
 const WINDOW_KEY = 'runWindow';
+/**
+ * How long a quote gets, unless its vendor asks for longer.
+ *
+ * Also a politeness setting, not only a correctness one: it bounds how long a
+ * tab sits open on a vendor's site. That is why a vendor needing more asks for
+ * it by name in `vendors.ts` rather than this number being raised for
+ * everybody — Enterprise's 40s hydration should not slow Hertz down.
+ */
 const PROBE_TIMEOUT_MS = 45_000;
 /** Time the background keeps in hand after the probe's own deadline passes. */
 const PROBE_GRACE_MS = 5_000;
@@ -81,11 +90,37 @@ const KEEPALIVE_MS = 20_000;
  * how many codes are in the run. Thirteen times that is ~10 minutes today and
  * shrinks automatically if the deadline does.
  *
+ * **Derived from the longest deadline any vendor can ask for, not the default.**
+ * Once `probeTimeoutMs` existed, basing this on the default would have made the
+ * ceiling shorter than a single Enterprise quote is allowed to take: a run of
+ * slow Enterprise quotes would trip its own inactivity guard and lose the
+ * keepalive mid-race, which is the exact bug this constant was introduced to
+ * prevent.
+ *
  * Tripping it returns the worker to Chrome's ordinary suspension rules, which
  * is what shipped before this keepalive existed — the worst case is the old
  * behaviour, not a new failure.
  */
-const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
+const KEEPALIVE_CEILING_MS = 13 * (maxProbeTimeoutMs() + STAGGER_MS);
+/**
+ * This vendor's probe deadline.
+ *
+ * `findVendor` rather than the throwing `getVendor`: a quote whose vendor is
+ * somehow unknown should get the default budget and fail on its own merits, not
+ * take the whole run down from inside a timing calculation.
+ */
+function probeTimeoutFor(vendor: VendorId): number {
+  return findVendor(vendor)?.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+}
+
+/** The longest any single quote may take, across every vendor. */
+function maxProbeTimeoutMs(): number {
+  return VENDORS.reduce(
+    (longest, vendor) => Math.max(longest, vendor.probeTimeoutMs ?? PROBE_TIMEOUT_MS),
+    PROBE_TIMEOUT_MS,
+  );
+}
+
 interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
@@ -602,7 +637,10 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
     // Absolute, so a vendor that bounces through a consent interstitial and
     // re-injects the probe cannot hand it a fresh budget the background will
     // not honour — the tab used to be killed 5s into a "40s" probe deadline.
-    run.deadlines.set(quote.id, Date.now() + PROBE_TIMEOUT_MS - PROBE_GRACE_MS);
+    run.deadlines.set(
+      quote.id,
+      Date.now() + probeTimeoutFor(quote.candidate.vendor) - PROBE_GRACE_MS,
+    );
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {

@@ -4,6 +4,7 @@ import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
 import { buildDeepLink } from '../src/core/deeplinks.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
+import { VENDORS } from '../src/core/vendors.js';
 
 const TRIP: CarTrip = {
   category: 'car',
@@ -84,8 +85,21 @@ const HORIZON_MS = 150_000;
 const MAX_GAP_MS = 25_000;
 /** Pokes to expect over `ms`, if no silence exceeds MAX_GAP_MS. */
 const pokesOver = (ms: number): number => Math.floor(ms / MAX_GAP_MS);
+/**
+ * The longest deadline any vendor may ask for, which is what the ceiling is
+ * built on rather than the default.
+ *
+ * Enterprise sets it today, at 120s, because its booking widget can take ~40s
+ * to mount. Read from the registry rather than restated as a number: a ceiling
+ * shorter than a single quote's own budget would let a run of slow quotes trip
+ * its own inactivity guard, and hard-coding it here would hide exactly that.
+ */
+const MAX_PROBE_TIMEOUT_MS = Math.max(
+  PROBE_TIMEOUT_MS,
+  ...VENDORS.map((vendor) => vendor.probeTimeoutMs ?? PROBE_TIMEOUT_MS),
+);
 /** src/background/service-worker.ts KEEPALIVE_CEILING_MS, same derivation. */
-const CEILING_MS = 13 * (PROBE_TIMEOUT_MS + 750);
+const CEILING_MS = 13 * (MAX_PROBE_TIMEOUT_MS + 750);
 
 describe('surviving MV3 suspension', () => {
   it('never leaves a 30s gap while a run is in flight', async () => {
@@ -174,7 +188,13 @@ describe('surviving MV3 suspension', () => {
     // exists to fix, reintroduced by the guard meant to bound it.
     await bootWorker();
     const many = { ...plan(1) };
-    many.candidates = Array.from({ length: 30 }, (_, index) => ({
+    // Enough candidates to outlast the loop below, which runs for the ceiling
+    // plus three minutes and settles one every 30s. Derived rather than a flat
+    // 30: once `probeTimeoutMs` pushed the ceiling from ~10 to ~26 minutes, a
+    // fixed count drained the run early and this failed claiming the keepalive
+    // had died when in truth the race had simply finished.
+    const settlesNeeded = Math.ceil((CEILING_MS + 3 * 60_000) / 30_000) + 2;
+    many.candidates = Array.from({ length: settlesNeeded }, (_, index) => ({
       companySlug: `c${index}`,
       companyName: `Company ${index}`,
       vendor: 'hertz' as const,
