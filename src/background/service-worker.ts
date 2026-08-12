@@ -362,7 +362,15 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
         // wants the cap looked at, `abandoned` is transient and wants storage
         // latency looked at, and one message for both sends the reader to the
         // wrong place — in the only telemetry this extension has.
-        if (outcome !== 'stored' && outcome !== 'already-known') {
+        if (outcome === 'abandoned') {
+          // Deliberately not "was not remembered". The queue stopped waiting;
+          // the write may well have landed a moment later, because the outcome
+          // is read when the queue's tail resolves and on this path that is
+          // before the body finishes. Saying it was lost would send a reader
+          // after a data-loss bug that may not have happened, in the only
+          // telemetry this extension has.
+          warn('gave up waiting for a refusal write', outcome);
+        } else if (outcome !== 'stored' && outcome !== 'already-known') {
           warn('a refused code was not remembered', outcome);
         }
       })

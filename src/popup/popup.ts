@@ -707,7 +707,14 @@ async function reloadRejected(): Promise<Reload> {
   // unacceptable for a clear.
   const entries = await readRejected(chrome.storage.local);
   if (mine !== rejectedRead) return { ok: false, reason: 'superseded' };
-  if (entries === null) return { ok: false, reason: 'unreadable' };
+  if (entries === null) {
+    // Hand the ticket back. A read that failed has nothing to supersede anyone
+    // *with*, and holding the latest ticket made it discard a slower read that
+    // had actually succeeded — leaving `ui.rejected` stale with nothing left to
+    // correct it until the popup is reopened.
+    rejectedRead -= 1;
+    return { ok: false, reason: 'unreadable' };
+  }
   ui.rejected = entries;
   // Judged here rather than by each caller, which is the third attempt at this
   // flag and the first that cannot drift. Setting it `false` here and relying
@@ -1173,7 +1180,15 @@ function renderRun(state: RunState | null): void {
   ui.pendingStart = false;
   ui.sendFailed = false;
   cancelBtn.hidden = !running;
-  runBtn.disabled = running;
+  // `clearPending` too, because this is not only reached by an answer to
+  // START_RUN. The clear handler calls `applyReply` — so with no run in
+  // progress it re-armed Run itself, and then awaited a real storage read
+  // before `refreshPlan` disabled it again; in that window `ui.rejected` is
+  // still the pre-clear list, which is the whole thing the gate exists to
+  // prevent. Wider through the RUN_STATE listener: any finished-run broadcast
+  // during the worker's clear wait lands here, and if its own reload comes back
+  // superseded it returns without calling `refreshPlan` at all.
+  runBtn.disabled = running || ui.clearPending;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
 
   if (!state) {

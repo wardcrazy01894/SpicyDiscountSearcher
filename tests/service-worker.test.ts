@@ -948,6 +948,42 @@ describe('remembering a code the vendor refused', () => {
     expect(stored[0]?.code).toBe('H1');
   });
 
+  it('does not claim a refusal was lost when it only stopped waiting', async () => {
+    // `abandoned` means the queue stopped waiting, not that the write failed —
+    // the body runs on, and if it was already inside `storage.set` the write
+    // very likely lands a moment later. Reporting it as "was not remembered"
+    // sends a reader after a data-loss bug that may not have happened, in the
+    // only telemetry this extension has.
+    const warned: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warned.push(args.map(String).join(' '));
+    });
+    try {
+      chromeMock = installChromeMock();
+      // Past the per-link bound, so the link is abandoned mid-write.
+      chromeMock.delayLocalWrites(10_000);
+      vi.resetModules();
+      await import('../src/background/service-worker.js');
+      await vi.advanceTimersByTimeAsync(0);
+
+      await chromeMock.fromPopup({ type: 'START_RUN', plan: plan(1) });
+      await settle();
+      const tabId = [...chromeMock.tabs.keys()][0]!;
+      await chromeMock.fromTab(tabId, {
+        type: 'PROBE_FAILED',
+        failure: 'code-rejected',
+        message: 'this account number cannot be used online',
+        report: REPORT,
+      });
+      await settle(30_000);
+
+      expect(warned.join(' ')).toMatch(/gave up waiting/);
+      expect(warned.join(' ')).not.toMatch(/was not remembered/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('says why a refusal was lost, in the only telemetry there is', async () => {
     // `recordRejected` fails for three different reasons and one fixed sentence
     // pointed at the wrong one: `store-full` is permanent and wants the cap

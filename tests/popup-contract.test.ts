@@ -909,6 +909,91 @@ describe('the popup half of the double-run guard', () => {
     expect(document.querySelector('#plan-summary')?.textContent).not.toMatch(/refused/);
   });
 
+  it('keeps Run gated when a finished run is broadcast mid-clear', async () => {
+    // `renderRun` sets `runBtn.disabled = running` and so ignored the gate. The
+    // clear handler reaches it through `applyReply`, and so does any finished-run
+    // broadcast arriving during the worker's clear wait — which is bounded at
+    // half a minute. Either re-armed Run while `ui.rejected` was still the
+    // pre-clear list, which is the whole thing the gate exists to prevent, and
+    // the listener's own reload can come back superseded and return without
+    // calling `refreshPlan` at all.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    let answer: (() => void) | undefined;
+    sendMessageImpl = (message) => {
+      if (message.type === 'CLEAR_REJECTED') {
+        return new Promise((resolve) => {
+          answer = () => void fakeBackground(message).then(resolve);
+        });
+      }
+      return fakeBackground(message);
+    };
+    await boot();
+    fillCarForm();
+
+    const run = () => document.querySelector<HTMLButtonElement>('#run-btn')!;
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+    expect(run().disabled).toBe(true);
+
+    // A run finishes while the clear is still out. Asserted *synchronously*:
+    // `renderRun` runs inline in the listener, and the listener's own reload
+    // calls `refreshPlan` a moment later — which re-disables the button and
+    // hides the gap. An earlier version of this checked after that and passed
+    // against the bug.
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    expect(run().disabled).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(run().disabled).toBe(true);
+
+    answer?.();
+    await vi.waitFor(() => expect(run().disabled).toBe(false));
+  });
+
+  it('lets a slower successful read land after a failed one', async () => {
+    // `reloadRejected` takes its supersede ticket before the read and kept it on
+    // failure — so an unreadable read still discarded a slower read that had
+    // actually succeeded, leaving `ui.rejected` stale with nothing to correct it
+    // until the popup was reopened.
+    savedRejected = [{ vendor: 'national', code: '5666666', at: 1 }];
+    installChrome();
+    await boot();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-count')?.textContent).toMatch(/1 code has/);
+    });
+
+    // Storage now holds two, and the next two reads are: a slow success, then a
+    // failure issued after it.
+    const chromeStub = (
+      globalThis as {
+        chrome: { storage: { local: { get: () => Promise<Record<string, unknown>> } } };
+      }
+    ).chrome;
+    const two = [
+      { vendor: 'national', code: '5666666', at: 1 },
+      { vendor: 'national', code: 'XZ15J55', at: 2 },
+    ];
+    let call = 0;
+    chromeStub.storage.local.get = () => {
+      call += 1;
+      if (call === 1) {
+        return new Promise((resolve) => setTimeout(() => resolve({ rejectedCodes: two }), 150));
+      }
+      return Promise.reject(new Error('no storage'));
+    };
+
+    // The listener reads first (slowly); the clear reads second (and fails).
+    for (const listener of broadcastListeners) {
+      listener({ type: 'RUN_STATE', state: { plan: PLAN, quotes: [], finishedAt: 1 } });
+    }
+    document.querySelector<HTMLButtonElement>('#rejected-clear')?.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rejected-count')?.textContent).toMatch(/2 codes have/);
+    });
+  });
+
   it('says a clear failed at the moment of the click when the store cannot be read', async () => {
     // `reloadRejected` returned null for "superseded" and "unreadable" alike,
     // and the handler treated them the same: no render, no message, and the
