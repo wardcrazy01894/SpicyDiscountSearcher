@@ -102,7 +102,35 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `if (unverified > 0)`, so the moment these two became verified a run of only
   Avis and Hertz — most of the car codes, and the obvious selection once the
   others are known unusable — printed no caveat at all. Silence reads as the
-  stronger promise. Badging per row is still the better fix.
+  stronger promise.
+
+  **Each row now carries its own badge**, which is what that paragraph used to
+  say was still wanted. `confidenceBadge` prints "url checked" / "url
+  unverified" / "form filled" on its own line under the code, so a car race
+  mixing all three — Avis and Hertz verified, National driven — is legible per
+  row rather than in aggregate. The line under the list stopped counting as a
+  result: "2 of these search links are unverified" never said _which_ two, and
+  there was nothing on screen to work it out from. It explains the badges that
+  are actually present instead, one clause per kind, so it can no longer describe
+  a state the list is not in.
+
+  Every label leads with **url** or **form** rather than a bare "checked",
+  because the badge renders a few pixels from a dollar amount and "checked"
+  beside a price reads as a claim about the price. It is not one.
+
+  A tooltip describes the **route**, never the row's outcome. The `driven` one
+  once ended "every field was checked against what the form rendered back",
+  which a `form-fill` failure on the same row flatly contradicts — that code
+  means a field could not be confirmed. A badge and a status disagreeing on one
+  line is the failure this popup exists to prevent, so the tooltip now says what
+  a driver does and that it fails rather than guess, and the status is left to
+  say whether this row got through. Pinned.
+
+  Two exclusions carried over from the counting version, because both were bugs
+  rather than tidiness: a `link-build` quote gets no badge at all (the worker
+  stamps those `best-effort` on its catch path, so badging on confidence alone
+  would label a link that was never built), and `driven` is never folded in with
+  the links, since it has no link to grade.
 
   Verifying one is worth the effort because the alternative is not "a stale
   parameter" but "no search at all": Enterprise keeps its itinerary in session
@@ -750,6 +778,11 @@ close). Never pass it a URL or a code.
   import-time contract is not: `tests/popup-contract.test.ts` loads the real
   `index.html` into jsdom and imports the module, so a renamed id fails the
   suite. It used to fail nothing, while bricking the popup.
+
+  The confidence badges and the caveat line beneath them are pinned now, driven
+  through a real `RUN_STATE` broadcast rather than by calling the renderer: what
+  each confidence prints, that a `link-build` quote prints nothing, and that the
+  caveat describes only the kinds actually on screen.
 
   Neither is the popup half of the double-run guard, which the Politeness
   section above asserts as a checkable invariant. It is driven through the real
