@@ -276,9 +276,14 @@ public/            manifest.json + icons, copied to dist/ root by vite
 tests/             vitest unit tests, plus pytest for the workbook parser
   helpers/         chrome API fake the service-worker suite is built on
 data/source/       the workbook everything is generated from
+assets/icons/      icon.svg + icon-small.svg — the artwork the PNGs come from.
+                   Outside public/ on purpose: vite copies public/ verbatim
+                   into dist/, which shipped the sources in the extension.
 scripts/
   extract_codes.py workbook → JSON
-  make_icons.py    generates the PNG icons
+  make-icons.sh    regenerates the PNG icons from assets/icons/*.svg (macOS)
+  round-icon-corners.py
+                   masks the rounded corners back into alpha after rasterising
   check-dist.mjs   CI guard that dist/ is loadable, and that the content
                    script is still a classic script
 ```
@@ -293,12 +298,19 @@ build. CI builds on 22 and runs the tests on 22, 24 and 26 — every version
 that range claims.
 
 ```bash
-npm run build        # typecheck + both vite builds
+npm run verify       # typecheck, lint, format:check, test, build, check-dist
+npm run build        # typecheck + all three vite builds
 npm test             # vitest
 npm run lint         # eslint
 npm run format       # prettier
 npm run format:check # what CI enforces
+npm run icons        # regenerate the icon PNGs — NOT part of verify (see below)
 ```
+
+`npm run icons` is the one generated artefact with **no CI freshness gate** — it
+needs macOS's `qlmanage`, `sips` and `python3`, so CI cannot regenerate and diff it the way the
+`data` job does for the codes JSON. Edit `assets/icons/*.svg` and re-run it, or
+the committed PNGs quietly stop matching their source.
 
 The workbook parser is Python and tested separately:
 

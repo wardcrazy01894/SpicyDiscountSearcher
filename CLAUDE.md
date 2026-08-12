@@ -57,15 +57,21 @@ else.
   no longer lined up. Picking the checks by hand is the bug; the point of one
   command is that there is nothing to pick.
 
-  It does **not** cover the `data` job, which is Python. If you touch
-  `scripts/*.py` or the workbook, also run:
+  It does **not** cover the `data` job, which is Python — so **the pre-PR hook
+  cannot see a Python mistake at all**. That is not hypothetical: adding
+  `scripts/round-icon-corners.py` passed `verify`, passed the gate, and turned
+  the `data` job red on a ruff rule. If you add or touch any `.py` file, or the
+  workbook, run these yourself:
 
   ```bash
-  pipx run ruff==0.14.2 check scripts tests
-  pipx run ruff==0.14.2 format --check scripts tests
+  uvx ruff@0.14.2 check scripts tests
+  uvx ruff@0.14.2 format --check scripts tests
   python3 -m pytest tests -q
   npm run codes && git diff --exit-code -- src/data/codes.generated.json
   ```
+
+  `uvx` rather than `pipx`, which this file said for months and which is not
+  installed here; `uv` is.
 
   Kept out of `verify` deliberately — it needs a Python toolchain that a
   node-only change should not have to have installed.
@@ -75,13 +81,34 @@ else.
   remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
   for every command that is not a PR creation.
 
+- **The icon PNGs are generated, and are the one generated artefact with no
+  freshness gate.** `public/icons/*.png` come from `assets/icons/*.svg` via
+  `npm run icons`. Every other generated file in this repo is pinned by CI —
+  the `data` job re-runs `extract_codes.py` and diffs the result — but this one
+  cannot be, because it needs macOS's `qlmanage`, `sips` and `python3`. So
+  editing an SVG without re-running the script leaves the repo permanently
+  inconsistent and nothing anywhere says so. The sources live in `assets/`
+  rather than `public/` because vite copies `public/` verbatim into `dist/`,
+  which shipped the artwork inside the packaged extension.
+
+  It is a **three**-stage pipeline, and the third stage is the one that gets
+  lost: `qlmanage` rasterises, `sips` downsamples, and
+  `scripts/round-icon-corners.py` masks the rounded corners back into the alpha
+  channel. QuickLook flattens onto an opaque ground, so without that last step
+  the icons are solid squares — which has happened twice, once by dropping the
+  `rx` from the SVGs and once by a failure between the render and the rounding
+  leaving half-built files in `public/`. The script now builds in a temp dir and
+  moves into place only on success, and `tests/icons.test.ts` asserts the corner
+  is transparent, because that property has silently flipped more than once and
+  no toolchain is needed to check it.
+
 - **`src/data/codes.generated.json` is generated.** Never hand-edit it. Change
   `scripts/extract_codes.py` or the workbook and re-run `npm run codes`. CI
   fails the `data` job if the committed JSON doesn't match a fresh run.
 - **`src/core/vendors.ts` is the source of truth for hosts.** Adding a vendor
   means adding it there, then updating `public/manifest.json` — `tests/manifest.test.ts`
   pins the two together and will fail if you forget.
-- **Two vite builds, on purpose.** MV3 content scripts aren't ES modules, so
+- **Three vite builds, on purpose.** MV3 content scripts aren't ES modules, so
   `vite.content.config.ts` bundles `src/content/probe.ts` as a single IIFE with
   `emptyOutDir: false`. Run order matters; `npm run build` handles it.
   `scripts/check-dist.mjs` parses the built content script as a _classic_
