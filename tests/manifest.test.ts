@@ -24,6 +24,10 @@ const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
 ) as { version: string };
 
+const lock = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package-lock.json', import.meta.url)), 'utf8'),
+) as { version: string; packages: Record<string, { version?: string }> };
+
 const expected = vendorHosts().map((host) => `https://${host}/*`);
 
 describe('manifest.json', () => {
@@ -37,6 +41,15 @@ describe('manifest.json', () => {
     // drifting would make that check quietly meaningless — you would read
     // package.json's number in the diff and Chrome would show the other.
     expect(manifest.version).toBe(pkg.version);
+  });
+
+  it('is the version the lockfile records too', () => {
+    // Bumping the version every PR means the lockfile drifts every PR unless
+    // it moves with them — and then any `npm install` silently rewrites it into
+    // an unrelated diff. Both of the lockfile's self-references, not its
+    // dependencies.
+    expect(lock.version).toBe(pkg.version);
+    expect(lock.packages['']?.version).toBe(pkg.version);
   });
 
   it('uses a plain three-part version Chrome will accept', () => {

@@ -1191,10 +1191,20 @@ function renderRun(state: RunState | null): void {
   // aside from a bucket that *is* daily rates in USD. That is asserting a
   // diagnosis known to be the wrong one, which the row-level warning three
   // hundred lines up already contradicts.
+  //
+  // Split by the *specific* reason, not by `suspect` being truthy. There are
+  // two reasons now, and a truthiness filter gave the second one the first
+  // one's sentence: a Hertz quote whose price came off a banner was announced
+  // as having "landed on the vendor's home page" while its own row printed
+  // `landed /us/en/book/vehicles`. That is the contradiction this comment was
+  // written about, reintroduced by adding a reason and not the branch to go
+  // with it.
   const unranked = unrankedQuotes(state.quotes);
   const setAside = unranked.filter((q) => !q.suspect);
-  const landedElsewhere = unranked.filter((q) => q.suspect);
-  savingsBox.hidden = !spread && setAside.length === 0 && landedElsewhere.length === 0;
+  const landedElsewhere = unranked.filter((q) => q.suspect === 'landed-elsewhere');
+  const scopeLost = unranked.filter((q) => q.suspect === 'scope-lost');
+  savingsBox.hidden =
+    !spread && setAside.length === 0 && landedElsewhere.length === 0 && scopeLost.length === 0;
   savingsBox.replaceChildren();
 
   if (spread && winner) {
@@ -1277,6 +1287,18 @@ function renderRun(state: RunState | null): void {
     note.textContent =
       `${landedElsewhere.length} code${plural} landed on the vendor's home page rather than ` +
       `${verb} search, so the price found there is not for this trip. Listed below, but not ranked.`;
+    savingsBox.append(note);
+  }
+
+  if (scopeLost.length > 0) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    const plural = scopeLost.length === 1 ? '' : 's';
+    const was = scopeLost.length === 1 ? 'its price was' : 'their prices were';
+    note.textContent =
+      `${scopeLost.length} code${plural} reached a page with no results list, so ${was} ` +
+      `read from somewhere else on it — an advert or a banner rather than a rate. ` +
+      `Listed below, but not ranked.`;
     savingsBox.append(note);
   }
 }
