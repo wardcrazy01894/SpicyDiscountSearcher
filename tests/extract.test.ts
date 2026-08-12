@@ -523,6 +523,20 @@ describe("Hertz's and Avis's results containers", () => {
     </main>
     <section class="promo">Like-new cars for under $20,000</section>`;
 
+  it('has dropped the selectors that matched nothing', () => {
+    // The honest test for this change, and the only one that can exist. The
+    // markup tests below do *not* pin it: `firstMatch` already fell through to
+    // `main` before the dead selectors were deleted, so reverting them leaves
+    // every one of those tests green. Nothing about a page can distinguish a
+    // container list whose first entries match nothing from one without them.
+    //
+    // So assert the config directly. It reads as a tautology and is not one —
+    // what it pins is that putting a selector back is a deliberate act with a
+    // measurement behind it, which is the standard the rest of this file holds.
+    expect(VENDOR_SELECTORS.hertz?.container).toBe('main');
+    expect(VENDOR_SELECTORS.avis?.container).toBe('main');
+  });
+
   it('scopes Hertz to main, leaving the marketing line outside it', () => {
     document.body.innerHTML = HERTZ;
     const amounts = extract(document, 'hertz').offers.map((o) => o.amount);
@@ -592,6 +606,32 @@ describe('a price filter is not an offer', () => {
     // is a price and suppressing it would drop a vendor out of the running.
     document.body.innerHTML = `<main><div>Rate range $89/day</div></main>`;
     expect(extract(document, 'hertz').offers.map((o) => o.amount)).toContain(89);
+  });
+
+  it.each(['AAA Member Rate range $109', 'Weekend rate range $129'])(
+    'leaves %s alone, because a filter label leads and an offer label does not',
+    (copy) => {
+      // The first version of RANGE_LEAD_RE was unanchored while its docstring
+      // claimed it shared isFeeLine's leading-phrase shape. It did not, and
+      // both of these came back as **zero offers** — a vendor dropped out of
+      // the race entirely, which is strictly worse than admitting the filter
+      // bound this guard exists to exclude. Neither carries a basis word for
+      // the second half of the rule to save them with, so the anchor is doing
+      // all the work.
+      document.body.innerHTML = `<main><div>${copy}</div></main>`;
+      expect(extract(document, 'hertz').offers.length).toBeGreaterThan(0);
+    },
+  );
+
+  it('still suppresses a line that leads with the phrase and quotes a spread', () => {
+    // "Prices range $99-$180 for your dates" was offered alongside the two
+    // above as a rate the anchor ought to rescue. It is not one, and the
+    // difference is the whole rule rather than an exception to it: this line
+    // *does* lead with the phrase, and what it describes is the spread across
+    // the results — $99 is a lower bound exactly like Hertz's $42, not a rate
+    // anybody can book. Suppressing it is the guard working.
+    document.body.innerHTML = `<main><div>Prices range $99-$180 for your dates</div></main>`;
+    expect(extract(document, 'hertz').offers).toEqual([]);
   });
 });
 

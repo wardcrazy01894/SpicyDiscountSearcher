@@ -330,8 +330,22 @@ function isFeeLine(own: string): boolean {
   return classifyBasis(withoutFeeWords) === 'unknown';
 }
 
-/** The label a results page puts on a price *filter*, rather than on an offer. */
-const RANGE_LEAD_RE = /\b(?:prices?|rates?)\s+range\b|\brange\s+of\s+prices?\b/i;
+/**
+ * The label a results page puts on a price *filter*, rather than on an offer.
+ *
+ * Anchored, exactly as `FEE_LEAD_RE` is, and for a reason that was demonstrated
+ * rather than reasoned about: unanchored, this matched the phrase anywhere in
+ * the text and suppressed real rates. `AAA Member Rate range $109` and
+ * `Weekend rate range $129` carry the words in the middle of a line that is
+ * quoting a price, and both came back as zero offers — a vendor dropped out of
+ * the race, which is strictly worse than the filter bound this guard was written
+ * to exclude. Neither carries a basis word for the rule below to save them with.
+ *
+ * A filter's label leads. An offer's does not. `Prices range $99-$180 for your
+ * dates` does lead with it and stays suppressed, correctly: $99 is a lower bound
+ * across the results, not a rate anybody can book.
+ */
+const RANGE_LEAD_RE = /^\s*(?:prices?|rates?)\s+range\b|^\s*range\s+of\s+prices?\b/i;
 
 /**
  * Is this element a price *filter* rather than a price?

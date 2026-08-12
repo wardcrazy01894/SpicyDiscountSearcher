@@ -272,6 +272,19 @@ included: $57.20`, where the negation is invisible to the rule. Both surface a
   amount are always in different elements, so suppressing only the label would
   leave the `$42` leaf emitting.
 
+  **"Lead" means anchored, and the first version was not.** `RANGE_LEAD_RE`
+  matched the phrase anywhere in the text while its own docstring claimed
+  otherwise, so `AAA Member Rate range $109` and `Weekend rate range $129`
+  extracted **zero offers** — a vendor dropped out of the race, which is strictly
+  worse than the filter bound the guard exists to exclude. Neither carries a
+  basis word for the second half of the rule to save them with, so the anchor is
+  doing all the work. A filter's label leads; an offer's does not.
+
+  `Prices range $99-$180 for your dates` stays suppressed, and is the rule
+  rather than an exception to it: that line does lead with the phrase, and $99
+  is a lower bound across the results exactly like Hertz's $42 — not a rate
+  anybody can book.
+
   **This changes no answer today, and that is the interesting part.** Hertz also
   prints "$226 est. total" per card, `total` outranks `unknown` in
   `BASIS_PREFERENCE`, and the bare `$42` classifies `unknown` — so the only thing
