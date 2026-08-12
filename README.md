@@ -31,9 +31,16 @@ browser tab rather than in the probe's own environment. Both broke production �
 Hertz priced every quote at $20,000 and Avis returned one price for every code —
 and both were reverted.
 
-**Left — Sixt, Budget, Enterprise.** These three cannot run at all, so they are
-where car work goes. Only Sixt is reachable today: Enterprise's booking app 503s
+**Left — Budget and Enterprise.** These two cannot run at all, so they are where
+car work goes. Neither is reachable at the moment: Enterprise's booking app 503s
 instead of mounting, and Budget raises a bot check when its form is submitted.
+
+**Sixt is closed rather than outstanding.** It was investigated on 2026-08-12
+and the answer was no: its search URL works, but there is nowhere in Sixt's
+booking funnel to put a corporate code, and its corporate rates appear to sit
+behind a business-account login. See `src/core/deeplinks.ts` for the parameters
+and the full reasoning — including why racing it uncoded, for its retail rate,
+was declined too.
 
 The last table row is the honest caveat. None of these vendors document their
 search URLs, so the query parameters in `src/core/deeplinks.ts` are
@@ -87,14 +94,15 @@ chip, no candidates, no host permission — the same treatment Starwood has alwa
 had. Their builders also refuse to produce a URL, but that is a backstop; in an
 ordinary run nothing reaches them.
 
-**Sixt is hidden too, for a different and less final reason.** Its URL was
-measured to reach no search — `/php/reservation` 302s to the site root, where a
-marketing "$35" sits — and a vendor that cannot answer was still spending a tab
-and a lane on every run. So it is off. But nothing proves a Sixt URL is
-_impossible_, only that the one anybody tried does not work; capture one that
-reaches a real search and it comes straight back. That costs **3 codes**, and no
-company disappears — every company with a Sixt code has one at another car
-vendor.
+**Sixt is hidden too, and for a reason that is now settled.** This paragraph
+used to say the opposite — that nothing proved a Sixt URL impossible, and that
+capturing one which reached a real search would bring the vendor straight back.
+One was captured on 2026-08-12. `/betafunnel/#/offerlist` searches correctly on
+a branch id and survives replay, so the URL was never the problem: **there is no
+corporate-code field anywhere in Sixt's funnel**, and its corporate rates appear
+to require a business-account login. A form driver does not help, because there
+is no field to drive. That costs **3 codes**, and no company disappears — every
+company with a Sixt code has one at another car vendor.
 
 For Budget and Enterprise, returning a URL was the worse option: the
 landing page shows a marketing "from $19/day", the probe reads it as a real price, and nothing downstream can

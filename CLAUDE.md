@@ -7,11 +7,16 @@ covers things that aren't obvious from the code.
 ## Where the work actually is
 
 **Hertz, Avis and National are done. Leave them alone.** They run and they
-return real prices. The remaining rental-car work is **Sixt, Budget and
-Enterprise** — the three that cannot run at all. If someone asks what is left to
-do on cars, that list is the answer, and it does not include re-measuring a
-container, tightening an extraction rule or capping a lane on a vendor that
-works.
+return real prices. The remaining rental-car work is **Budget and Enterprise** —
+the two that cannot run at all. If someone asks what is left to do on cars, that
+list is the answer, and it does not include re-measuring a container, tightening
+an extraction rule or capping a lane on a vendor that works.
+
+**Sixt used to be on that list and is now closed.** Investigated 2026-08-12: its
+search URL works and replays, but no corporate-code field exists anywhere in its
+funnel, so neither a deep link nor a driver can apply one of our codes. It is
+not outstanding work and should not be picked up again without a Sixt business
+account login. `src/core/deeplinks.ts` has the parameters and the full finding.
 
 Changes to a working vendor are **reactive only**, triggered by a symptom
 somebody actually saw: prices stopped coming back, or an obviously wrong number
@@ -622,20 +627,28 @@ Read the top of this file first: **none of what follows is a reason to touch
 Hertz, Avis or National.** Those three work. The open rental-car work is Sixt,
 Budget and Enterprise, and the entries below describe what each of those needs.
 
-- **The three car vendors that cannot run**, and the difference decides what
-  would fix each:
+- **The two car vendors that cannot run.** **Budget and Enterprise** are worse
+  than unverified: both keep the search in session state, so no query string can
+  express it and the builders they have today cannot ever work. They need
+  drivers. Neither is reachable at the moment — Enterprise's booking app 503s
+  rather than mounting, and Budget raises a bot check on submit.
 
-  - **Budget and Enterprise** are worse than unverified: both keep the search in
-    session state, so no query string can express it and the builders they have
-    today cannot ever work. They need drivers.
-  - **Sixt** is measured-broken but not impossible: `/php/reservation` 302s to
-    the site root, which is one path tried once. It is `searchable: false` so it
-    stops spending a lane, and it returns the day someone captures a URL that
-    reaches a real search. `unsearchable()` takes its reason as a whole sentence
-    precisely so its refusal does not borrow the other two's "cannot be
-    searched by URL". **The only one of the three available right now** —
-    Enterprise's booking app 503s rather than mounting, and Budget raises a bot
-    check on submit.
+  **Sixt is no longer one of them, and this entry is the cautionary tale.** It
+  used to read "measured-broken but not impossible — it returns the day someone
+  captures a URL that reaches a real search", which is the same open-question
+  shape as the reverted Avis notes below, and it worked on someone exactly the
+  way those did. The URL was captured on 2026-08-12: `/betafunnel/#/offerlist`
+  searches on a `BRANCH:<id>` and survives a replay under a deliberately wrong
+  title. It changed nothing, because the obstacle was never the URL — **no
+  corporate-code field exists anywhere in Sixt's funnel**, and its corporate
+  surface is login and registration, so a driver has nothing to drive either.
+  Closed, not paused. Racing it uncoded for its retail rate was declined the
+  same day: `BRANCH:<id>` is not derivable from an IATA code, LAX has no single
+  branch at all, and a hand-captured lookup table would rot silently.
+
+  `unsearchable()` still takes its reason as a whole sentence, which now earns
+  its keep twice over — Sixt's refusal borrows neither the other two's "cannot
+  be searched by URL" nor its own previous claim to have no working one.
 
   National keeps its search in session state exactly like Budget and Enterprise
   and is searchable anyway, because it is driven rather than deep-linked. It is
