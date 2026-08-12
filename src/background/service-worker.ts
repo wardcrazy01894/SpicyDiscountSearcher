@@ -2,12 +2,7 @@ import { buildDeepLink } from '../core/deeplinks.js';
 import { bestOffer } from '../core/extract.js';
 import type { BackgroundRequest, ProbeAssignment, StateMessage } from '../core/messages.js';
 import { MAX_CONCURRENCY } from '../core/types.js';
-import {
-  WRITE_TIMEOUT_MS,
-  clearRejected,
-  pendingWrites,
-  recordRejected,
-} from '../core/rejected-codes.js';
+import { recordRejected } from '../core/rejected-codes.js';
 import { findVendor } from '../core/vendors.js';
 import type {
   Candidate,
@@ -91,96 +86,6 @@ const KEEPALIVE_MS = 20_000;
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
-/**
- * The longest anything here will wait for the write queue, however deep it is.
- *
- * Lived in `rejected-codes.ts` for a while, on the grounds that "both sides of
- * the clear need it — the popup's single recheck has to outlast whatever the
- * worker actually waited". That recheck is gone (a popup is destroyed on blur,
- * so its timer almost never fired), the popup no longer imports this, and a
- * placement argument that is no longer true is worse than no argument: it sends
- * the next reader looking for a second consumer that does not exist.
- *
- * Teardown holds the finished broadcast for the length of this wait, so it is
- * also how long the popup can sit on "Racing codes…" after the last tab has
- * closed.
- */
-const WRITE_WAIT_CEILING_MS = 30_000;
-
-/**
- * Wait for a settling quote's storage writes, but not forever.
- *
- * The wait exists so the finished broadcast cannot outrun a refusal the popup
- * is about to re-read. Waiting *unboundedly* for it buys a worse failure than
- * the one it fixes: nothing else settles that promise, so a `chrome.storage`
- * call that never returns leaves the run unannounced with its window already
- * closed — the popup stuck on "Racing codes…" — and, because `beginRun` awaits
- * `cancelRun`, the next START_RUN never replies either, latching `pendingStart`
- * and killing the Run button until the popup is reopened.
- *
- * Derived from `WRITE_TIMEOUT_MS` rather than written as its own number, and
- * scaled by how many writes are outstanding, because the writes are
- * **serialised**: five refusals are five round trips one after another, so a
- * flat 5s bound gave up after the first one whenever storage was merely slow —
- * around 1.5s a write under memory pressure is enough — and the popup's re-read
- * then missed the rest. That is the exact race `pendingWrites` was added to
- * close, reintroduced by the guard meant to bound it. Each link is itself
- * bounded at `WRITE_TIMEOUT_MS`, so this is the longest the chain can honestly
- * take, up to a ceiling.
- *
- * Not a guarantee: the queue is shared, so a clear or another run's write can
- * sit in front of these and still run the clock out. Timing out only loses the
- * ordering — the write is still queued, and still lands unless it is the one
- * that hung.
- *
- * The writes cannot reject — every link in `rejected-codes.ts` swallows its own
- * failure — so only the slow and hanging cases need handling.
- */
-async function settleWrites(
-  writes: Iterable<Promise<void>>,
-  what = 'a run announcement',
-  links = -1,
-): Promise<void> {
-  const pending = [...writes];
-  if (pending.length === 0) return;
-  // `links` when the caller knows better than its own promise count does.
-  // Every function in `rejected-codes.ts` returns the *tail* of the shared
-  // chain, so one promise can stand for any number of queued writes: the clear
-  // budgeted for a single write while sitting fourth in the queue behind a
-  // run's refusals, which is the same too-short bound this scaling exists to
-  // prevent, one level up.
-  const depth = links >= 0 ? links : pending.length;
-  const waitMs = Math.min(WRITE_TIMEOUT_MS * Math.max(1, depth), WRITE_WAIT_CEILING_MS);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      warn(`gave up waiting for a storage write before ${what}`, `pending past ${waitMs}ms`);
-      resolve();
-    }, waitMs);
-  });
-  try {
-    // `.catch` even though no body can reject today — that is a property of
-    // the three callers, not of this function, and one of them hands its
-    // promise straight in with no catch of its own. A throw here skips
-    // `sendResponse` (the popup then waits on a port that never answers, and
-    // its retry only fires on a rejection) or skips `publish` (the finished run
-    // is never broadcast and the popup sits on "Racing codes…" with its window
-    // already closed).
-    await Promise.race([
-      Promise.all(pending).then(
-        () => undefined,
-        () => undefined,
-      ),
-      bound,
-    ]);
-  } finally {
-    // Or the worker is held up for the length of the bound on every healthy
-    // run, which is the sort of thing that makes a timeout worse than no
-    // timeout.
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
 interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
@@ -215,20 +120,6 @@ interface ActiveRun {
    * as every other stranded-teardown bug in this file.
    */
   laneWaiters: Set<() => void>;
-  /**
-   * Storage writes started by a settling quote, awaited before the run is
-   * announced finished.
-   *
-   * Only `recordRejected` today. It is fire-and-forget because `finishQuote` is
-   * synchronous and called from a dozen places, but the final `RUN_STATE`
-   * broadcast is what makes the popup re-read the refusal list — so a refusal
-   * recorded by the *last* quote of a run raced its own announcement, and the
-   * popup could read storage before the write landed. It would then see no
-   * change, skip the redraw, and keep counting a code the vendor had just
-   * refused, with no later broadcast to correct it. Re-racing that code on the
-   * next click is precisely what this store exists to prevent.
-   */
-  pendingWrites: Set<Promise<void>>;
 }
 
 /** Release every parked lane, so each can re-check the queue and the cancel flag. */
@@ -340,43 +231,16 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
-    // Tracked rather than merely fired: teardown awaits it before announcing
-    // the run finished, so the popup's reload cannot beat the write. Still not
-    // awaited *here* — a lane must not block on storage — and still not allowed
-    // to reject, since a lost refusal costs a wasted tab next run and nothing
-    // more.
-    const write = recordRejected(
+    // Fire and forget. Nothing waits for it: the popup re-reads this list when
+    // the run finishes, and a write that lands after that broadcast costs one
+    // wasted tab on the next run, which is the trade this whole store is built
+    // on. Ordering the two was worth far less than the machinery it took.
+    void recordRejected(
       chrome.storage.local,
       quote.candidate.vendor,
       quote.candidate.code,
       Date.now(),
-    )
-      .then((outcome) => {
-        // The one failure here that belongs to no quote, which is what `warn`
-        // is for. A write the queue abandoned resolves like any other, so
-        // `settleWrites` counts it as landed and nothing else notices — while
-        // the user has already been told the vendor refused this code and the
-        // run will ask again next time. No code and no URL in the message.
-        //
-        // The outcome, not a fixed sentence: `store-full` is permanent and
-        // wants the cap looked at, `abandoned` is transient and wants storage
-        // latency looked at, and one message for both sends the reader to the
-        // wrong place — in the only telemetry this extension has.
-        if (outcome === 'abandoned') {
-          // Deliberately not "was not remembered". The queue stopped waiting;
-          // the write may well have landed a moment later, because the outcome
-          // is read when the queue's tail resolves and on this path that is
-          // before the body finishes. Saying it was lost would send a reader
-          // after a data-loss bug that may not have happened, in the only
-          // telemetry this extension has.
-          warn('gave up waiting for a refusal write', outcome);
-        } else if (outcome !== 'stored' && outcome !== 'already-known') {
-          warn('a refused code was not remembered', outcome);
-        }
-      })
-      .catch((error: unknown) => warn('could not remember a refused code', error));
-    run.pendingWrites.add(write);
-    void write.finally(() => run.pendingWrites.delete(write));
+    ).catch((error: unknown) => warn('could not remember a refused code', error));
   }
   // A settled quote is progress, and the keepalive ceiling measures the absence
   // of it rather than elapsed time. Without this, a race longer than the
@@ -1021,7 +885,6 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     waiters: new Map(),
     vendorInFlight: new Map(),
     laneWaiters: new Set(),
-    pendingWrites: new Set(),
   };
   active = run;
   startKeepAlive();
@@ -1053,22 +916,6 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
       if (active === run) {
         try {
           await closeWindow(run);
-          // Before the broadcast, because the broadcast is what tells the popup
-          // to re-read the refusal list. Bounded, so a storage call that never
-          // returns cannot hold the run unannounced.
-          // The queue's depth, not this run's promise count: every function in
-          // `rejected-codes.ts` returns the chain's *tail*, so a clear enqueued
-          // between two refusals sits inside the wait without being counted —
-          // the same under-counting the `links` argument exists for, which only
-          // the CLEAR_REJECTED path was using.
-          await settleWrites(run.pendingWrites, 'a run announcement', pendingWrites());
-          // Stamped *after* the wait, not before it. `currentState()` returns
-          // `active.state`, so a run marked finished while the broadcast is
-          // still held back was reported finished to GET_STATE and
-          // CLEAR_REJECTED too — a popup opened in that window read refusals
-          // written before the writes landed, got a finished state, and re-armed
-          // Run. That is the re-race this wait exists to prevent, arriving
-          // through the direct reply instead of the broadcast.
           run.state.finishedAt = Date.now();
           await publish();
         } finally {
@@ -1138,12 +985,7 @@ async function currentState(): Promise<RunState | null> {
   return state;
 }
 
-/**
- * @param writeLinks how many queued writes the wait below should budget for.
- *   Defaults to the queue's real depth, which is the safe answer; the user's
- *   own Cancel passes 1 deliberately (see the wait itself).
- */
-async function cancelRun(writeLinks = pendingWrites()): Promise<void> {
+async function cancelRun(): Promise<void> {
   const run = active;
   if (!run) return;
   run.cancelled = true;
@@ -1176,31 +1018,6 @@ async function cancelRun(writeLinks = pendingWrites()): Promise<void> {
   await closeWindow(run);
 
   run.state.finishedAt ??= Date.now();
-  // Same reason as in teardown: this publish carries `finishedAt`, so it is
-  // what sends the popup back to storage. A cancel settles every quote as
-  // `cancelled` and records nothing itself, but a refusal from earlier in the
-  // run can still be in flight.
-  //
-  // One write's worth when the *user* cancelled, the queue's real depth
-  // otherwise. The window and tabs are already closed by here, so every second
-  // is a second the popup sits on "Racing codes…" with nothing visibly
-  // happening, and at five outstanding refusals the scaled bound is 25s of it —
-  // worth trading away when the user has said they are done with this run.
-  //
-  // What is traded is not only waiting time, which the first version of this
-  // comment implied. With slow storage and refusals still queued, the
-  // `finishedAt` broadcast beats the writes, the popup's re-read misses them,
-  // and pressing Run straight after Cancel re-races codes the vendor already
-  // refused — real tabs on real vendor sites. The bet is that a user who has
-  // just cancelled is less likely to press Run within seconds than to sit
-  // watching a window that has already closed.
-  //
-  // But `beginRun` calls this too, and there the user has cancelled nothing:
-  // they pressed Run. Hard-coding 1 published the previous run's `finishedAt`
-  // ahead of its own refusal writes whenever storage was slow, so the popup's
-  // re-read missed them — the race `pendingWrites` exists to close,
-  // reintroduced on the one path the rationale above does not describe.
-  await settleWrites(run.pendingWrites, 'a cancel', writeLinks);
   await publish();
   // Last, after the closes and the final publish, so teardown itself is still
   // covered by a resident worker.
@@ -1240,72 +1057,11 @@ chrome.runtime.onMessage.addListener(
           return;
         }
         case 'CANCEL_RUN': {
-          // The user is waiting on this reply and has said they are done, so
-          // the short bound applies here and nowhere else.
-          await cancelRun(1);
+          await cancelRun();
           sendResponse({
             type: 'RUN_STATE',
             state: active?.state ?? null,
           } satisfies StateMessage);
-          return;
-        }
-        case 'CLEAR_REJECTED': {
-          // A popup message, and the first destructive one, so it checks who is
-          // asking. `sender.tab` is set for a content script — this extension
-          // runs them on six vendor hosts, and a page there could otherwise
-          // wipe the one piece of state this extension deliberately remembers,
-          // at a cost of real tabs on real vendor sites re-asking questions
-          // already answered. It is also set for an extension page loaded *in a
-          // tab*, which would be refused too; nothing opens the popup that way
-          // today, and "came from a tab" is the honest reading of the test.
-          //
-          // Deliberately only here. START_RUN and CANCEL_RUN are equally
-          // unguarded and equally reachable, which is worth fixing and is not
-          // this branch's change to make — naming it beats leaving the
-          // asymmetry to look like an oversight.
-          if (sender.tab) {
-            // `state: null`, not the run. `RunState.plan.candidates` carries
-            // every discount code in the race and the trip, and a branch added
-            // to deny a page something should not hand it those as the denial.
-            // CANCEL_RUN and GET_STATE leak the same thing and are named above
-            // as equally unguarded; that is an argument for fixing them, not
-            // for repeating it here.
-            sendResponse({ type: 'RUN_STATE', state: null } satisfies StateMessage);
-            return;
-          }
-          // No keepalive runs around this wait, and deliberately not. It can
-          // hold `sendResponse` for up to the ceiling, and the case it exists
-          // for — a hung write left over from a run that has already torn
-          // down — is also the case with no run to keep the worker resident,
-          // so Chrome can reclaim it mid-wait and the reply never comes. The
-          // popup's `send` retries everything but START_RUN, and the restarted
-          // worker has a fresh chain, so it self-heals; what the user gets back
-          // is the second clear's answer rather than the first's, and a refusal
-          // recorded between the two sends is erased by it.
-          //
-          // Left as a retry rather than pinned: `startKeepAlive` is scoped to a
-          // run's lifetime and its ceiling, and calling it from a message
-          // handler means either interfering with a run that starts meanwhile
-          // or growing a second lifetime to track. That is more machinery than
-          // the failure is worth.
-          //
-          // Done here rather than in the popup so it goes through the same
-          // write queue as `recordRejected` — see the message's own comment.
-          // Bounded for the same reason teardown's wait is: this now queues
-          // behind every in-flight refusal write, so a `chrome.storage` call
-          // that never returns would leave `sendResponse` uncalled, and the
-          // popup's own failed-send branch cannot fire on a reply that never
-          // comes — the button would just look dead.
-          // Counted before enqueuing, plus this one: the promise below is the
-          // chain's tail and resolves only after everything already in front of
-          // it, each of which has its own per-write bound.
-          const depth = pendingWrites() + 1;
-          await settleWrites([clearRejected(chrome.storage.local)], 'a clear', depth);
-          // The same state GET_STATE would give, not `active?.state ?? null`.
-          // The popup treats any reply as an ordinary state update, and a bare
-          // null from a worker that had merely restarted told it there was no
-          // run — hiding the results of one the user was still looking at.
-          sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
         case 'GET_STATE': {

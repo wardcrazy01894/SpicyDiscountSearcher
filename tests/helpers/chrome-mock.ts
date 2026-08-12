@@ -97,14 +97,6 @@ export interface ChromeHarness {
    * as a test at all. Delaying one write is what puts a lane in that gap.
    */
   delaySessionWrites: (ms: number) => void;
-  /**
-   * Make every `storage.local.set` land `ms` after it is called.
-   *
-   * `recordRejected` writes there, fire-and-forget from a settling quote, while
-   * the popup re-reads it on the run's finished broadcast. Without a delay the
-   * two cannot be ordered wrongly, so the race is invisible to a test.
-   */
-  delayLocalWrites: (ms: number) => void;
   /** Make the next `windows.create` resolve undefined, as Chrome may. */
   failNextWindowCreate: () => void;
   /**
@@ -135,7 +127,6 @@ export function installChromeMock(): ChromeHarness {
   const keepAlivePingTimes: number[] = [];
   let failSessionWrite = false;
   let delaySessionWrite = 0;
-  let delayLocalWrite = 0;
   let failWindowCreate = false;
   let windowCreateDelay = 0;
 
@@ -196,21 +187,7 @@ export function installChromeMock(): ChromeHarness {
       local: {
         get: readArea(local),
         set: (items: Record<string, unknown>) => {
-          // The write *lands* late, not just resolves late — otherwise a reader
-          // racing it would still see the new value and the race would be
-          // untestable.
-          const apply = (): void => {
-            for (const [k, v] of Object.entries(items)) local.set(k, structuredClone(v));
-          };
-          if (delayLocalWrite > 0) {
-            return new Promise<void>((resolve) =>
-              setTimeout(() => {
-                apply();
-                resolve();
-              }, delayLocalWrite),
-            );
-          }
-          apply();
+          for (const [k, v] of Object.entries(items)) local.set(k, structuredClone(v));
           return Promise.resolve();
         },
       },
@@ -336,9 +313,6 @@ export function installChromeMock(): ChromeHarness {
     },
     delaySessionWrites: (ms: number) => {
       delaySessionWrite = ms;
-    },
-    delayLocalWrites: (ms: number) => {
-      delayLocalWrite = ms;
     },
     failNextWindowCreate: () => {
       failWindowCreate = true;

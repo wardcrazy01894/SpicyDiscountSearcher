@@ -10,25 +10,7 @@ import type {
 
 /** Popup -> background. */
 export type PopupRequest =
-  | { type: 'START_RUN'; plan: SearchPlan }
-  | { type: 'CANCEL_RUN' }
-  | { type: 'GET_STATE' }
-  /**
-   * Forget every refused code.
-   *
-   * A message rather than the popup writing storage itself, and the reason is
-   * the only reason: `recordRejected` is read-modify-write, and the popup and
-   * the service worker are different JS realms with their own module state, so
-   * nothing in `rejected-codes.ts` can order a popup's clear against a write
-   * the worker already has in flight. A clear landing between the worker's read
-   * and its write is undone by that write, and every refusal the user asked to
-   * forget comes back — invisibly, because the popup has already emptied its
-   * own copy and looks correct until it is next opened.
-   *
-   * Routed here, both writers are the worker, and its queue is then the whole
-   * story.
-   */
-  | { type: 'CLEAR_REJECTED' };
+  { type: 'START_RUN'; plan: SearchPlan } | { type: 'CANCEL_RUN' } | { type: 'GET_STATE' };
 
 /** Content script -> background. */
 export type ProbeRequest =

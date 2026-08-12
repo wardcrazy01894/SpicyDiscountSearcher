@@ -17,6 +17,7 @@ import {
 } from '../core/compare.js';
 import { buildDeepLink } from '../core/deeplinks.js';
 import {
+  clearRejected,
   readRejected,
   rejectionKey,
   rejectionSet,
@@ -98,31 +99,6 @@ interface UiState {
    */
   sendFailed: boolean;
   /**
-   * "Try them again" was pressed and the codes were still refused afterwards.
-   *
-   * Read only by `renderRejectedNote`, which draws it beside that button, and
-   * retired by any fresh reading of the list — see `reloadRejected`. It is a
-   * statement about the refusals the popup held at the moment of the clear, so
-   * it must not outlive them.
-   */
-  clearFailed: boolean;
-  /**
-   * A clear asked for whose new list the popup does not have yet.
-   *
-   * Run is gated on it. `plannedCandidates` reads `ui.rejected` synchronously
-   * at submit, and the CLEAR_REJECTED reply is deliberately not prompt — it
-   * queues behind every in-flight `recordRejected` and is bounded at the
-   * ceiling — so pressing Run a second after "try them again" built the plan
-   * from the *pre-clear* list: the codes the user had just been told were being
-   * cleared were skipped again, under a plan line still saying "5 refused codes
-   * are being skipped".
-   *
-   * Distinct from `clearInFlight`, which is released a step earlier so the
-   * clear's own read is entitled to judge the flag. This one lives until the
-   * counts on screen are the new ones.
-   */
-  clearPending: boolean;
-  /**
    * Codes a vendor has refused, loaded once at boot.
    *
    * Held in UI state rather than read per keystroke: `refreshPlan` runs on every
@@ -139,8 +115,6 @@ const ui: UiState = {
   running: false,
   pendingStart: false,
   sendFailed: false,
-  clearFailed: false,
-  clearPending: false,
   rejected: [],
 };
 
@@ -154,26 +128,6 @@ let booted = false;
 
 /** Kept in one place because refreshPlan and applyReply both write it. */
 const SEND_FAILED_MESSAGE = 'Could not reach the extension background. Reopen the popup to retry.';
-/**
- * Deliberately does not name a cause.
- *
- * It covers a send that failed, a reply that never came, *and* the worker
- * replying normally while its own bounded wait gave up on a slow write — in the
- * last of which the background was reached and is still going to clear them.
- * "Not yet" is the only thing true of all three.
- *
- * "Try again" is also the whole recovery, and that is deliberate. There used to
- * be a 31s `setTimeout` here that re-read storage in case the clear landed
- * late — carefully derived to outlast the worker's own ceiling, and almost
- * entirely inert: a browser-action popup is destroyed the moment it loses
- * focus, taking its timers with it, so in ordinary use (press the button, look
- * at the plan, click away) it never fired. What actually corrects a late clear
- * is `main()` re-reading storage the next time the popup opens, and
- * `clearAttempt` living only in memory means the message does not survive to
- * outlast its own list. Crediting a timer for that was the mechanism this
- * comment described and the environment did not run.
- */
-const CLEAR_FAILED_MESSAGE = 'Those codes have not been cleared yet. Try again in a moment.';
 
 /**
  * The most codes one run may race.
@@ -626,7 +580,7 @@ function refreshPlan(): void {
   // checkbox and max-codes keystroke, all reachable mid-run, and re-arming the
   // button let a second submit silently cancel the race in flight and discard
   // the quotes it had already collected.
-  runBtn.disabled = ui.running || ui.pendingStart || ui.clearPending;
+  runBtn.disabled = ui.running || ui.pendingStart;
   const truncated = all.length > capped.length;
   // Always name the spread: a cap that silently picked one vendor is the whole
   // bug this replaced, and the only way to see it is to say what was chosen.
@@ -639,134 +593,38 @@ function refreshPlan(): void {
   renderRejectedNote();
 }
 
-/**
- * Which refusal read is authoritative.
- *
- * Three places read that list — boot, the finished-run broadcast, and the clear
- * — and none of them was ordered against the others, so whichever `storage.get`
- * resolved *last* won regardless of which was issued last. The damage is not
- * symmetric: a run finishing as the user presses "try them again" could leave
- * the popup holding the pre-clear list, so the codes they had just cleared went
- * on being skipped and the note reappeared seconds later, with nothing to
- * correct it until the popup was reopened.
- *
- * A counter rather than three separate guards, because the ad-hoc one `main`
- * carried (`if (ui.rejected.length === 0)`) was the same idea written once for
- * the one pair of readers that had already collided.
- */
+/** Reads issued, so a later one can be told from an earlier. */
 let rejectedRead = 0;
 
-/**
- * The refusals the user last asked to forget, or null if they never have.
- *
- * `ui.clearFailed` is "some of these are still there", which is why it is
- * derived from this on every read rather than set by whichever caller happens
- * to notice.
- */
-/** The newest read whose result was actually stored — see `reloadRejected`. */
+/** The newest read whose result was actually stored. */
 let appliedRead = 0;
 
-let clearAttempt: { keys: ReadonlySet<string>; at: number } | null = null;
-
 /**
- * A clear asked for and not yet answered.
+ * Re-read the refusal list, unless a later read has already been applied.
  *
- * `ui.clearFailed` is derived from whatever the latest read saw, and until the
- * worker has written there is nothing to read but the pre-clear list — so a run
- * finishing inside that window made the listener's read report every attempted
- * code as a survivor and rendered "Those codes have not been cleared yet"
- * beside a button still reading "clearing…". It corrected itself when the
- * clear's own read landed, but the message is the one thing on screen that says
- * the action did not work, and it was a lie while it showed.
- */
-let clearInFlight = false;
-
-/**
- * Re-read the refusal list, unless a later read has been issued meanwhile.
+ * Three places read it — boot, the finished-run broadcast, and the clear — and
+ * none of them was ordered against the others, so whichever `storage.get`
+ * resolved *last* won regardless of which was issued last. A run finishing as
+ * the user pressed "try them again" left the popup holding the pre-clear list:
+ * the codes they had just cleared went on being skipped and the note reappeared
+ * seconds later, with nothing to correct it until the popup was reopened.
  *
- * Returns what was stored, or null if this read was superseded — in which case
- * the caller must not act on it either, since it is describing a state the
- * popup has already moved past.
+ * Compared against what was last *applied* rather than last issued, so a result
+ * is only ever discarded in favour of one that actually landed — a read that
+ * failed cannot supersede one that succeeded.
  */
-/**
- * What a reload did, for callers that must tell "no answer" from "no refusals".
- *
- * `null` for both was enough while the only two outcomes were "read it" and
- * "someone else read it later" — but an unreadable store is a third, and on the
- * clear path it is the one that owes the user an answer at the moment of the
- * click. Collapsed, that click rendered nothing at all, and the warning it
- * should have produced surfaced minutes later attached to a finished run.
- */
-type Reload =
-  { ok: true; entries: RejectedCode[] } | { ok: false; reason: 'superseded' | 'unreadable' };
-
-async function reloadRejected(): Promise<Reload> {
+async function reloadRejected(): Promise<RejectedCode[] | null> {
   const mine = ++rejectedRead;
-  // `readRejected`, so an unreadable store is not mistaken for an empty one.
-  // Collapsing the two here made a *failed* clear report success: `ui.rejected`
-  // emptied, the note hid, the chips showed restored counts and `clearAttempt`
-  // was retired for good — and the refusals came back on the next open with
-  // nothing to explain them, which is the outcome `rejected-codes.ts` calls
-  // unacceptable for a clear.
+  // `readRejected`, so a read that *failed* is not mistaken for "no refusals" —
+  // that would empty the list, inflate every chip, and let the next run re-race
+  // codes the vendors have already refused.
   const entries = await readRejected(chrome.storage.local);
-  if (entries === null) return { ok: false, reason: 'unreadable' };
-  // Against what was last *applied*, not what was last issued. Comparing to the
-  // issue counter meant a read could be discarded in favour of one that then
-  // failed, and nothing was ever applied: boot's read succeeds slowly, a
-  // finished-run broadcast issues a newer ticket, boot's result is thrown away
-  // as superseded, the newer read fails — and `ui.rejected` stays empty for the
-  // session, so the chips are inflated and the next Run re-races every refused
-  // code. Handing the ticket back on failure fixed only the ordering where the
-  // failure resolved first; applying monotonically fixes both, because a result
-  // is only ever discarded in favour of one that actually landed.
-  if (mine <= appliedRead) return { ok: false, reason: 'superseded' };
+  if (entries === null) return null;
+  if (mine <= appliedRead) return null;
   appliedRead = mine;
   ui.rejected = entries;
-  // Judged here rather than by each caller, which is the third attempt at this
-  // flag and the first that cannot drift. Setting it `false` here and relying
-  // on "the caller sets it again from what it read" was true of the clear
-  // handler, then untrue of `recheckClear`, then fixed there and still untrue
-  // of the RUN_STATE listener — each time erasing a warning while every code it
-  // named was still refused. As a function of (what the user asked to clear,
-  // what is stored now) there is nothing left for a caller to forget.
-  // No verdict while the clear is still out: see `clearInFlight`. Withheld,
-  // not overwritten — forcing it false erased a *still-true* warning from an
-  // earlier failed clear the moment any unrelated read ran, and it only came
-  // back when the new clear's own read landed, up to the worker's ceiling
-  // later.
-  const attempted = clearAttempt;
-  // `at`, not just the key. A refusal recorded *after* the clear is a new
-  // answer from the vendor, not a survivor of it — and re-asking is the whole
-  // point of the button, so this is an ordinary outcome rather than a corner.
-  // Without the timestamp, a quote settling between the clear and this read put
-  // the same code back and the popup called a clear that demonstrably worked a
-  // failure, permanently: the 31s recheck reads the same list and leaves the
-  // flag exactly where it was.
-  if (!clearInFlight) {
-    ui.clearFailed =
-      attempted !== null &&
-      entries.some(
-        (entry) =>
-          attempted.keys.has(rejectionKey(entry.vendor, entry.code)) && entry.at <= attempted.at,
-      );
-  }
-  // Retired the moment a read finds none of them, or the derivation outlives the
-  // question it answers: re-asking a vendor is the whole point of the button,
-  // and a vendor refusing the same code again is the *expected* outcome. Kept,
-  // the next finished run would see that key back in the list and print "those
-  // codes have not been cleared yet" about a clear that demonstrably worked and
-  // a refusal that postdates it.
-  if (!clearInFlight && attempted !== null && !ui.clearFailed) clearAttempt = null;
-  return { ok: true, entries };
+  return entries;
 }
-
-/**
- * Where a failed clear says so.
- *
- * Created lazily rather than living in `index.html`, because it is absent in
- * every ordinary session and `el()` would make it a hard startup requirement.
- */
-let clearFailedNote: HTMLElement | null = null;
 
 /** The standing list, separate from this plan's skip count. */
 function renderRejectedNote(): void {
@@ -781,33 +639,6 @@ function renderRejectedNote(): void {
   rejectedCount.textContent = total
     ? `${total} ${total === 1 ? 'code has' : 'codes have'} been refused by a vendor and are no longer raced — `
     : '';
-
-  // Beside the button it is about, rather than in the plan line.
-  //
-  // It lived in `planSummary` for one round and that was wrong twice over:
-  // `refreshPlan` writes that line wholesale, so the message *replaced* the
-  // truncation warning ("40 codes match — racing 12 of them") and the
-  // skipped-codes note for as long as the flag was set, and clearing the flag
-  // from `renderRun` — which does not redraw the line — left the two
-  // disagreeing in both directions. Here it obscures nothing, so neither
-  // problem exists to be traded off, and it needs no reset: when a clear does
-  // work `ui.rejected` empties, this whole note hides, and the message goes
-  // with it.
-  if (total > 0 && ui.clearFailed) {
-    if (!clearFailedNote) {
-      clearFailedNote = document.createElement('span');
-      // `hint is-warning`, because the stylesheet has no bare `.is-warning`
-      // rule — only `.hint.is-warning`. As a lone class this rendered the
-      // warning in the same muted grey as the count beside it, and every test
-      // asserts `textContent`, so nothing caught it.
-      clearFailedNote.className = 'hint is-warning';
-      rejectedNote.append(clearFailedNote);
-    }
-    clearFailedNote.textContent = ` ${CLEAR_FAILED_MESSAGE}`;
-  } else if (clearFailedNote) {
-    clearFailedNote.remove();
-    clearFailedNote = null;
-  }
 }
 
 function readTrip(): Trip {
@@ -1192,15 +1023,7 @@ function renderRun(state: RunState | null): void {
   ui.pendingStart = false;
   ui.sendFailed = false;
   cancelBtn.hidden = !running;
-  // `clearPending` too, because this is not only reached by an answer to
-  // START_RUN. The clear handler calls `applyReply` — so with no run in
-  // progress it re-armed Run itself, and then awaited a real storage read
-  // before `refreshPlan` disabled it again; in that window `ui.rejected` is
-  // still the pre-clear list, which is the whole thing the gate exists to
-  // prevent. Wider through the RUN_STATE listener: any finished-run broadcast
-  // during the worker's clear wait lands here, and if its own reload comes back
-  // superseded it returns without calling `refreshPlan` at all.
-  runBtn.disabled = running || ui.clearPending;
+  runBtn.disabled = running;
   runBtn.textContent = running ? 'Racing codes…' : 'Find the cheapest code';
 
   if (!state) {
@@ -1612,124 +1435,32 @@ rejectedClear.addEventListener('click', () => {
   // is to re-ask the vendor, and the vendors are the authority — a picker over
   // remembered answers would be a UI for second-guessing a cache.
   //
-  // Asked of the background rather than written here, because the popup and the
-  // worker are separate realms: a clear written from this side can land between
-  // an in-flight `recordRejected`'s read and its write, and be undone by it.
-  // See CLEAR_REJECTED in `messages.ts`.
-  //
-  // Storage decides whether it worked, not the reply — on every path, which is
-  // what makes the three ways this can go wrong come out right:
-  //
-  // - **A null reply does not prove the clear did not happen.** `send` retries
-  //   and a rejection does not prove non-delivery; this file already reasons
-  //   that way about START_RUN. Treating it as failure while the worker really
-  //   had cleared would leave `ui.rejected` populated for the whole session,
-  //   filtering out codes the store no longer refuses.
-  // - **A reply does not prove it did.** The worker's wait on the write is
-  //   bounded, so a slow `chrome.storage` gets a perfectly ordinary
-  //   `RUN_STATE` back with the clear still queued.
-  // - A run settling a refusal in the same moment should not be papered over
-  //   either way.
-  //
-  // Judged against the refusals this popup *knew about*, so a new one recorded
-  // in the meantime does not read as a failed clear.
-  clearAttempt = { keys: rejectionSet(ui.rejected), at: Date.now() };
-  // Disabled synchronously, like Run. The worker's wait on the write chain can
-  // hold this reply for the length of the ceiling, and nothing else here says
-  // anything is happening — half a minute of silence is what produces repeat
-  // clicking, and each extra press enqueues another link (raising the depth
-  // every later waiter sizes its own bound from) and overwrites `clearAttempt`,
-  // so the first press's answer would be judged against the last press's list.
-  clearInFlight = true;
-  ui.clearPending = true;
-  // Disables Run before anything async happens, for the same reason the submit
-  // path latches `pendingStart` synchronously.
-  refreshPlan();
-  rejectedClear.disabled = true;
-  // And say so. Disabling removes the second click but not the silence that
-  // invites it — the worker can hold this reply for the length of its ceiling
-  // while the note beside the button still reads "N codes have been refused",
-  // which is a dead-looking control and no explanation. Same answer Run gives
-  // with "Racing codes…".
-  const label = rejectedClear.textContent;
-  rejectedClear.textContent = 'clearing…';
-  const finish = (): void => {
-    clearInFlight = false;
-    ui.clearPending = false;
-    rejectedClear.disabled = false;
-    rejectedClear.textContent = label;
-    // Re-arms Run, which `refreshPlan` gates on the flag above.
-    refreshPlan();
-  };
-  void send({ type: 'CLEAR_REJECTED' })
-    .then(async (reply) => {
-      // `applyReply`, not a hand-rolled subset of it — patching up whatever
-      // was visibly wrong took two rounds and still missed `pendingStart`. The
-      // reason this path used to avoid it was that a null state hid a finished
-      // run's results; the worker answers with the same state GET_STATE would
-      // now, so that is no longer a reason.
-      //
-      // **Except while a START_RUN is outstanding.** `renderRun` clears
-      // `pendingStart` unconditionally, and this reply is not an answer to that
-      // message: `beginRun` awaits `cancelRun` before assigning `active`, so a
-      // clear answered inside that gap reports the *previous* finished run, or
-      // none — and Run comes back to life with a race about to start behind it.
-      // A second press then sends the second START_RUN the latch exists to
-      // stop. The failed-send case is the same call: a rejection does not prove
-      // non-delivery, which is exactly why that message and the disabled button
-      // are supposed to stay until the popup is reopened. Leaving them alone
-      // here is the pre-existing behaviour, and it was right.
-      if (reply && !ui.pendingStart) {
-        try {
-          applyReply(reply);
-        } catch {
-          // Isolated, because a throw here used to skip the storage re-read
-          // below entirely — and the outer `.catch` then reported the clear
-          // failed while `ui.rejected` kept the *pre-clear* list for the rest
-          // of the session: chips showing the reduced counts, the plan still
-          // skipping codes the store no longer refuses. `renderRun` is the
-          // named thrower (it walks a `chrome.storage.session` state an older
-          // build may have written), and drawing the run is not what this click
-          // was about. The next broadcast or GET_STATE redraws it.
-        }
-      }
-      // Cleared before this read, not in `finish()`: the suppression is there
-      // to stop *other* readers judging a clear that has not been answered yet,
-      // and this is the read that is entitled to judge it.
-      clearInFlight = false;
-      return reloadRejected();
-    })
-    .then((result) => {
-      // An unreadable store is the one outcome that owes the user an answer at
-      // the moment of the click: nothing has been read, so nothing can be
-      // rendered, and staying silent left the button flipping back to "try them
-      // again" with the counts unchanged — and the warning it should have
-      // produced surfacing minutes later, attached to a finished run.
-      if (!result.ok && result.reason === 'unreadable') {
-        ui.clearFailed = true;
-        renderRejectedNote();
-      }
-      // Superseded means a later read is already authoritative — it has stored
-      // its own answer and rendered from it, so there is nothing to draw here.
-      if (result.ok) {
-        // Chips and the company list carry the count too, so `refreshPlan`
-        // alone would leave them showing the reduced numbers after putting the
-        // codes back.
-        renderVendorChips();
-        renderCompanyList();
-        refreshPlan();
-      }
-      finish();
+  // Written from here, directly. It went through the service worker for a
+  // while, so that both writers shared one serialised queue and a clear could
+  // not land between an in-flight `recordRejected`'s read and its write. That
+  // race is real and it is not worth what it cost: the window is one run
+  // settling a refusal at the moment the button is pressed, the consequence is
+  // that some refusals come back, and pressing again fixes it. The machinery
+  // for it — a message round trip, a write queue with per-link bounds, and
+  // eight interacting flags in this file — generated far more bugs than the
+  // race ever could, and every one of them was reachable in ordinary use.
+  void clearRejected(chrome.storage.local)
+    // Through `reloadRejected` like the other two readers, so a run finishing
+    // at this moment cannot leave the popup holding the pre-clear list.
+    .then(() => reloadRejected())
+    .then((entries) => {
+      if (!entries) return;
+      // Chips and the company list carry the count too, so `refreshPlan` alone
+      // would leave them showing the reduced numbers after putting the codes
+      // back.
+      renderVendorChips();
+      renderCompanyList();
+      refreshPlan();
     })
     .catch(() => {
-      // A throw anywhere above skips the renders and leaves the popup on its
-      // pre-clear counts, reported as an unhandled rejection with no message.
-      // `applyReply` is the reachable thrower: the state it renders comes from
-      // `chrome.storage.session`, which an older build may have written, and
-      // `renderRun` walks it unguarded.
-      ui.clearFailed = true;
-      renderRejectedNote();
-      finish();
+      // `clearRejected` swallows its own storage failure, so the reachable
+      // thrower is a render. Leaving the counts as they are is the honest
+      // outcome; the next open re-reads them.
     });
 });
 
@@ -1765,14 +1496,12 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
     // leaves B's codes excluded from the counts until the popup is reopened.
     const before = rejectionSet(ui.rejected);
     void reloadRejected()
-      .then((result) => {
+      .then((entries) => {
         // Superseded: a clear the user pressed in the meantime has already
         // stored its answer, and this read predates it — applying it would put
-        // the codes they just cleared back into the counts. Unreadable: there
-        // is nothing to apply and nothing this listener owes the user, since it
-        // is reacting to a run rather than to something they pressed.
-        if (!result.ok) return;
-        const after = rejectionSet(result.entries);
+        // the codes they just cleared back into the counts.
+        if (!entries) return;
+        const after = rejectionSet(entries);
         const changed = before.size !== after.size || [...after].some((key) => !before.has(key));
         // Before boot has established a selection there is nothing to preserve and
         // no selection to draw: `restoreForm` and `setCategory` have not run, so
@@ -1801,12 +1530,6 @@ chrome.runtime.onMessage.addListener((message: StateMessage) => {
         // that stops the counts updating with no message and nothing to tell it
         // apart from "no refusals changed". The clear path carries a `.catch` for
         // the same reason.
-        //
-        // It does not touch `ui.clearFailed`. That flag is derived from (what
-        // was asked to clear, what is stored) inside `reloadRejected`
-        // everywhere else, and assigning it here — the one site outside that
-        // derivation — erased a *true* "not cleared yet" whenever a render
-        // threw after a genuinely failed clear. Redrawing the note is the job.
         renderRejectedNote();
       });
   }

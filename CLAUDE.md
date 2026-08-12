@@ -356,39 +356,26 @@ quietly retire a working code, permanently and invisibly. Only the vendor's own
 words are durable enough to act on, and the popup says how many codes are being
 skipped and offers to try them again.
 
-**Every write to that store goes through one queue in the service worker, and
-that is the branch's most load-bearing invariant.** `recordRejected` is
-read-modify-write and `chrome.storage` offers no atomicity, so two refusals
-settling inside one `get` round trip both read the same list and the second
-`set` drops the first — the exact bug the store exists to prevent, and reachable
-the moment a second driven vendor makes two lanes able to refuse at once.
-`serialise` in `rejected-codes.ts` orders them, bounds each link so a
-`chrome.storage` call that never settles cannot wedge the queue for the life of
-the worker, and refuses a write from a link the queue has already abandoned —
-because abandoning is not cancelling, and a body that wakes up holding a stale
-list would undo whatever ran while it slept.
+**The store is written directly, from both sides, and that is a deliberate
+retreat.** `recordRejected` is read-modify-write with no atomicity underneath
+it, so two refusals settling inside one `get` round trip can lose one, and a
+clear written from the popup can land between a worker write's read and its
+write. Both are real. Both were fixed, for a while, with a serialised write
+queue, a `CLEAR_REJECTED` message round trip, bounded waits on either side, and
+eight interacting flags in the popup — and that machinery generated far more
+user-visible bugs, over twenty review rounds, than the races it closed ever
+could have. The cost of the races is bounded and small: a refusal is missed, a
+code is raced once more, one wasted tab. The cost of the machinery was not.
 
-That queue orders **one realm**, which is why **"try them again" is a
-`CLEAR_REJECTED` message rather than a `storage.set` in the popup**. The popup
-and the worker each get their own copy of the module, so a clear written from
-the popup lands between the worker's read and its write and is undone by it:
-every refusal the user asked to forget comes back, invisibly, because the popup
-has already emptied its own copy and looks right until it is next opened.
-Routing it through the worker makes both writers the same realm. A future change
-that "simplifies" this back into a direct write reintroduces exactly that.
+What survives from it is the one part that prevents actual data loss:
+`readRejected` distinguishes an unreadable store from an empty one, so a
+transient `storage.get` failure cannot make `recordRejected` write a
+single-entry list over everything the vendors have already refused. That is ten
+lines and no state.
 
-Two orderings are knowingly left open, both needing a `set` slower than the
-per-link bound: an abandoned record whose `set` was already issued can still
-land after a clear, and an abandoned clear can land after a later refusal.
-Closing either needs a compare-and-swap `chrome.storage` does not offer, or a
-compensating write with its own orderings to get wrong.
-
-The popup's own recovery from a clear that landed late is **reopening it**, not
-a timer. A 31s `setTimeout` used to do that job and could not: a browser-action
-popup is destroyed the moment it loses focus, taking its timers with it, so in
-ordinary use it never fired. `main()` re-reading storage is the mechanism, and
-`clearAttempt` living only in memory is what stops the "not cleared yet" message
-outliving the list it was about.
+If those races ever need closing again, close them where they are cheap — a
+per-vendor lane cap already exists and makes the two-lane case unreachable —
+rather than by ordering every write in the extension.
 
 Driving the form is the answer for Enterprise, and the shape of it is now
 measured rather than guessed. **The three sentences that used to sit here were
