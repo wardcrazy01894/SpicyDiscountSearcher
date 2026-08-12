@@ -85,6 +85,17 @@ Then type defensively anyway. A marker narrows the race, it does not close it,
 and one event into a component that is not listening leaves nothing to wait for
 — so re-apply the value while the thing you expect has not appeared.
 
+**That paragraph has now been ignored once, at a cost.** Enterprise's driver
+picked a good marker and then typed with a bare `waitFor`, and its first live run
+failed at exactly the step above — the user's report was that it was "failing to
+select the location". A good marker made the second half feel unnecessary; it is
+not, because the two guard different things. The marker says the widget rendered;
+nothing says it has finished binding handlers, and `#cid` is a different
+component from the location field in any case. Enterprise is the sharper version
+of National's lesson rather than an exception to it: grepping its served
+`/en/reserve.html` finds **zero `<input>` elements at all**, so every field is
+widget-built and every one of them is subject to this race.
+
 **Test in a hidden tab.** Probe tabs live in a minimised window, so
 `setTimeout` is throttled to roughly once a second: a 250 ms poll costs 1 s of
 budget. Open the page, switch to another tab, and drive it from there. National's

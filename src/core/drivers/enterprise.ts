@@ -4,6 +4,7 @@ import {
   type DriveContext,
   type FormDriver,
   hasToken,
+  nudgeInput,
   POLL_MS,
   setNativeValue,
   textOf,
@@ -127,6 +128,52 @@ export async function awaitHydration(ctx: DriveContext): Promise<HTMLInputElemen
   );
 }
 
+/** The dropdown the autocomplete renders its suggestions into. */
+const LOCATION_MENU = '[class*="location-dropdown"]';
+/** Whatever the menu offers. Buttons on the measured form; the rest are hedges. */
+const LOCATION_OPTION = 'button, [role="option"], li';
+
+/**
+ * What the page looked like when the location step ran out of time.
+ *
+ * Facts, never a verdict — ported from `national.ts`, where the same timeout was
+ * diagnosed wrongly twice from the outside before it carried any evidence. This
+ * driver arrived without it and immediately cost a live run the same way: a user
+ * reported Enterprise "failing to select the location" and the message said only
+ * that it had, which is consistent with a lost keystroke, a menu that answered
+ * with nothing, a field the widget cleared, and a click that selected nothing.
+ *
+ * These are the observations that separate those: a field that lost its value
+ * means the widget cleared it, a menu present with no options means the lookup
+ * ran and returned nothing, and no menu at all after several nudges means the
+ * events are not reaching the component.
+ *
+ * `widget` reports `#cid` rather than the location field because **the whole
+ * form is widget-built** — measured 2026-08-12 by fetching `/en/reserve.html`
+ * and counting `<input>` in the served HTML, of which there are *none*. So the
+ * location input existing is already proof the widget rendered, and `#cid`
+ * disappearing mid-step means it has since torn that render down.
+ */
+function autocompleteState(
+  ctx: DriveContext,
+  field: HTMLInputElement,
+  iata: string,
+  nudges: number,
+  elapsed: number,
+): string {
+  const menu = ctx.doc.querySelector(LOCATION_MENU);
+  return [
+    `field=${field.value === iata ? 'held' : JSON.stringify(field.value)}`,
+    `connected=${field.isConnected}`,
+    `menu=${menu ? 'present' : 'absent'}`,
+    `options=${menu ? menu.querySelectorAll(LOCATION_OPTION).length : 0}`,
+    `fields=${ctx.doc.querySelectorAll('input[name="location-search"]').length}`,
+    `widget=${ctx.doc.querySelector('#cid') ? 'present' : 'absent'}`,
+    `nudges=${nudges}`,
+    `waited=${Math.round(elapsed / 1000)}s`,
+  ].join(' ');
+}
+
 /**
  * Type the airport and take the autocomplete's own suggestion.
  *
@@ -140,6 +187,18 @@ export async function awaitHydration(ctx: DriveContext): Promise<HTMLInputElemen
  * the location we wanted". Enterprise is a session-state site, so the field can
  * arrive already carrying somebody's previous search, and an unverified fill
  * would silently price it.
+ *
+ * **The keystroke is retried, and that is the half this shipped without.** The
+ * first live run of this driver failed here. `awaitHydration` returning is not
+ * proof the location component is *listening* — it waits for `#cid`, and a
+ * widget that has rendered its inputs may still be wiring their handlers — so a
+ * single `input` event can land on nothing, leave no menu to wait for, and burn
+ * the whole budget. National met exactly this and fixed it the same way: focus
+ * the field, and re-announce the value periodically rather than assume the first
+ * event was heard. The retry never clears the field — a missing value is set
+ * (the component wiped it) and an intact one is only nudged, which leaves a
+ * lookup in flight alone. Clearing and retyping is what broke every live run on
+ * National; see `RETRY_INTERVAL_MS`.
  */
 export async function fillLocation(ctx: DriveContext): Promise<void> {
   const trip = carTrip(ctx);
@@ -167,17 +226,48 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
   const pickup = fields[0];
   if (!pickup) throw new DriverError('form-fill', 'no location field on the reservation form');
 
+  pickup.focus();
   setNativeValue(pickup, iata);
 
   // The dropdown lives in a `location-dropdown__*` container and its options are
   // buttons. Scoped to that container on purpose: a document-wide button search
   // for the airport code also matches nav and footer links on a page that
   // happens to mention the city.
-  const option = await waitFor(ctx, `the autocomplete to offer ${iata}`, () => {
-    const menu = ctx.doc.querySelector('[class*="location-dropdown"]');
-    if (!menu) return null;
-    const buttons = [...menu.querySelectorAll<HTMLElement>('button, [role="option"], li')];
-    return buttons.find((el) => hasToken(textOf(el), iata)) ?? null;
+  let nudges = 0;
+  const startedAt = ctx.now();
+  const option = await waitWithRetry(
+    ctx,
+    `the autocomplete to offer ${iata}`,
+    () => {
+      const menu = ctx.doc.querySelector(LOCATION_MENU);
+      if (!menu) return null;
+      const offered = [...menu.querySelectorAll<HTMLElement>(LOCATION_OPTION)];
+      // Offered something, just not ours. The timeout message already names the
+      // code that was never offered, and nudging a component that has plainly
+      // heard us would only thrash the lookup.
+      if (offered.length > 0) return offered.find((el) => hasToken(textOf(el), iata)) ?? null;
+      return null;
+    },
+    () => {
+      nudges += 1;
+      // Re-query rather than reuse `pickup`: this form is entirely widget-built,
+      // so a re-render can swap the input out from under us, and nudging the
+      // detached node would announce the value to nothing forever.
+      const live =
+        ctx.doc.querySelectorAll<HTMLInputElement>('input[name="location-search"]')[0] ?? pickup;
+      if (live.value === iata) nudgeInput(live);
+      else setNativeValue(live, iata);
+    },
+  ).catch((error: unknown) => {
+    // Enriched rather than re-worded. Everything here is something only the
+    // failing page can report, and the popup keeps the raw message in a tooltip
+    // — so the next failure arrives as evidence rather than as another round of
+    // guessing about a tab nobody can inspect.
+    if (!(error instanceof DriverError)) throw error;
+    throw new DriverError(
+      error.failure,
+      `${error.message} (${autocompleteState(ctx, pickup, iata, nudges, ctx.now() - startedAt)})`,
+    );
   });
 
   // The branch name is everything before the airport code — "Tampa
@@ -200,8 +290,24 @@ export async function fillLocation(ctx: DriveContext): Promise<void> {
     // difference between verifying a selection and verifying that a dropdown
     // once opened. The proof is the name rendered somewhere the menu is not:
     // the form shows the chosen branch as a chip beside the field.
-    const menu = ctx.doc.querySelector('[class*="location-dropdown"]');
+    const menu = ctx.doc.querySelector(LOCATION_MENU);
     return textOutside(ctx.doc.body, menu).includes(expected) || null;
+  }).catch((error: unknown) => {
+    // The click landing on nothing is a *different* failure from the menu never
+    // opening, and until this catch existed the two were equally silent. The
+    // facts that separate them: a menu still open means the click did not even
+    // dismiss it, and the expected name being absent from the whole document —
+    // menu included — means the suggestion itself went away rather than failing
+    // to be promoted into a chip.
+    if (!(error instanceof DriverError)) throw error;
+    const menu = ctx.doc.querySelector(LOCATION_MENU);
+    const state = [
+      `expected=${JSON.stringify(expected)}`,
+      `menu=${menu ? 'still-open' : 'closed'}`,
+      `anywhere=${textOutside(ctx.doc.body, null).includes(expected)}`,
+      `field=${JSON.stringify(pickup.value)}`,
+    ].join(' ');
+    throw new DriverError(error.failure, `${error.message} (${state})`);
   });
 }
 

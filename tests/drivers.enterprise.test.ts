@@ -59,6 +59,16 @@ interface FormOptions {
   hydrated?: boolean;
   /** What the autocomplete offers when typed into. */
   suggestion?: string | null;
+  /**
+   * How many `input` events the location component ignores before it listens.
+   *
+   * Models the live failure this driver shipped with. `awaitHydration` waits for
+   * `#cid`, and a widget that has *rendered* its inputs may not yet have bound
+   * their handlers — so the driver's keystroke lands on nothing. Deliberately a
+   * silent drop rather than an error: there is no menu, no options and nothing
+   * to wait for, which is exactly why a bare `waitFor` burned the whole budget.
+   */
+  deafInputs?: number;
   /** What "Browse Vehicles" does. */
   onSubmit?: 'results' | 'rejected' | 'nothing';
   /** Model a controlled input that refuses the value written to it. */
@@ -308,7 +318,14 @@ function renderForm(options: FormOptions = {}): void {
   // The autocomplete: opens on `input`, offers a button, and on selection
   // closes itself and renders the branch as a chip beside the field — which is
   // what the driver verifies against.
+  let deaf = options.deafInputs ?? 0;
   location.addEventListener('input', () => {
+    // Not even the menu is cleared while deaf — the handler is not bound yet, so
+    // the event reaches nothing at all.
+    if (deaf > 0) {
+      deaf -= 1;
+      return;
+    }
     menu.replaceChildren();
     if (!location.value || !suggestion) return;
     const option = document.createElement('button');
@@ -473,6 +490,41 @@ describe('fillLocation', () => {
     const error = await failureOf(fillLocation(context));
     expect(error.failure).toBe('form-fill');
     expect(form.textContent).not.toContain('Tampa International');
+    // And it says *why* it looks like this, rather than only that it timed out.
+    // A menu still open means the click did not even dismiss it, and the name
+    // being present somewhere separates "the suggestion vanished" from "it was
+    // never promoted into a chip".
+    expect(error.message).toContain('menu=still-open');
+    expect(error.message).toContain('anywhere=true');
+  });
+
+  it('recovers a keystroke the location component was not yet listening for', async () => {
+    // The live failure of 2026-08-12: Enterprise reported "failing to select the
+    // location". `#cid` existing does not prove the location component has bound
+    // its handlers, so the first `input` event lands on nothing — and with no
+    // menu there is nothing for a bare `waitFor` to wait on. Deleting either the
+    // retry or `nudgeInput` from `fillLocation` fails this.
+    renderForm({ deafInputs: 1 });
+    await fillLocation(makeContext());
+    expect(document.querySelector('.location-field')!.textContent).toContain(
+      'Tampa International Airport',
+    );
+  });
+
+  it('reports what the page was doing when the autocomplete never answered', async () => {
+    // The diagnostics are the point of the change, not decoration: this exact
+    // timeout was reported from a live run and could not be told apart from a
+    // lost keystroke, a cleared field or an empty lookup. `menu=present
+    // options=0` is the signature of the lookup running and returning nothing,
+    // which is what this fixture models.
+    renderForm({ suggestion: null });
+    const error = await failureOf(fillLocation(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toContain('field=held');
+    expect(error.message).toContain('menu=present');
+    expect(error.message).toContain('options=0');
+    expect(error.message).toContain('widget=present');
+    expect(error.message).toMatch(/nudges=[1-9]/);
   });
 
   it('refuses a one-way trip rather than driving an unmeasured field', async () => {
