@@ -61,8 +61,8 @@ else.
   every PR meant a rebuild and a stale cache looked identical, and a live test
   cannot be trusted when you cannot tell which code answered.
 
-- **Run `npm run verify` before opening a PR.** It is the whole node side of CI
-  in one command — typecheck, eslint, `prettier --check`, vitest, **all three**
+- **Run `npm run verify` before every push, not only before opening a PR.** It
+  is the whole node side of CI in one command — typecheck, eslint, `prettier --check`, vitest, **all three**
   builds, `check-dist`, and `npm audit --audit-level=moderate`. Added on
   2026-08-12 because PR #65 failed the
   `build / typecheck / lint` job **twice** on things a local run would have
@@ -91,9 +91,36 @@ else.
   node-only change should not have to have installed.
 
   A `PreToolUse` hook in `.claude/settings.json` runs `verify` and refuses
-  `gh pr create` if it fails, so this rule does not depend on anybody
-  remembering it. `scripts/pre-pr-verify.sh` is the script; it exits silently
-  for every command that is not a PR creation.
+  `gh pr create` **and `git push`** if it fails, so this rule does not depend
+  on anybody remembering it. `scripts/pre-pr-verify.sh` is the script; it exits
+  silently for every command that is neither. The push half was added on
+  2026-10-26 because the #65 mistake came back through the other door: #76 was
+  already open, a follow-up commit was checked with eslint and vitest by hand,
+  typecheck never ran, and the push turned CI red on a TS2345 that `tsc`
+  reports in seconds. A gate on PR creation says nothing about the pushes that
+  follow it, and those are most of a PR's life.
+
+  Pushes from a terminal get the same gate from `.githooks/pre-push`, which
+  `npm run prepare` (and therefore `npm ci` / `npm install`) points
+  `core.hooksPath` at through `scripts/install-hooks.sh` — which refuses to
+  clobber a hooks path somebody set on purpose, and says so. The hook is
+  judged by `verify`'s exit code alone and never bypassed with `--no-verify`:
+  if `verify` is wrong, fix `verify`. Three things about it are deliberate:
+
+  - **It refuses a dirty tree rather than verifying it.** What `verify` checks
+    is the working tree, and the working tree has to _be_ the commits going
+    out — a fix made in the editor and not committed would pass here and fail
+    in CI, which is the incident above through a different door. Commit or
+    stash, then push.
+  - **Claude's gate hands off to it**, so one push is not two identical
+    builds. The PreToolUse hook leaves a stamp in the git dir naming the HEAD
+    it verified; the git hook honours it once, for that HEAD, for three
+    minutes, and otherwise runs `verify` itself.
+  - A push that only deletes refs carries nothing to check and is let through
+    by both gates.
+
+  Branches that predate the hook have no `.githooks/` and git runs nothing for
+  them, silently; rebase onto `main` and the gate is back.
 
   Three things about that script are load-bearing, all found by reviewing #66
   after it had already merged:

@@ -43,6 +43,24 @@ updates:
       # and an ignore added now would swallow a 6.1 bump that had become fine.
       - dependency-name: typescript
         versions: ['7.x']
+      # @types/node tracks the LOWEST Node this repo runs on, not the newest.
+      # What `tsc` accepts is decided by the installed typings major, and the
+      # runtime it must not exceed is the lowest leg of ci.yml's test matrix
+      # (22 today, which `engines` also admits): typings from a newer major
+      # would let a Node-26-only API through typecheck to fail at runtime on
+      # the 22 leg, with nothing in the toolchain saying why. Dependabot
+      # offered 26.4.0 as #72 and 26.6.5 as #79 (2026-10-26) with every gate
+      # green; both closed for this reason, and `tests/manifest.test.ts` pins
+      # the installed typings major to the engines floor and the matrix floor
+      # so the rule does not depend on anyone reading this. When the floor
+      # moves, bump the typings with it and KEEP this entry -- it only stops
+      # earning its keep when the floor is the newest Node major, which is
+      # when there is nothing left to ignore. One cost, accepted the same way
+      # the typescript entry accepts it: an ignore also suppresses Dependabot's
+      # security updates, so an advisory fixed only in a newer @types/node
+      # major would surface as a red `npm audit` rather than as a PR.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 3
 
   - package-ecosystem: github-actions
