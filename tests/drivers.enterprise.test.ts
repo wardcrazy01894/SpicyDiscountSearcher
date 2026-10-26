@@ -116,6 +116,8 @@ interface FormOptions {
    * as a closing animation would, instead of unmounting on the click.
    */
   pickupCalendarLingers?: boolean;
+  /** Render month headers in a form `monthKey` cannot read ("Aug 2026"). */
+  shortMonthHeaders?: boolean;
   /** Dates rendered disabled in every grid — the vendor refusing a day. */
   disabledDates?: string[];
   /** Time dropdown options. Defaults to the half-hourly list, bare-hour form. */
@@ -258,7 +260,9 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
       back.setAttribute('aria-label', 'Previous Month');
       const header = document.createElement('span');
       header.className = 'calendar-control-header';
-      header.textContent = `${MONTH_NAMES[month]} ${year}`;
+      header.textContent = options.shortMonthHeaders
+        ? `${MONTH_NAMES[month]!.slice(0, 3)} ${year}`
+        : `${MONTH_NAMES[month]} ${year}`;
       const forward = document.createElement('button');
       forward.className = 'cta calendar-control-arrow arrow-right';
       forward.setAttribute('aria-label', 'Next Month');
@@ -891,6 +895,21 @@ describe('applyDates when the pick-up calendar lingers', () => {
       document.querySelector(toggle)?.getAttribute('aria-label') ?? '';
     expect(label('#pickupCalendarFocusable')).toContain('09/04/2026');
     expect(label('#dropoffCalendarFocusable')).toContain('09/06/2026');
+  });
+});
+
+describe('clickDay with unreadable month headers', () => {
+  it('fails quickly and says what the headers held', async () => {
+    // A renamed or reformatted header used to be waited on until the deadline
+    // and reported as "timed out reaching", which says nothing about why.
+    renderForm({ firstMonth: [2026, 6], shortMonthHeaders: true });
+    const trip = { ...TRIP, pickupDate: '2026-10-05', dropoffDate: '2026-10-07' };
+    const ctx = makeContext({ trip, deadline: 60_000 });
+    const error = await failureOf(applyDates(ctx));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/no readable month header/);
+    expect(error.message).toContain('Jul 2026');
+    expect(ctx.now()).toBeLessThan(10_000);
   });
 });
 

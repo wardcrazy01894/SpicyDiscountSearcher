@@ -132,6 +132,19 @@ const VERIFY_TRIP = new Set<string>(['avis']);
 const DRIVE_SHARE = 0.6;
 
 /**
+ * How much of the budget the results check may run into.
+ *
+ * Separate from the drive's share because it starts where the drive ended: a
+ * 40s hydration plus the fill leaves `verifyResults` a few seconds of the
+ * drive's 0.6, in a tab that has just been minimised and polls about once a
+ * second — and a results page that was slow to list its cars, or to name its
+ * account, then fails `form-submit` or `discount-missing` with half the real
+ * budget unused. What remains after this share is for reading prices, which
+ * on a page that has reached results is quick.
+ */
+const VERIFY_SHARE = 0.85;
+
+/**
  * Fill and submit the vendor's own search form, for vendors that need it.
  *
  * Live for National and Enterprise; `FORM_DRIVERS` decides. Returns the failure
@@ -170,7 +183,10 @@ async function driveForm(
   };
   try {
     if (location.pathname === driver.startPath) await driver.drive(context);
-    await driver.verifyResults(context);
+    await driver.verifyResults({
+      ...context,
+      deadline: start + assignment.timeoutMs * VERIFY_SHARE,
+    });
     return null;
   } catch (error) {
     if (error instanceof DriverError) return { failure: error.failure, message: error.message };

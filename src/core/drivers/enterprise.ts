@@ -8,6 +8,7 @@ import {
   setNativeValue,
   textOf,
   textOutside,
+  visibleText,
   waitFor,
   waitForSettled,
   waitWithRetry,
@@ -70,7 +71,10 @@ import type { CarTrip } from '../types.js';
  * run from a loaded build, in the extension's own probe tab — raised on
  * screen by the paint hold for the drive, as `needsPaintedWindow` requires,
  * and minimised again before `verifyResults` ran — and returned a priced
- * results page in about ten seconds. The three
+ * results page in about ten seconds. Once more with the browser's own window
+ * maximised, since the hold raises the probe window *unfocused* and a window
+ * fully behind a maximised one might be occluded rather than painted: it
+ * priced the same. The three
  * outcomes `submitSearch` distinguishes were each produced live too: IBM's
  * `5666666` priced, an empty code priced with no account named, and
  * Accenture's `XZ15J55` refused with the sentence `REJECTED_RE` matches.
@@ -535,6 +539,13 @@ const MONTH_NAMES = [
 const MAX_MONTH_STEPS = 24;
 
 /**
+ * Consecutive polls with no readable month header before giving up on the
+ * calendar. Two seconds in a painted tab, about eight in a throttled one —
+ * long enough for a grid mid-redraw, far short of the budget.
+ */
+const UNREADABLE_HEADER_POLLS = 8;
+
+/**
  * Enterprise's own name for a day: `08/13/2026` from `2026-08-13`.
  *
  * Exported for the tests, which pin the conversion rather than the calendar —
@@ -645,6 +656,11 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
   // spent waiting, and counting those against a two-year page budget would
   // exhaust it on a trip eight months out. The deadline bounds the waiting.
   let paged = 0;
+  // Polls in a row on which no month header could be read. A calendar whose
+  // headers Enterprise has renamed or reformatted would otherwise be waited
+  // on until the deadline and reported as "timed out reaching", which says
+  // nothing about why; this says what the headers held.
+  let unreadable = 0;
 
   for (;;) {
     const cell = dayCell(ctx, id);
@@ -653,6 +669,20 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
       return;
     }
     const shown = shownMonths(ctx);
+    if (shown.length === 0) {
+      unreadable += 1;
+      if (unreadable >= UNREADABLE_HEADER_POLLS) {
+        const seen = [...ctx.doc.querySelectorAll<HTMLElement>(MONTH_HEADER)]
+          .map((el) => JSON.stringify(textOf(el).slice(0, 40)))
+          .join(',');
+        throw new DriverError(
+          'form-fill',
+          `enterprise's calendar shows no readable month header (headers=${seen || 'none'}), so it cannot be paged to ${id}`,
+        );
+      }
+    } else {
+      unreadable = 0;
+    }
     if (dayPresent(ctx, id) && shown.includes(want)) {
       // Dead in every grid *and its own month is on screen*: the vendor's
       // answer, not a paging problem. Enterprise disables dates in the past and
@@ -936,7 +966,10 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
     ctx,
     'Enterprise to answer the search',
     () => {
-      if (REJECTED_RE.test(textOf(ctx.doc.body))) {
+      // `visibleText`, not `textOf`: the latter prefers `innerText`, which
+      // forces style and layout of the whole document on every poll — in the
+      // one tab that is painted, while Enterprise is rendering its cards.
+      if (REJECTED_RE.test(visibleText(ctx.doc.body))) {
         throw new DriverError(
           'code-rejected',
           'Enterprise says this account number cannot be used online',

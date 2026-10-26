@@ -139,11 +139,6 @@ interface ActiveRun {
   /** In-flight window creation, so concurrent lanes share one window. */
   windowPromise: Promise<number> | null;
   /**
-   * The window `closeWindow` is in the middle of removing, so the
-   * `windows.onRemoved` that follows is recognised as ours and not the user's.
-   */
-  closingWindow: number | null;
-  /**
    * Quotes whose vendor needs a painted window and whose form has not mounted.
    *
    * The window is visible while this is non-empty and minimised the moment it
@@ -670,7 +665,6 @@ async function closeWindow(run: ActiveRun): Promise<void> {
   run.windowPromise = null;
   const closing = run.windowId;
   if (closing !== null) {
-    run.closingWindow = closing;
     try {
       await chrome.windows.remove(closing);
     } catch (error) {
@@ -1059,7 +1053,6 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
-    closingWindow: null,
     cancelled: false,
     waiters: new Map(),
     vendorInFlight: new Map(),
@@ -1455,10 +1448,16 @@ void reapOrphanWindow();
 // put a window the user had just closed straight back on their screen; the
 // state this replaces was worse still, a stale id on which every remaining
 // `tabs.create` failed `tab-open`. Our own teardown closes the same window and
-// fires the same event, which `closingWindow` tells apart from the user.
+// fires the same event; both callers of `closeWindow` have already marked the
+// run finished or cancelled by then, which is the guard.
+//
+// Chrome dispatches `tabs.onRemoved` for the window's tabs before this fires,
+// so a lane freed by a `tab-closed` settle can resume and attempt one
+// `tabs.create` against the dead id first; that quote reports `tab-open`
+// rather than `cancelled`. A label, not a leak — the run still stops here.
 chrome.windows.onRemoved.addListener((windowId) => {
   const run = active;
-  if (!run || run.windowId !== windowId || run.closingWindow === windowId) return;
+  if (!run || run.windowId !== windowId) return;
   if (run.cancelled || run.state.finishedAt !== undefined) return;
   run.windowId = null;
   run.windowPromise = null;

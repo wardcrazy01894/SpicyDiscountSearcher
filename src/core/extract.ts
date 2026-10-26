@@ -880,7 +880,14 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
   // trusts and the caller has to be able to weigh them differently.
   if (!doc.body) return { offers: [], path: 'body-fallback' };
   const swept = extractFrom(doc.body, config);
-  return { offers: swept.offers, path: 'body-fallback' };
+  // `body-fallback` means the sweep ran over the whole body because nothing
+  // narrower matched. A body pass that read the vendor's own cards — possible
+  // now that a vendor carries an `offer` selector — did not sweep anything,
+  // and saying it did would send the next reader to the wrong branch.
+  return {
+    offers: swept.offers,
+    path: swept.path === 'vendor-selectors' ? swept.path : 'body-fallback',
+  };
 }
 
 function extractFrom(root: Element, config: VendorSelectors): Extraction {
