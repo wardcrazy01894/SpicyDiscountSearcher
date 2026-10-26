@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# Pre-push hook: nothing leaves this machine until `npm run verify` passes.
+#
+# The same gate `scripts/pre-pr-verify.sh` applies to Claude's `git push`, for
+# pushes made from a terminal. `npm run prepare` points `core.hooksPath` here
+# (through scripts/install-hooks.sh), so `npm ci` / `npm install` wires it up
+# with nothing copied into .git.
+#
+# Why: on 2026-10-26 a commit checked with eslint and vitest by hand — never
+# `tsc` — was pushed to an open PR and turned CI red on a TS2345 that typecheck
+# reports in seconds. CI is the backstop, not the first place a mistake should
+# be seen. Do not bypass with `--no-verify`; fix the tree, or if `verify`
+# itself is wrong, fix `verify`.
+#
+# Judged by exit code alone. The whole point of `verify` is that there is no
+# list of checks to pick from, and no filtered output to misread.
+#
+# What it verifies is the working tree, so the working tree has to *be* the
+# commits going out: a dirty tree is refused rather than verified, because a
+# fix made in the editor and not committed would pass here and fail in CI —
+# the very incident above, through a different door.
+
+set -euo pipefail
+
+# git runs a hook with GIT_DIR (and friends) in its environment, pointing at
+# this repository. Everything `verify` spawns would inherit them — and the
+# gate's own tests run `git init` in temp directories, which with GIT_DIR set
+# re-initialises *this* repository as bare and commits the fixture onto the
+# branch being pushed. Measured 2026-10-26, the first time this hook fired.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
+
+# Pushes that delete refs only carry no tree to verify. git hands each ref on
+# stdin as `<local ref> <local sha> <remote ref> <remote sha>`; a local sha of
+# all zeros is a deletion.
+pushing_commits=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  case "$local_sha" in
+  0000000000000000000000000000000000000000) ;;
+  *) pushing_commits=1 ;;
+  esac
+done
+if [ "$pushing_commits" -eq 0 ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "pre-push: the working tree has uncommitted changes to tracked files, so verifying it would not verify what is being pushed. Commit or stash them, then push again." >&2
+  exit 1
+fi
+
+# Claude's PreToolUse hook has just verified this same HEAD, clean, moments
+# ago: it leaves a stamp in the git dir, honoured only for that HEAD and for a
+# few minutes, so one push is not two identical builds.
+git_dir=$(git rev-parse --git-dir)
+stamp="$git_dir/spicy-verified"
+head=$(git rev-parse HEAD)
+if [ -f "$stamp" ]; then
+  read -r stamped_head stamped_at <"$stamp" || true
+  now=$(date +%s)
+  if [ "${stamped_head:-}" = "$head" ] && [ $((now - ${stamped_at:-0})) -le 180 ]; then
+    rm -f "$stamp"
+    exit 0
+  fi
+  rm -f "$stamp"
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "pre-push: npm is not on PATH, so npm run verify cannot run. Refusing the push." >&2
+  exit 1
+fi
+
+echo "pre-push: running npm run verify in $root ..." >&2
+if ! npm run verify; then
+  echo >&2
+  echo "pre-push: npm run verify failed; the push was refused. Fix the tree and push again." >&2
+  exit 1
+fi
