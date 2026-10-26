@@ -88,6 +88,8 @@ export interface ChromeHarness {
   fromTab: (tabId: number, message: unknown) => Promise<unknown>;
   /** Simulate the user closing a tab. */
   userClosesTab: (tabId: number) => void;
+  /** The user closes the run's window — a real, visible one now — by hand. */
+  userClosesWindow: (windowId: number) => void;
   /** Make the next `storage.session.set` reject, once. */
   failNextSessionWrite: () => void;
   /**
@@ -116,6 +118,7 @@ export interface ChromeHarness {
 export function installChromeMock(): ChromeHarness {
   const messageListeners: MessageListener[] = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  const windowRemovedListeners: Array<(windowId: number) => void> = [];
   const tabs = new Map<number, FakeTab>();
   const windows = new Set<number>();
   const windowsCreated: number[] = [];
@@ -144,6 +147,18 @@ export function installChromeMock(): ChromeHarness {
 
   const fireRemoved = (tabId: number): void => {
     for (const listener of [...tabRemovedListeners]) listener(tabId);
+  };
+  // Chrome fires this for a window closed by anyone, the extension included,
+  // after the window's own tabs have been torn down.
+  const removeWindow = (windowId: number): void => {
+    windows.delete(windowId);
+    for (const [id, tab] of [...tabs]) {
+      if (tab.windowId === windowId) {
+        tabs.delete(id);
+        fireRemoved(id);
+      }
+    }
+    for (const listener of [...windowRemovedListeners]) listener(windowId);
   };
 
   const fakeChrome = {
@@ -272,15 +287,11 @@ export function installChromeMock(): ChromeHarness {
       },
       remove: (windowId: number) => {
         if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));
-        windows.delete(windowId);
-        // Chrome tears down the window's tabs with it.
-        for (const [id, tab] of [...tabs]) {
-          if (tab.windowId === windowId) {
-            tabs.delete(id);
-            fireRemoved(id);
-          }
-        }
+        removeWindow(windowId);
         return Promise.resolve();
+      },
+      onRemoved: {
+        addListener: (fn: (windowId: number) => void) => windowRemovedListeners.push(fn),
       },
     },
   };
@@ -320,6 +331,9 @@ export function installChromeMock(): ChromeHarness {
     userClosesTab: (tabId) => {
       tabs.delete(tabId);
       fireRemoved(tabId);
+    },
+    userClosesWindow: (windowId) => {
+      if (windows.has(windowId)) removeWindow(windowId);
     },
     failNextSessionWrite: () => {
       failSessionWrite = true;

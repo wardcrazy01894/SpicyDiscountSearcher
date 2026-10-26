@@ -105,6 +105,17 @@ interface FormOptions {
    * whether the day's month is on screen fails every trip starting there.
    */
   spilloverInSecondPanel?: boolean;
+  /**
+   * Model a grid that repaints a moment after an arrow is clicked rather than
+   * synchronously — a React re-render against a 250ms poll. The next poll sees
+   * the old months, and a driver that clicks again on every poll overshoots.
+   */
+  slowPaging?: boolean;
+  /**
+   * Model the pick-up calendar lingering mounted for a moment after the pick,
+   * as a closing animation would, instead of unmounting on the click.
+   */
+  pickupCalendarLingers?: boolean;
   /** Dates rendered disabled in every grid — the vendor refusing a day. */
   disabledDates?: string[];
   /** Time dropdown options. Defaults to the half-hourly list, bare-hour form. */
@@ -186,6 +197,7 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
 
   const earliest = firstMonth[0] * 12 + firstMonth[1];
   let shown = earliest;
+  let nextClicks = 0;
   let pickup = '';
   let ret = '';
   let open: 'pickup' | 'return' | null = null;
@@ -255,7 +267,18 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
         paintCalendar();
       });
       forward.addEventListener('click', () => {
+        nextClicks += 1;
+        document.body.dataset['nextClicks'] = String(nextClicks);
         shown += 1;
+        if (options.slowPaging) {
+          // Deep enough to land after the driver's next poll has read the
+          // headers: its fake sleep resolves in one microtask.
+          void Promise.resolve()
+            .then(() => undefined)
+            .then(() => undefined)
+            .then(() => paintCalendar());
+          return;
+        }
         paintCalendar();
       });
       controls.append(back, header, forward);
@@ -291,8 +314,16 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
             // choosing a return can move the pick-up underneath it.
             if (returnClickMovesPickup) pickup = '01/01/2026';
           }
+          const wasPickup = open === 'pickup';
           open = null;
           paintToggles();
+          if (wasPickup && options.pickupCalendarLingers) {
+            void Promise.resolve()
+              .then(() => undefined)
+              .then(() => undefined)
+              .then(() => paintCalendar());
+            return;
+          }
           paintCalendar();
         });
         panel.append(button);
@@ -831,6 +862,35 @@ describe('clickDay paging past a trailing spillover', () => {
   });
 });
 
+describe('clickDay against a slow repaint', () => {
+  it('clicks an arrow once per redraw, never once per poll', async () => {
+    // Oct 2026 from a Jul/Aug display is two pages away, and the fixture —
+    // like the live calendar — reopens at the earliest month for the return
+    // pass, so a clean drive is exactly two clicks per pass. A driver that
+    // clicks on every poll in which the cell is absent clicks again before
+    // the first repaint has landed, overshoots, and pages back; the count is
+    // the pin.
+    renderForm({ firstMonth: [2026, 6], slowPaging: true });
+    const trip = { ...TRIP, pickupDate: '2026-10-05', dropoffDate: '2026-10-07' };
+    await expect(applyDates(makeContext({ trip }))).resolves.toBeUndefined();
+    expect(document.body.dataset['nextClicks']).toBe('4');
+  });
+});
+
+describe('applyDates when the pick-up calendar lingers', () => {
+  it('waits for it to close before opening the return calendar', async () => {
+    // Without the wait the return toggle is never clicked — a day cell is
+    // still on screen — and the return day is clicked into the pick-up grid,
+    // moving the pick-up and failing the final trip check.
+    renderForm({ pickupCalendarLingers: true });
+    await expect(applyDates(makeContext())).resolves.toBeUndefined();
+    const label = (toggle: string) =>
+      document.querySelector(toggle)?.getAttribute('aria-label') ?? '';
+    expect(label('#pickupCalendarFocusable')).toContain('09/04/2026');
+    expect(label('#dropoffCalendarFocusable')).toContain('09/06/2026');
+  });
+});
+
 describe('calendarId', () => {
   it('converts ISO to Enterprise’s US ordering', () => {
     // Pinned separately from the calendar because a transposed month and day is
@@ -1072,14 +1132,14 @@ describe('verifyResults', () => {
     // their "Custom Rate" tag, at the very same $55.13.
     renderForm({ onSubmit: 'results', resultsNameAccount: false });
     document.querySelector('button')!.click();
-    const ctx = makeContext();
+    const ctx = makeContext({ deadline: 60_000 });
     const error = await failureOf(verifyResults(ctx));
     expect(error.failure).toBe('discount-missing');
     expect(error.message).toMatch(/name the account/i);
     // Decided within the banner's grace, not at the quote's deadline: a
     // silently-ignored code should cost seconds, not the whole budget.
-    expect(ctx.now()).toBeLessThan(10_000);
-    expect(ctx.now()).toBeLessThanOrEqual(3_250);
+    expect(ctx.now()).toBeLessThan(ctx.deadline);
+    expect(ctx.now()).toBeLessThanOrEqual(10_250);
   });
 
   it('is form-submit, not discount-missing, when no results ever appear', async () => {
@@ -1101,6 +1161,18 @@ describe('verifyResults', () => {
 });
 
 describe('drive', () => {
+  it('drives nothing on a document already showing results', async () => {
+    // The probe re-runs on every document and Enterprise's results view shares
+    // the form's path, so a reload of the results page would otherwise wait
+    // the whole budget for a `#cid` that view never renders.
+    renderForm({ onSubmit: 'results' });
+    document.querySelector('button')!.click();
+    const cid = document.querySelector<HTMLInputElement>('#cid')!;
+    cid.value = '';
+    await expect(enterpriseDriver.drive(makeContext())).resolves.toBeUndefined();
+    expect(cid.value).toBe('');
+  });
+
   it('drives the whole form and submits', async () => {
     // This replaces a test asserting the drive *stopped* at the dates, which
     // was correct while `applyDates` refused by design. It now runs end to end.

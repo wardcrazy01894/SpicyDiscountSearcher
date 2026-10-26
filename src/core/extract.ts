@@ -907,6 +907,10 @@ function extractFrom(root: Element, config: VendorSelectors): Extraction {
       const sites = priceNodes.length > 0 ? priceNodes : [node];
       for (const site of sites) {
         const own = offerText(site);
+        // The same fee guard the sweep applies, for the same reason: a price
+        // element reading "Taxes & Fees $38.40 Total" carries the most trusted
+        // basis there is and would be the cheapest total on the page.
+        if (isFeeLine(own)) continue;
         for (const price of findPrices(own)) {
           offers.push({
             label: label || null,

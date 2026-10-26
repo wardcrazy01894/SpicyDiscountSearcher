@@ -1107,6 +1107,19 @@ describe("Enterprise's results page", () => {
     expect(result.offers.map((o) => o.amount)).toContain(55.13);
   });
 
+  it('drops a fee line that a price item might carry', () => {
+    // The sweep's guard, on the offer branch: a "Total taxes & fees $38.40"
+    // item would otherwise be read as a price. Same rule as the sweep, same
+    // known escape — a trailing "Total" after the fee words still says what
+    // the number means, and is a price to both branches.
+    document.body.innerHTML = `<main><section class="car-item__wrapper"><h2>Economy</h2>
+      <div class="car-item__price-details-item"><p>Total taxes &amp; fees</p><span>$</span><span>38</span><span>.40</span></div>
+      <div class="car-item__price-details-item"><div class="rs-price-tag"><span>$</span><span>298</span><span>.34</span></div><p>Total</p></div>
+    </section></main>`;
+    const result = extract(document, 'enterprise');
+    expect(result.offers.map((o) => o.amount)).toEqual([298.34]);
+  });
+
   it('does not let the filter rail outrank a car', () => {
     // The real page carries a "Total from" rail — "Unlimited Mileage $299",
     // "Cars $299" — whose numbers the sweep reported as offers labelled

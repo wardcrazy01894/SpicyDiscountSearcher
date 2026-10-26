@@ -738,6 +738,66 @@ describe('politeness', () => {
     expect(createdNormal || raised).toBe(true);
   });
 
+  it('treats the user closing the run window as Stop', async () => {
+    // The window is on screen while a paint-gated vendor mounts, so closing
+    // it is now an ordinary thing to do. It used to leave `run.windowId`
+    // pointing at a dead window: every later `tabs.create` failed `tab-open`
+    // and the popup sat on a run that could not finish. Re-raising a window
+    // the user had just closed is the other wrong answer, so this cancels.
+    await bootWorker();
+    const enterpriseOnly: SearchPlan = {
+      trip: TRIP,
+      candidates: [
+        {
+          companySlug: 'ibm',
+          companyName: 'IBM',
+          vendor: 'enterprise',
+          code: '5666666',
+          note: null,
+        },
+        { companySlug: 'acme', companyName: 'Acme', vendor: 'hertz', code: 'H1', note: null },
+      ],
+      concurrency: 1,
+    };
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterpriseOnly });
+    await settle();
+    const windowId = chromeMock.windowsCreated[0];
+    expect(windowId).toBeDefined();
+
+    chromeMock.userClosesWindow(windowId!);
+    await settle(1_000);
+
+    const state = await getState();
+    expect(state?.finishedAt).toBeDefined();
+    // Chrome tears the window's tabs down first, so the quote in flight is
+    // `tab-closed` exactly as if its tab alone had been closed; the lane that
+    // was still queued is what the cancel reaches.
+    expect(state?.quotes.map((q) => q.failure)).toEqual(['tab-closed', 'cancelled']);
+    // No second window was opened for the lane that was still queued.
+    expect(chromeMock.windowsCreated).toHaveLength(1);
+  });
+
+  it('does not mistake its own teardown for the user closing the window', async () => {
+    // The worker closes the same window at the end of every run, and Chrome
+    // fires the same event for it. A run that finished normally must not be
+    // rewritten as cancelled on the way out.
+    await bootWorker();
+    // One candidate, so the run is over once its tab goes: plan(1) is
+    // concurrency one with two candidates and would still be racing.
+    const solo: SearchPlan = { ...plan(1), candidates: [plan().candidates[0]!] };
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: solo });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    chromeMock.userClosesTab(tabId);
+    await settle(5_000);
+
+    const state = await getState();
+    expect(state?.finishedAt).toBeDefined();
+    expect(state?.quotes[0]?.failure).toBe('tab-closed');
+    expect(state?.quotes[0]?.status).not.toBe('cancelled');
+    expect(chromeMock.windows.size).toBe(0);
+  });
+
   it('caps concurrency at six however many the popup asks for', async () => {
     await bootWorker();
     const greedy = { ...plan(50) };
@@ -1767,7 +1827,9 @@ describe('a report a page could have forged', () => {
     await settle(1_000);
 
     const quote = (await getState())?.quotes[0];
-    expect(quote?.offers.length).toBeLessThanOrEqual(200);
+    // 500, not 200: Enterprise's measured results page already carries 146
+    // legitimate offers, and the bound is for a hostile page, not that one.
+    expect(quote?.offers.length).toBeLessThanOrEqual(500);
     expect(quote?.offers.every((o) => (o.label?.length ?? 0) <= 200)).toBe(true);
   });
 

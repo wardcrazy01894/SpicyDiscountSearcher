@@ -67,8 +67,10 @@ import type { CarTrip } from '../types.js';
  * dropdowns' option format and the results page's account-holder markup —
  * were both measured on 2026-10-26, and the measurements are recorded where
  * they sit (`timeOption`, `CONTRACT_NAME`). The same day the whole driver was
- * run from a loaded build, in a real probe tab of a real minimised window,
- * and returned a priced results page in about ten seconds. The three
+ * run from a loaded build, in the extension's own probe tab — raised on
+ * screen by the paint hold for the drive, as `needsPaintedWindow` requires,
+ * and minimised again before `verifyResults` ran — and returned a priced
+ * results page in about ten seconds. The three
  * outcomes `submitSearch` distinguishes were each produced live too: IBM's
  * `5666666` priced, an empty code priced with no account named, and
  * Accenture's `XZ15J55` refused with the sentence `REJECTED_RE` matches.
@@ -601,6 +603,15 @@ async function openCalendar(ctx: DriveContext, toggle: string, which: string): P
 /** Page the calendar to a date's month and click it. */
 async function clickDay(ctx: DriveContext, id: string, which: string): Promise<void> {
   const want = monthOf(id);
+  // The months that were on screen when an arrow was last clicked, so the
+  // next click waits for the grid to have moved. The loop polls every 250ms
+  // and a painted tab honours that, which is faster than a React re-render:
+  // an arrow clicked again before the headers change pages twice, overshoots,
+  // pages back, and can oscillate to the step bound and report "timed out
+  // reaching". The months on screen are the only honest signal that the last
+  // click landed. Review of PR #69 found it; a fixture with a slow repaint
+  // pins it.
+  let pagedFrom: string | null = null;
 
   for (let step = 0; step <= MAX_MONTH_STEPS; step += 1) {
     const cell = dayCell(ctx, id);
@@ -628,7 +639,8 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
         want > Math.max(...shown) ? 'Next' : want < Math.min(...shown) ? 'Previous' : null;
       // Neither past nor before what is displayed, yet no cell exists — the
       // grid is still redrawing. Fall through to the sleep and look again.
-      if (direction) {
+      const key = shown.join(',');
+      if (direction && key !== pagedFrom) {
         const control = arrow(ctx, direction);
         if (!control) {
           throw new DriverError(
@@ -637,6 +649,7 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
           );
         }
         control.click();
+        pagedFrom = key;
       }
     }
 
@@ -702,6 +715,15 @@ export async function applyDates(ctx: DriveContext): Promise<void> {
     ctx,
     `the form to show the pick-up date ${pickup}`,
     () => selectedDate(ctx, PICKUP_TOGGLE) === pickup,
+  );
+
+  // The pick-up calendar closes itself on the pick, and the return pass must
+  // not start until it has. `openCalendar` only clicks its toggle when no day
+  // cell is on screen and `dayCell` looks document-wide, so a pick-up grid
+  // still mounted would swallow both: the return toggle never clicked, the
+  // return day clicked into the pick-up calendar, and the pick-up moved.
+  await waitFor(ctx, 'the pick-up calendar to close', () =>
+    ctx.doc.querySelector(DAY) ? null : true,
   );
 
   await openCalendar(ctx, RETURN_TOGGLE, 'return');
@@ -919,8 +941,13 @@ const RESULT_CARD = 'section.car-item__wrapper';
  * left to the quote's deadline because a code Enterprise silently ignores is
  * the case this exists to catch, and spending the whole remaining budget to
  * say "no discount" would turn a ten-second answer into a minute's wait.
+ *
+ * Ten seconds rather than three because of *where* this runs: after
+ * `releasePaint`, in a tab that is back in a minimised window, where timers
+ * are throttled to about one tick a second. Three seconds there is three
+ * reads, and a false `discount-missing` throws away a good quote.
  */
-const BANNER_GRACE_MS = 3_000;
+const BANNER_GRACE_MS = 10_000;
 
 /**
  * Confirm a search actually ran and was priced under the account we gave it.
@@ -970,6 +997,14 @@ export const enterpriseDriver: FormDriver = {
   startPath: new URL(START_URL).pathname,
   verifyResults,
   async drive(ctx) {
+    // A document already showing results has nothing to drive. The probe
+    // re-runs on every document and gates on `startPath`, which for Enterprise
+    // is the *same* path as the results view — only `#car_select` tells them
+    // apart — so a reload of the results page (a consent bounce, an SPA
+    // `location.reload`) would otherwise spend the whole budget waiting for a
+    // `#cid` this view never renders, and fail a quote whose search had
+    // already succeeded. `verifyResults` still runs, and still checks.
+    if (ctx.doc.location?.hash.includes(RESULTS_HASH)) return;
     await awaitHydration(ctx);
     await fillLocation(ctx);
     // The itinerary before the code, and both before the submit: there is no

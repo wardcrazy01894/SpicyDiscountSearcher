@@ -139,6 +139,11 @@ interface ActiveRun {
   /** In-flight window creation, so concurrent lanes share one window. */
   windowPromise: Promise<number> | null;
   /**
+   * The window `closeWindow` is in the middle of removing, so the
+   * `windows.onRemoved` that follows is recognised as ours and not the user's.
+   */
+  closingWindow: number | null;
+  /**
    * Quotes whose vendor needs a painted window and whose form has not mounted.
    *
    * The window is visible while this is non-empty and minimised the moment it
@@ -345,11 +350,14 @@ const MAX_REPORT_TEXT = 200;
 /**
  * How many offers one page may contribute.
  *
- * Generous by an order of magnitude: the longest real results page in the
- * fixtures carries tens, not hundreds. This is a bound on a hostile page, not a
- * judgement about a legitimate one.
+ * A bound on a hostile page, not a judgement about a legitimate one — and the
+ * margin has to be real. This was 200 against "tens, not hundreds" until
+ * Enterprise's measured results page produced 146 (73 vehicle classes, each
+ * with a per-day and a total), which left a larger fleet or a third rate
+ * column to truncate silently, dropping the *last* cards in document order
+ * with nothing to say the cheapest might have been among them.
  */
-const MAX_OFFERS = 200;
+const MAX_OFFERS = 500;
 
 const PRICE_BASES = new Set<PriceBasis>(['total', 'per-day', 'unknown']);
 
@@ -662,6 +670,7 @@ async function closeWindow(run: ActiveRun): Promise<void> {
   run.windowPromise = null;
   const closing = run.windowId;
   if (closing !== null) {
+    run.closingWindow = closing;
     try {
       await chrome.windows.remove(closing);
     } catch (error) {
@@ -1050,6 +1059,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
+    closingWindow: null,
     cancelled: false,
     waiters: new Map(),
     vendorInFlight: new Map(),
@@ -1437,6 +1447,23 @@ async function reapOrphanWindow(): Promise<void> {
 // Runs whenever the worker wakes, which is the only moment we know a previous
 // one is no longer around to clean up after itself.
 void reapOrphanWindow();
+
+// The run's window is a real, closeable window now — on screen whenever a
+// paint-gated vendor is mounting — so the user can close it, and closing it is
+// the clearest Stop there is. Treated exactly like the popup's Stop. The
+// alternative, forgetting the id so the next lane opens a fresh window, would
+// put a window the user had just closed straight back on their screen; the
+// state this replaces was worse still, a stale id on which every remaining
+// `tabs.create` failed `tab-open`. Our own teardown closes the same window and
+// fires the same event, which `closingWindow` tells apart from the user.
+chrome.windows.onRemoved.addListener((windowId) => {
+  const run = active;
+  if (!run || run.windowId !== windowId || run.closingWindow === windowId) return;
+  if (run.cancelled || run.state.finishedAt !== undefined) return;
+  run.windowId = null;
+  run.windowPromise = null;
+  void cancelRun();
+});
 
 // A tab the user closes mid-probe should release its lane instead of blocking
 // the queue until the timeout fires.
