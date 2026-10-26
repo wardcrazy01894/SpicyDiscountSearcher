@@ -167,6 +167,23 @@ describe('the pre-PR gate', () => {
       }
     });
 
+    it('catches a push, with or without flags', () => {
+      // The gate on PR creation said nothing about the pushes that follow it,
+      // and on 2026-10-26 one of those turned CI red on a typecheck error
+      // that `tsc` reports in seconds — the #65 mistake through the other
+      // door. Every spelling a push takes in this repo's own skills.
+      const repo = fakeRepo('exit 1');
+      for (const command of [
+        'git push',
+        'git push -u origin feature',
+        'git push -q -f origin types-node-ignore 2>&1 | tail -1',
+        'git  push\torigin HEAD',
+        'git commit -m x && git push',
+      ]) {
+        expect(parseDecision(run(bash(command, repo))), JSON.stringify(command)).toBe('deny');
+      }
+    });
+
     it('catches the gh api route to opening a pull request', () => {
       // Refusing one route while leaving another open is not a gate, and this
       // is the obvious fallback the moment the direct command is denied.
@@ -180,6 +197,11 @@ describe('the pre-PR gate', () => {
       // the match is deliberately loose, and this is where that would bite.
       for (const command of [
         'git status',
+        'git fetch --prune',
+        'git pull --ff-only',
+        'git stash push -m wip',
+        'git push origin --delete feature',
+        'git push origin :refs/heads/feature',
         'ls -la',
         'npm test',
         'gh repo view',
@@ -375,5 +397,87 @@ describe('the pre-PR gate', () => {
       expect(parseDecision(stdout)).toBe('deny');
       expect(stdout).not.toContain('looks like the network');
     });
+  });
+});
+
+describe('the git pre-push hook', () => {
+  // The same gate from inside git, for pushes made outside this tool. Driven
+  // the way git drives it: ref lines on stdin, cwd inside the checkout, and
+  // judged by exit status alone.
+  const HOOK = fileURLToPath(new URL('../.githooks/pre-push', import.meta.url));
+  const ZERO = '0'.repeat(40);
+
+  function gitRepo(verify: string): { dir: string; head: string } {
+    const dir = fakeRepo(verify);
+    // Pinned to the temp directory by environment, not only by cwd. When this
+    // suite runs inside a git hook, git has put GIT_DIR for the *real*
+    // repository in the environment, and a bare `git init` here then
+    // re-initialises that repository and commits this fixture onto its branch.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_DIR: join(dir, '.git'),
+      GIT_WORK_TREE: dir,
+    };
+    for (const key of ['GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR']) delete env[key];
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        env,
+      }).trim();
+    git('init', '-q');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    return { dir, head: git('rev-parse', 'HEAD') };
+  }
+
+  function push(dir: string, lines: string): number {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      'GIT_DIR',
+      'GIT_WORK_TREE',
+      'GIT_INDEX_FILE',
+      'GIT_PREFIX',
+      'GIT_COMMON_DIR',
+    ])
+      delete env[key];
+    const result = spawnSync('bash', [HOOK], { input: lines, cwd: dir, encoding: 'utf8', env });
+    return result.status ?? -1;
+  }
+
+  it('lets a deletion-only push through without verifying', () => {
+    const { dir } = gitRepo('exit 1');
+    expect(push(dir, `refs/heads/x ${ZERO} refs/heads/x abc\n`)).toBe(0);
+  });
+
+  it('refuses a push when verify fails, and allows it when verify passes', () => {
+    const failing = gitRepo('exit 1');
+    expect(push(failing.dir, `refs/heads/x ${failing.head} refs/heads/x ${ZERO}\n`)).toBe(1);
+    const passing = gitRepo('exit 0');
+    expect(push(passing.dir, `refs/heads/x ${passing.head} refs/heads/x ${ZERO}\n`)).toBe(0);
+  });
+
+  it('refuses a dirty tree rather than verifying something other than the push', () => {
+    const { dir, head } = gitRepo('exit 0');
+    writeFileSync(join(dir, 'package.json'), '{"name":"spicy-discount-searcher","scripts":{}}');
+    expect(push(dir, `refs/heads/x ${head} refs/heads/x ${ZERO}\n`)).toBe(1);
+  });
+
+  it('honours a fresh stamp for this HEAD from the PreToolUse gate, once', () => {
+    const { dir, head } = gitRepo('exit 1');
+    const stamp = join(dir, '.git', 'spicy-verified');
+    writeFileSync(stamp, `${head} ${Math.floor(Date.now() / 1000)}\n`);
+    expect(push(dir, `refs/heads/x ${head} refs/heads/x ${ZERO}\n`)).toBe(0);
+    // Consumed: the next push verifies again.
+    expect(push(dir, `refs/heads/x ${head} refs/heads/x ${ZERO}\n`)).toBe(1);
+  });
+
+  it('ignores a stamp for another HEAD or an old one', () => {
+    const { dir, head } = gitRepo('exit 1');
+    const stamp = join(dir, '.git', 'spicy-verified');
+    writeFileSync(stamp, `${'f'.repeat(40)} ${Math.floor(Date.now() / 1000)}\n`);
+    expect(push(dir, `refs/heads/x ${head} refs/heads/x ${ZERO}\n`)).toBe(1);
+    writeFileSync(stamp, `${head} ${Math.floor(Date.now() / 1000) - 600}\n`);
+    expect(push(dir, `refs/heads/x ${head} refs/heads/x ${ZERO}\n`)).toBe(1);
   });
 });

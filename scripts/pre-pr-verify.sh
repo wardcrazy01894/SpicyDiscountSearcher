@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 #
-# PreToolUse hook: refuse `gh pr create` until `npm run verify` passes.
+# PreToolUse hook: refuse `gh pr create` — and, since 2026-10-26, `git push` —
+# until `npm run verify` passes.
 #
 # Why this exists: PR #65 failed the `build / typecheck / lint` job twice on
 # things a local run catches in seconds. Both times the author had run some
 # checks by hand — vitest, tsc — and simply not thought of prettier. Choosing
 # the checks by hand is the bug, so this removes the choice.
 #
+# Why it gates the push and not only the PR: on 2026-10-26 the same mistake
+# arrived through the other door. #76 was already open, so no PR was being
+# created; a follow-up commit was checked with eslint and vitest by hand,
+# typecheck was never run, and the push turned CI red on a TS2345 that `tsc`
+# reports in seconds. A gate on PR creation says nothing about the pushes that
+# follow it, and those are most of a PR's life. `.githooks/pre-push` is the
+# same gate for pushes made outside this tool, installed by `npm run prepare`.
+#
 # Reads the hook payload on stdin, exits 0 (silently allowing the command) for
-# anything that is not a PR creation. On failure it emits a PreToolUse deny so
-# the model is told why rather than being left to guess.
+# anything that is neither a PR creation nor a push. On failure it emits a
+# PreToolUse deny so the model is told why rather than being left to guess.
 #
 # **It prefers false positives to false negatives, deliberately** — see the
 # matching note below. A wasted build is an annoyance; an unverified PR is the
@@ -21,7 +30,7 @@ set -uEo pipefail
 # held only while the script ran to completion: a crash exits non-zero, which a
 # PreToolUse hook treats as a *non-blocking* error, and the command proceeds.
 # Cleared explicitly on every intended exit path.
-UNEXPECTED='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Refused: the pre-PR gate exited unexpectedly, so npm run verify did not complete. A bug in scripts/pre-pr-verify.sh rather than a problem with the diff."}}'
+UNEXPECTED='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Refused: the verify gate exited unexpectedly, so npm run verify did not complete. A bug in scripts/pre-pr-verify.sh rather than a problem with the diff."}}'
 
 # **EXIT, not ERR, and this distinction is the whole backstop.** An `ERR` trap
 # does not run for the error class `set -u` exists to produce: an unbound
@@ -96,6 +105,7 @@ payload=$(cat)
 case "$payload" in
 *gh*pr*) ;;
 *gh*api*) ;;
+*git*push*) ;;
 *) allow ;;
 esac
 
@@ -113,7 +123,7 @@ fi
 # the fail-open this gate exists to close came back exactly here: jq present,
 # JSON malformed, `command` empty, no match, silent allow.
 if ! command=$(printf '%s' "$payload" | jq -er '.tool_input.command // ""' 2>/dev/null); then
-  deny "Refused: the pre-PR gate could not parse the hook payload, so \`npm run verify\` never ran. A bug in the hook rather than a problem with the diff."
+  deny "Refused: the verify gate could not parse the hook payload, so \`npm run verify\` never ran. A bug in the hook rather than a problem with the diff."
 fi
 
 # **Substring, on purpose.** A previous version anchored this to a command
@@ -134,9 +144,17 @@ fi
 # denied: refusing one route to opening a PR while leaving another open is not
 # a gate.
 normalised=$(printf '%s' "$command" | tr '\t\n' '  ' | tr -s ' ')
+# `gated` names what is being refused, so a denied push is not told to go and
+# create a PR — which, with the PR already open, would open a second one.
+gated="PR"
 case "$normalised" in
 *"gh pr create"*) ;;
 *"gh api"*pulls*) ;;
+# A push that only deletes a ref carries no tree to verify; `.githooks/pre-push`
+# exempts the same case by its zero sha.
+*"git push"*"--delete"*) allow ;;
+*"git push"*" :"*) allow ;;
+*"git push"*) gated="push" ;;
 *) allow ;;
 esac
 
@@ -163,7 +181,7 @@ done
 # the real deployment the script lives in the main checkout, whose package name
 # matches, so an unresolvable cwd quietly verified main and allowed the PR.
 if [ -z "$repo_root" ]; then
-  deny "Refused: the pre-PR gate could not find a package.json above \"$cwd\", so it does not know which tree to verify and will not guess. Run \`gh pr create\` from inside the repo."
+  deny "Refused: the verify gate could not find a package.json above \"$cwd\", so it does not know which tree to verify and will not guess. Run it from inside the repo."
 fi
 
 # Whatever we landed on has to be *this* project. `repo_root` comes from the
@@ -172,24 +190,35 @@ fi
 # including one that only echoes success.
 name=$(jq -r '.name // ""' "$repo_root/package.json" 2>/dev/null || echo "")
 if [ "$name" != "spicy-discount-searcher" ]; then
-  deny "Refused: the pre-PR gate resolved \"$repo_root\", which is not the spicy-discount-searcher checkout, so it will not run npm scripts there. Run \`gh pr create\` from inside the repo."
+  deny "Refused: the verify gate resolved \"$repo_root\", which is not the spicy-discount-searcher checkout, so it will not run npm scripts there. Run it from inside the repo."
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  deny "Refused: \`npm\` is not on PATH for this hook, so \`npm run verify\` could not run and this PR was not opened. An environment problem, not a test failure — nothing in the diff needs fixing."
+  deny "Refused: \`npm\` is not on PATH for this hook, so \`npm run verify\` could not run and the ${gated} was refused. An environment problem, not a test failure — nothing in the diff needs fixing."
 fi
 
 output=$(cd "$repo_root" && npm run verify 2>&1)
 status=$?
 
 if [ "$status" -eq 0 ]; then
+  # Hand the result to `.githooks/pre-push`, which gates the same push a
+  # second time from inside git: a stamp naming the HEAD that was verified and
+  # when. The git hook honours it only for that HEAD, a clean tree and a few
+  # minutes, so the push Claude is about to make is not verified twice while
+  # anything else still is. Best effort — a stamp that cannot be written
+  # costs one duplicate build, not a gate.
+  if git_dir=$(git -C "$repo_root" rev-parse --git-dir 2>/dev/null) &&
+    head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null); then
+    case "$git_dir" in /*) ;; *) git_dir="$repo_root/$git_dir" ;; esac
+    printf '%s %s\n' "$head" "$(date +%s)" >"$git_dir/spicy-verified" 2>/dev/null || true
+  fi
   allow
 fi
 
 # 127 is "could not run" rather than "ran and failed", and the two want opposite
 # responses: one means fix the environment, the other means fix the code.
 if [ "$status" -eq 127 ]; then
-  deny "Refused: \`npm run verify\` could not run in $repo_root (exit 127 — a command it calls was not found), so this PR was not opened. An environment problem rather than a failing check.
+  deny "Refused: \`npm run verify\` could not run in $repo_root (exit 127 — a command it calls was not found), so the ${gated} was refused. An environment problem rather than a failing check.
 
 $(printf '%s' "$output" | tail -20)"
 fi
@@ -218,8 +247,8 @@ fi
 
 # Only the tail is worth returning — `verify` is a chain of tools, and the
 # failure is whichever one stopped it.
-deny "Refused: \`npm run verify\` failed in $repo_root, so this PR was not opened. CI would
+deny "Refused: \`npm run verify\` failed in $repo_root, so the ${gated} was refused. CI would
 have failed it the same way. Fix the failure below, re-run \`npm run verify\`,
-then create the PR again.
+then run it again.
 
 $(printf '%s' "$output" | tail -40)"
