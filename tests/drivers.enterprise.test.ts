@@ -98,6 +98,13 @@ interface FormOptions {
   cidRejectsValue?: boolean;
   /** Earliest month the calendar will show, `[year, monthIndex]`. Aug 2026. */
   firstMonth?: [number, number];
+  /**
+   * Render the trailing spillover in the *second* grid as well: the 1st of the
+   * month after the displayed pair, greyed and disabled, carrying that day's
+   * id. A driver that reads "present but disabled" as a refusal without asking
+   * whether the day's month is on screen fails every trip starting there.
+   */
+  spilloverInSecondPanel?: boolean;
   /** Dates rendered disabled in every grid — the vendor refusing a day. */
   disabledDates?: string[];
   /** Time dropdown options. Defaults to the half-hourly list, bare-hour form. */
@@ -259,9 +266,10 @@ function renderDateTime(host: HTMLElement, options: FormOptions): void {
       for (let d = 1; d <= count; d += 1) {
         cells.push({ id: `${pad(month + 1)}/${pad(d)}/${year}`, dead: false });
       }
-      // The spillover: next month's 1st, greyed, in this grid. Only the first
-      // panel gets one, exactly as the live calendar renders it.
-      if (offset === 0) {
+      // The spillover: next month's 1st, greyed, in this grid. The first panel
+      // always gets one, as the live calendar was measured to render it; the
+      // second only when a test asks, modelling a six-row grid's trailing days.
+      if (offset === 0 || (offset === 1 && options.spilloverInSecondPanel)) {
         const nextKey = key + 1;
         const ny = Math.floor(nextKey / 12);
         const nm = nextKey % 12;
@@ -794,6 +802,32 @@ describe('fillLocation', () => {
     const error = await failureOf(fillLocation(makeContext()));
     expect(error.failure).toBe('form-fill');
     expect(error.message).toContain('TPA');
+  });
+});
+
+describe('clickDay paging past a trailing spillover', () => {
+  it('pages forward to a month whose 1st is on screen only as a dead spillover', async () => {
+    // Pick-up on the 1st of the month after the two displayed ones. Its id is
+    // on screen already — as the disabled spillover at the foot of the second
+    // grid — and the driver used to report that as Enterprise refusing the
+    // date, before ever clicking Next.
+    renderForm({ firstMonth: [2026, 6], spilloverInSecondPanel: true });
+    const trip = { ...TRIP, pickupDate: '2026-09-01', dropoffDate: '2026-09-03' };
+    await expect(applyDates(makeContext({ trip }))).resolves.toBeUndefined();
+    expect(
+      document.querySelector('#pickupCalendarFocusable')?.getAttribute('aria-label'),
+    ).toContain('09/01/2026');
+  });
+
+  it('still reports a refusal when the date is dead in its own month', async () => {
+    renderForm({
+      firstMonth: [2026, 6],
+      spilloverInSecondPanel: true,
+      disabledDates: ['09/01/2026'],
+    });
+    const trip = { ...TRIP, pickupDate: '2026-09-01', dropoffDate: '2026-09-03' };
+    const error = await failureOf(applyDates(makeContext({ trip })));
+    expect(error.message).toMatch(/will not accept the pick-up date 09\/01\/2026/);
   });
 });
 

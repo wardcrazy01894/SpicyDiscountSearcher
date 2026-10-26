@@ -50,11 +50,20 @@ const company = required('company');
 const vendors = args['vendors'] ?? 'enterprise';
 const maxCodes = args['max'] ?? '1';
 const pickup = args['pickup'] ?? 'TPA';
-const [fromDate, fromTime] = (args['from'] ?? '2026-11-10T09:00').split('T');
-const [toDate, toTime] = (args['to'] ?? '2026-11-13T17:00').split('T');
+const stamp = (name, fallback) => {
+  const value = args[name] ?? fallback;
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.exec(value);
+  if (!match) {
+    console.error(`--${name} wants yyyy-mm-ddThh:mm, got ${value}`);
+    process.exit(2);
+  }
+  return [match[1], match[2]];
+};
+const [fromDate, fromTime] = stamp('from', '2026-11-10T09:00');
+const [toDate, toTime] = stamp('to', '2026-11-13T17:00');
 const ext = path.resolve(args['dist'] ?? 'dist');
-const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const out = args['out'] ?? path.join(os.tmpdir(), `spicy-live-race-${stamp}`);
+const startedAtLabel = new Date().toISOString().replace(/[:.]/g, '-');
+const out = args['out'] ?? path.join(os.tmpdir(), `spicy-live-race-${startedAtLabel}`);
 const profile = args['profile'] ?? path.join(os.tmpdir(), 'spicy-live-race-profile');
 fs.mkdirSync(out, { recursive: true });
 
@@ -148,13 +157,16 @@ try {
     const text = await page
       .$eval('#results', (el) => el.innerText.replace(/\s+/g, ' ').trim())
       .catch(() => '');
+    // `null` is "could not read the button", not "finished": a popup that
+    // errored or navigated must keep the poll going rather than closing the
+    // browser on a race still in flight.
     const running = await page.$eval('#run-btn', (el) => el.disabled).catch(() => null);
     if (text !== last) {
       log('results:', text.slice(0, 800));
       last = text;
     }
     log(`t+${Math.round((Date.now() - started) / 1000)}s running=${String(running)}`);
-    if (!running && Date.now() - started > 8_000) break;
+    if (running === false && Date.now() - started > 8_000) break;
     if (Date.now() - started > 600_000) {
       log('gave up after ten minutes');
       break;

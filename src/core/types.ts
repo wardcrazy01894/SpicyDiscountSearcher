@@ -79,8 +79,9 @@ export interface Vendor {
    *
    * The probe window is minimised, and a minimised window is never painted — so
    * for a vendor with this flag the window is opened *visible* (never focused)
-   * and minimised again as soon as the driver reports the form has mounted, via
-   * `DriveContext.hydrated`.
+   * and the probe tab selected, both put back when the driver calls
+   * `DriveContext.releasePaint` — after the search is submitted, not at the
+   * mount; `form-driver.ts` says why.
    *
    * Enterprise is the measured case, and it is not throttling or
    * `visibilityState`. A hidden tab left for 153 seconds had **zero `<input>`

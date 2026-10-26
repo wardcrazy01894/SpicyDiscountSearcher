@@ -608,14 +608,21 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
       cell.click();
       return;
     }
-    if (dayPresent(ctx, id)) {
-      // On screen and dead in every grid: the vendor's answer, not a paging
-      // problem. Enterprise disables dates in the past and beyond its booking
-      // horizon, and no amount of paging changes either.
+    const shown = shownMonths(ctx);
+    if (dayPresent(ctx, id) && shown.includes(want)) {
+      // Dead in every grid *and its own month is on screen*: the vendor's
+      // answer, not a paging problem. Enterprise disables dates in the past and
+      // beyond its booking horizon, and no amount of paging changes either.
+      //
+      // The month test is load-bearing. A spillover cell carries the id of a
+      // day in the month *after* the displayed one, disabled — so without it a
+      // trailing spillover at the foot of the second grid reads the 1st of a
+      // month not yet shown as refused, and every trip starting there fails
+      // `form-fill` before the Next arrow is ever clicked. Review of PR #69
+      // found this by reading; the fixture now renders that spillover too.
       throw new DriverError('form-fill', `enterprise will not accept the ${which} date ${id}`);
     }
 
-    const shown = shownMonths(ctx);
     if (shown.length > 0) {
       const direction =
         want > Math.max(...shown) ? 'Next' : want < Math.min(...shown) ? 'Previous' : null;
@@ -893,6 +900,13 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
  * it is still thinking.
  */
 const CONTRACT_NAME = '.contract-name__button';
+/*
+ * Measured not to leak between searches in one profile, which is the question
+ * a session-state vendor raises: the no-code control above was run in the same
+ * Chrome profile *after* the IBM search had rendered the banner, on a fresh
+ * load of the form, and the container came back empty. A banner inherited from
+ * an earlier quote's contract would defeat this check, and it did not happen.
+ */
 
 /** One vehicle class on the results page. 73 of them on the measured page. */
 const RESULT_CARD = 'section.car-item__wrapper';
