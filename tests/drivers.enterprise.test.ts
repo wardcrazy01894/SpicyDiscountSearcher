@@ -30,6 +30,7 @@ import {
   fillAccountNumber,
   fillLocation,
   submitSearch,
+  verifyResults,
 } from '../src/core/drivers/enterprise.js';
 import { buildDeepLink } from '../src/core/deeplinks.js';
 import { FORM_DRIVERS } from '../src/core/drivers/index.js';
@@ -87,6 +88,12 @@ interface FormOptions {
   locationRemountsAsync?: boolean;
   /** What "Browse Vehicles" does. */
   onSubmit?: 'results' | 'rejected' | 'nothing';
+  /**
+   * Whether the results page names a contract holder, as the live page does
+   * for an applied code (`button.contract-name__button`) and does not for an
+   * empty one. Defaults to true; false models a code Enterprise ignored.
+   */
+  resultsNameAccount?: boolean;
   /** Model a controlled input that refuses the value written to it. */
   cidRejectsValue?: boolean;
   /** Earliest month the calendar will show, `[year, monthIndex]`. Aug 2026. */
@@ -308,6 +315,7 @@ function renderForm(options: FormOptions = {}): void {
     suggestion = SUGGESTION,
     onSubmit = 'results',
     cidRejectsValue = false,
+    resultsNameAccount = true,
   } = options;
 
   document.body.innerHTML = '<header>Enterprise Rent-A-Car</header>';
@@ -454,7 +462,22 @@ function renderForm(options: FormOptions = {}): void {
   }
 
   form.querySelector('button')!.addEventListener('click', () => {
-    if (onSubmit === 'results') window.location.hash = '#car_select';
+    if (onSubmit === 'results') {
+      window.location.hash = '#car_select';
+      // The shape measured 2026-10-26: cards in main, and the holder's name in
+      // a header banner that is simply empty when no contract applied.
+      const banner = document.createElement('div');
+      banner.id = 'codebanner-container';
+      if (resultsNameAccount) {
+        banner.innerHTML =
+          '<button class="cta contract-name__button" aria-label="I B M CORP (USA)">I B M CORP (USA)</button>';
+      }
+      document.body.prepend(banner);
+      const results = document.createElement('main');
+      results.innerHTML =
+        '<section class="car-item__wrapper"><h2>Economy</h2><div class="car-item__price-details-item"><span>$55.13</span><p>Per Day</p></div></section>';
+      document.body.append(results);
+    }
     if (onSubmit === 'rejected') {
       const error = document.createElement('div');
       error.textContent =
@@ -998,6 +1021,48 @@ describe('submitSearch', () => {
     // The page was never asked for a price, so this is the fill end even though
     // it happens in the submit step.
     expect(error.failure).toBe('form-fill');
+  });
+});
+
+describe('verifyResults', () => {
+  it('passes a results page that names the contract holder', async () => {
+    renderForm({ onSubmit: 'results' });
+    document.querySelector('button')!.click();
+    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+  });
+
+  it('fails discount-missing when cars are listed under no account', async () => {
+    // The one failure the driver could not otherwise see: a code Enterprise
+    // ignores prices the retail rate on a real results page. Measured — the
+    // no-code search renders the banner container empty and the cards without
+    // their "Custom Rate" tag, at the very same $55.13.
+    renderForm({ onSubmit: 'results', resultsNameAccount: false });
+    document.querySelector('button')!.click();
+    const ctx = makeContext();
+    const error = await failureOf(verifyResults(ctx));
+    expect(error.failure).toBe('discount-missing');
+    expect(error.message).toMatch(/name the account/i);
+    // Decided within the banner's grace, not at the quote's deadline: a
+    // silently-ignored code should cost seconds, not the whole budget.
+    expect(ctx.now()).toBeLessThan(10_000);
+    expect(ctx.now()).toBeLessThanOrEqual(3_250);
+  });
+
+  it('is form-submit, not discount-missing, when no results ever appear', async () => {
+    renderForm({ onSubmit: 'nothing' });
+    document.querySelector('button')!.click();
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('form-submit');
+  });
+
+  it('never outlives the quote waiting for the banner', async () => {
+    // The grace is capped by the deadline, not added to it.
+    renderForm({ onSubmit: 'results', resultsNameAccount: false });
+    document.querySelector('button')!.click();
+    const ctx = makeContext({ deadline: 1_000 });
+    const error = await failureOf(verifyResults(ctx));
+    expect(error.failure).toBe('discount-missing');
+    expect(ctx.now()).toBeLessThanOrEqual(1_250);
   });
 });
 

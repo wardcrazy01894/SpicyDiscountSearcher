@@ -43,21 +43,15 @@ import type { CarTrip } from '../types.js';
  *   cannot otherwise see: a code Enterprise ignores rather than refuses gives a
  *   real results page at the retail rate, reported as the company's.
  *
- *   **Not implemented, and the reason this comment used to give was wrong.** It
- *   said the check needed a trustworthy comparison between the workbook's
- *   company name and the vendor's rendering — `Accenture` against
- *   `I B M CORP (USA)` — and that such a fuzzy match would throw away good
- *   quotes. But `accountNamed` in `national.ts` performs no such comparison: it
- *   asserts only that *an* account name is rendered beside the label, which is
- *   enough to separate "a discount applied" from "the code vanished". That
- *   check is available here and was skipped on a bad argument.
- *
- *   The real obstacle is narrower: National's version keys off its
- *   `ACCOUNT NAME` label, and the equivalent markup on Enterprise's results
- *   page was never captured — only that the holder's name appears in the
- *   header. Writing a selector from that is a guess, and a wrong one fails good
- *   quotes with `discount-missing`. Capture the label and its element on a live
- *   results page and this becomes a ten-line function.
+ *   **Implemented in `verifyResults`, since 2026-10-26.** The markup was the
+ *   only thing missing — this comment used to say so, and the capture turned
+ *   out to be exactly the ten lines it predicted. With IBM's code the header
+ *   carries `button.contract-name__button` with the holder's name in its
+ *   `aria-label`, inside `#codebanner-container`; the same search with *no*
+ *   code renders that container empty, and the cards lose their "Custom Rate"
+ *   tag. So the button is the vendor saying a contract applied, and its
+ *   absence on a results page is `discount-missing` — our inference, never
+ *   remembered, as `rejected-codes.ts` requires.
  * - **Enterprise refuses some account numbers outright.** Accenture's
  *   `XZ15J55` came back with "this account number cannot be used online.
  *   Please contact your account manager." That is the vendor answering, not the
@@ -69,10 +63,15 @@ import type { CarTrip } from '../types.js';
  * is filled *and verified against what the form renders back*, which is the
  * framework's one rule.
  *
- * Two things are still inference rather than measurement, and both are called
- * out where they sit: the time dropdowns' option format (only `12:00 PM` was
- * ever seen, so both padded and bare hours are matched), and the results
- * page's account-holder markup (seen on screen, never captured — see above).
+ * Nothing below is inference any more. The two things that were — the time
+ * dropdowns' option format and the results page's account-holder markup —
+ * were both measured on 2026-10-26, and the measurements are recorded where
+ * they sit (`timeOption`, `CONTRACT_NAME`). The same day the whole driver was
+ * run from a loaded build, in a real probe tab of a real minimised window,
+ * and returned a priced results page in about ten seconds. The three
+ * outcomes `submitSearch` distinguishes were each produced live too: IBM's
+ * `5666666` priced, an empty code priced with no account named, and
+ * Accenture's `XZ15J55` refused with the sentence `REJECTED_RE` matches.
  *
  * The timing problem this section used to list first is solved by
  * `probeTimeoutMs: 120_000` in `vendors.ts`, since the widget can take ~40s to
@@ -730,11 +729,12 @@ function timeSelect(ctx: DriveContext, which: 'Pick-Up' | 'Return'): HTMLSelectE
 /**
  * The option holding a time, accepting either zero-padded or bare hours.
  *
- * Enterprise renders `12:00 PM`, which says nothing about whether nine in the
- * morning is `09:00 AM` or `9:00 AM` — twelve is two digits either way, and
- * that is the only value that was seen. Rather than pick one and be wrong half
- * the time, both are matched. Options are checked by `value` *and* by text
- * because which one carries the label was not measured either.
+ * Measured 2026-10-26: the hours are **bare** — `9:00 AM`, not `09:00 AM` —
+ * in 49 options from `12:00 AM` at half-hour steps, with `value` and text
+ * identical, behind a `default` option reading "Please select a pick-up time
+ * to continue." Both spellings stay matched anyway: the padded form costs
+ * nothing, and a vendor that pads its hours one day should not fail every
+ * quote for it.
  */
 function timeOption(select: HTMLSelectElement, hhmm: string): HTMLOptionElement | null {
   const { hour, minute, ampm } = clock12(hhmm);
@@ -852,10 +852,9 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
  *   this code is unusable at Enterprise however the driver behaves
  * - neither, before the deadline — the search never ran
  *
- * The account-holder check is still absent, and the reason is at the top of
- * this file rather than repeated here — it is *not* the workbook-name
- * comparison this comment used to describe, which `national.ts` shows is
- * unnecessary. The obstacle is that the label's markup was never captured.
+ * The account-holder check lives in `verifyResults`, not here: it is a claim
+ * about the results page, and that step is the one that runs against whichever
+ * document holds the results.
  */
 export async function submitSearch(ctx: DriveContext): Promise<void> {
   const button = [...ctx.doc.querySelectorAll<HTMLElement>('button, input[type="submit"]')].find(
@@ -882,7 +881,35 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
 }
 
 /**
- * Confirm a search actually ran, without re-running one.
+ * The account holder, as the results page names it.
+ *
+ * Measured 2026-10-26. With IBM's `5666666` the header renders
+ * `<button class="cta … contract-name__button" aria-label="I B M CORP (USA)">`
+ * inside `#codebanner-container` — three copies, one per breakpoint — and the
+ * cards carry a "Custom Rate" tag. The identical search with an empty account
+ * number leaves `#codebanner-container` with no children at all, no button
+ * anywhere, and no "Custom Rate". The class name is the handle rather than
+ * the container, because an empty container is also what a page shows while
+ * it is still thinking.
+ */
+const CONTRACT_NAME = '.contract-name__button';
+
+/** One vehicle class on the results page. 73 of them on the measured page. */
+const RESULT_CARD = 'section.car-item__wrapper';
+
+/**
+ * How long a results page gets to name its account after it has listed cars.
+ *
+ * On the live page the banner and the cards arrived on the same poll, so this
+ * is slack for a slower render rather than a measured gap. Bounded rather than
+ * left to the quote's deadline because a code Enterprise silently ignores is
+ * the case this exists to catch, and spending the whole remaining budget to
+ * say "no discount" would turn a ten-second answer into a minute's wait.
+ */
+const BANNER_GRACE_MS = 3_000;
+
+/**
+ * Confirm a search actually ran and was priced under the account we gave it.
  *
  * Enterprise submits in place — its results are a `#car_select` fragment on the
  * same document — so unlike National there is no navigation to survive and
@@ -891,11 +918,14 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
  * `submitSearch`: that clicks the button, and a verification step that submits
  * the form again is a second search per quote.
  *
- * No account check here. Enterprise's results page names the account holder too
- * (`I B M CORP (USA)` for IBM's code), and it is the one gap in this driver's
- * verification now that it *is* reachable — a code Enterprise silently ignores
- * gives a real results page at the retail rate and nothing here notices. The
- * file header says what would be needed to close it.
+ * The account check is the part that matters. A code Enterprise ignores rather
+ * than refuses gives a real results page at the retail rate — measured: the
+ * no-code search prices Economy at exactly the $55.13 IBM's code does — and
+ * without this the popup would print that as the company's rate under a
+ * "form filled" badge. `discount-missing` rather than `code-rejected`: an
+ * absent element is our inference, not the vendor's sentence, and it is
+ * deliberately never remembered. See `rejected-codes.ts` for why that split
+ * is load-bearing.
  */
 export async function verifyResults(ctx: DriveContext): Promise<void> {
   await waitFor(
@@ -903,6 +933,21 @@ export async function verifyResults(ctx: DriveContext): Promise<void> {
     'Enterprise to be showing a results page',
     () => ctx.doc.location?.hash.includes(RESULTS_HASH) || null,
     'form-submit',
+  );
+  await waitFor(
+    ctx,
+    'Enterprise to list vehicle classes',
+    () => ctx.doc.querySelector(RESULT_CARD),
+    'form-submit',
+  );
+  // A shortened deadline, never a longer one: the grace is capped by the
+  // quote's own budget so this step can never outlive the probe.
+  const grace = { ...ctx, deadline: Math.min(ctx.deadline, ctx.now() + BANNER_GRACE_MS) };
+  await waitFor(
+    grace,
+    'Enterprise to name the account the search was priced under (it listed cars but no contract)',
+    () => ctx.doc.querySelector(CONTRACT_NAME),
+    'discount-missing',
   );
 }
 
