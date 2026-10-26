@@ -1048,3 +1048,75 @@ describe('where the offers came from', () => {
     expect(result.offers.map((o) => o.amount)).toEqual([48]);
   });
 });
+
+describe("Enterprise's results page", () => {
+  // Markup captured from the live results page on 2026-10-26, from a real probe
+  // run: the amount is three spans and its unit is a sibling paragraph, so the
+  // card's textContent reads "$55.13Per Day$298.34Total" with no word boundary
+  // before either unit. The sweep found every number and classified all of
+  // them `unknown`; the popup printed "basis unclear" and nothing could rank it.
+  const card = (name: string, perDay: string, total: string) => `
+    <section class="car-item__wrapper">
+      <section class="car-item__vehicle-summary">
+        <p class="vehicle-item__tour-info">ECAR</p>
+        <h2 class="mb-0">${name}</h2>
+        <p class="descriptor">Mitsubishi Mirage or similar</p>
+      </section>
+      <section class="car-item__price-details">
+        <h3 class="car-item__price-details-title">Pay Later</h3>
+        <div class="car-item__price-details-item-columns">
+          <div class="car-item__price-details-item">
+            <div class="rs-price-tag"><span>$</span><span>${perDay.split('.')[0]}</span><span>.${perDay.split('.')[1]}</span></div>
+            <p class="car-item__price-details-item-label">Per Day</p>
+          </div>
+          <div class="car-item__price-details-item">
+            <div class="rs-price-tag"><span>$</span><span>${total.split('.')[0]}</span><span>.${total.split('.')[1]}</span></div>
+            <p class="car-item__price-details-item-label">Total</p>
+          </div>
+        </div>
+        <button>Select</button>
+      </section>
+    </section>`;
+
+  it('reads one class per card, with each rate on its own basis', () => {
+    document.body.innerHTML = `<main>${card('Economy', '55.13', '298.34')}${card('Compact', '57.00', '309.10')}</main>`;
+
+    const result = extract(document, 'enterprise');
+    expect(result.path).toBe('vendor-selectors');
+    expect(result.offers).toEqual([
+      { label: 'Economy', amount: 55.13, currency: 'USD', basis: 'per-day' },
+      { label: 'Economy', amount: 298.34, currency: 'USD', basis: 'total' },
+      { label: 'Compact', amount: 57, currency: 'USD', basis: 'per-day' },
+      { label: 'Compact', amount: 309.1, currency: 'USD', basis: 'total' },
+    ]);
+    // The trip total, not the daily rate that is numerically smaller.
+    expect(bestOffer(result.offers)).toEqual({
+      label: 'Economy',
+      amount: 298.34,
+      currency: 'USD',
+      basis: 'total',
+    });
+  });
+
+  it('falls back to the sweep when the card markup is gone', () => {
+    // A redesign degrades to "basis unclear", not to no quote at all.
+    document.body.innerHTML =
+      '<main><div class="redesigned"><h2>Economy</h2><span>$</span><span>55</span><span>.13</span><p>Per Day</p></div></main>';
+    const result = extract(document, 'enterprise');
+    expect(result.path).toBe('generic-sweep');
+    expect(result.offers.map((o) => o.amount)).toContain(55.13);
+  });
+
+  it('does not let the filter rail outrank a car', () => {
+    // The real page carries a "Total from" rail — "Unlimited Mileage $299",
+    // "Cars $299" — whose numbers the sweep reported as offers labelled
+    // "Mileage" and "Vehicle Type". With the offer selector they are not cards
+    // and are not read.
+    document.body.innerHTML = `<main>
+      <aside><h4>Mileage</h4><p>Total from</p><span>Unlimited Mileage</span><span>$299</span></aside>
+      ${card('Economy', '55.13', '298.34')}
+    </main>`;
+    const result = extract(document, 'enterprise');
+    expect(result.offers.map((o) => o.amount)).not.toContain(299);
+  });
+});
