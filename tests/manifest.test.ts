@@ -22,7 +22,7 @@ const manifest = JSON.parse(
 
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
-) as { version: string };
+) as { version: string; engines?: { node?: string } };
 
 const lock = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package-lock.json', import.meta.url)), 'utf8'),
@@ -114,5 +114,56 @@ describe('manifest.json', () => {
     expect(manifest.background.service_worker).toBe('background.js');
     expect(manifest.background.type).toBe('module');
     expect(manifest.action.default_popup).toBe('src/popup/index.html');
+  });
+});
+
+describe('package.json', () => {
+  it('keeps @types/node on the lowest Node major this repo runs on', () => {
+    // What tsc accepts is decided by the installed @types/node major, and the
+    // runtime it must not exceed is the lowest Node that CI actually runs: a
+    // Node-26-only API typed in would pass typecheck and fail at runtime on
+    // the 22 leg, with nothing saying why. Dependabot is told the same in
+    // dependabot.yml; this is the half that catches a hand-run
+    // `npm i -D @types/node@latest`, an engines bump that forgot the typings,
+    // or a workflow that forgot the engines.
+    //
+    // Every reading is the lowest major rather than the first written —
+    // `engines` can list its clauses in any order — and the typings come from
+    // the lockfile's resolved version, which is what is installed, not from a
+    // range that `>=22` would satisfy at 26.
+    //
+    // ci.yml is read in exactly the two spellings this repo uses — a quoted
+    // flow list `node: ['22', '24', '26']` for the matrix and a quoted
+    // `node-version: '22'` for a single job — and nothing else. A block
+    // sequence, `lts/*`, `v22` or a bare number is not tolerated and quietly
+    // read as fewer legs; it is a failed assertion that names the file, so a
+    // reformat of the workflow turns this test red instead of hollow.
+    const major = (version: string) => Number(/^(\d+)\.\d+\.\d+/.exec(version)?.[1] ?? NaN);
+    const engines = pkg.engines?.node ?? '';
+    const engineMajors = engines
+      .split('||')
+      .map((clause) => major(clause.replace(/^[\s^~>=<]+/, '')))
+      .filter((n) => Number.isFinite(n));
+    expect(engineMajors.length, `engines.node unreadable: ${engines}`).toBeGreaterThan(0);
+    const engineFloor = Math.min(...engineMajors);
+
+    const ci = readFileSync(
+      fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url)),
+      'utf8',
+    );
+    const matrices = [...ci.matchAll(/^\s*node:\s*\[((?:\s*'\d+'\s*,?)+)\]\s*$/gm)];
+    expect(matrices.length, 'ci.yml has no quoted flow-list node matrix').toBe(1);
+    const matrixLegs = [...(matrices[0]?.[1] ?? '').matchAll(/'(\d+)'/g)].map((m) => Number(m[1]));
+    const singleLegs = [...ci.matchAll(/^\s*node-version:\s*'(\d+)'\s*$/gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(singleLegs.length, 'ci.yml has no quoted single node-version').toBeGreaterThan(0);
+    const legs = [...matrixLegs, ...singleLegs];
+
+    const installed = lock.packages['node_modules/@types/node']?.version;
+    expect(installed, '@types/node is not in the lockfile').toBeDefined();
+
+    expect(Math.min(...legs), 'the lowest Node CI runs is not the engines floor').toBe(engineFloor);
+    expect(major(installed ?? ''), 'the installed @types/node major').toBe(engineFloor);
   });
 });
