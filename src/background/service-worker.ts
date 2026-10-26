@@ -1462,6 +1462,10 @@ chrome.windows.onRemoved.addListener((windowId) => {
   if (run.cancelled || run.state.finishedAt !== undefined) return;
   run.windowId = null;
   run.windowPromise = null;
+  // The stored id too: `closeWindow` forgets only the window it closes, and
+  // it has nothing to close now. Left behind, the dead id would make the next
+  // worker's `reapOrphanWindow` try to remove it and log that it could not.
+  void forgetWindowId(windowId);
   void cancelRun();
 });
 

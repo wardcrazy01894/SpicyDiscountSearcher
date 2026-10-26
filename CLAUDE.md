@@ -653,7 +653,9 @@ should shape the driver when it is written:
   same search with an empty account number leaves that container with no
   children at all — at the identical $55.13, which is the whole danger. A
   results page that lists cars and names no contract fails `discount-missing`
-  within a three-second grace, never at the quote's deadline, and is never
+  within a ten-second grace — ten rather than three because it runs after the
+  paint hold is released, in a tab back in a minimised window where timers tick
+  about once a second — never at the quote's deadline, and is never
   remembered, for the reasons the split below gives.
 - **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
   "this account number cannot be used online. Please contact your account

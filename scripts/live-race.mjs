@@ -30,10 +30,19 @@ import path from 'node:path';
 
 import puppeteer from 'puppeteer-core';
 
+// `--flag value` pairs. A flag followed by another flag, or by nothing, has no
+// value: it is left unset rather than swallowing the next flag or defaulting
+// through `??` with an empty string.
 const args = Object.fromEntries(
   process.argv
     .slice(2)
-    .map((arg, i, all) => (arg.startsWith('--') ? [arg.slice(2), all[i + 1] ?? ''] : null))
+    .map((arg, i, all) => {
+      if (!arg.startsWith('--')) return null;
+      const next = all[i + 1];
+      return next === undefined || next.startsWith('--') || next === ''
+        ? null
+        : [arg.slice(2), next];
+    })
     .filter(Boolean),
 );
 const required = (name) => {

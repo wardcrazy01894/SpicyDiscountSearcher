@@ -911,12 +911,25 @@ function extractFrom(root: Element, config: VendorSelectors): Extraction {
         // element reading "Taxes & Fees $38.40 Total" carries the most trusted
         // basis there is and would be the cheapest total on the page.
         if (isFeeLine(own)) continue;
+        // The element's own text first, the card's only as a fallback, and
+        // only when the card does not mix bases. A `price` element that holds
+        // just the amount — `<span class="amt">$132.00</span> per night` —
+        // would otherwise lose the unit that sits beside it and come back
+        // `unknown`, which outranks `per-day` and lets a nightly rate bucket
+        // with trip totals; a card holding both a daily rate and a total says
+        // nothing about which one this element is, which is the case this
+        // branch exists for.
+        let basis = classifyBasis(own.slice(0, 400));
+        if (basis === 'unknown' && priceNodes.length > 0) {
+          const card = offerText(node).slice(0, 400);
+          if (!mixesBases(card)) basis = classifyBasis(card);
+        }
         for (const price of findPrices(own)) {
           offers.push({
             label: label || null,
             amount: price.amount,
             currency: price.currency,
-            basis: classifyBasis(own.slice(0, 400)),
+            basis,
           });
         }
       }

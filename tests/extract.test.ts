@@ -534,6 +534,24 @@ describe('the per-vendor selector path', () => {
   // Note this one passes with the branch deleted — the sweep would run anyway.
   // It is here to pin the *reported branch*, which is the part that would go
   // wrong silently if the fallback stopped labelling itself.
+  it('reads the unit from the card when the price element holds only the amount', () => {
+    // Per-element classification must not throw the card away: with the unit
+    // beside the element rather than inside it, `unknown` would outrank
+    // `per-day` and let a nightly rate bucket with trip totals.
+    CONFIG['hertz'] = { container: 'main', offer: '.veh', price: '.amt' };
+    document.body.innerHTML =
+      '<main><div class="veh"><h3>Compact</h3><span class="amt">$132.00</span> per night</div></main>';
+    expect(extract(document, 'hertz').offers[0]?.basis).toBe('per-day');
+  });
+
+  it('leaves the basis unknown when the card mixes bases around a bare amount', () => {
+    CONFIG['hertz'] = { container: 'main', offer: '.veh', price: '.amt' };
+    document.body.innerHTML =
+      '<main><div class="veh"><h3>Compact</h3><span class="amt">$70.30</span> per day <span class="amt">$185.05</span> est. total</div></main>';
+    const bases = extract(document, 'hertz').offers.map((o) => o.basis);
+    expect(bases).toEqual(['unknown', 'unknown']);
+  });
+
   it('reports the sweep when the selectors match nothing', () => {
     CONFIG['hertz'] = { container: 'main', offer: '.gone-in-a-redesign' };
     document.body.innerHTML =

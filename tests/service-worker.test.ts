@@ -745,21 +745,11 @@ describe('politeness', () => {
     // and the popup sat on a run that could not finish. Re-raising a window
     // the user had just closed is the other wrong answer, so this cancels.
     await bootWorker();
-    const enterpriseOnly: SearchPlan = {
-      trip: TRIP,
-      candidates: [
-        {
-          companySlug: 'ibm',
-          companyName: 'IBM',
-          vendor: 'enterprise',
-          code: '5666666',
-          note: null,
-        },
-        { companySlug: 'acme', companyName: 'Acme', vendor: 'hertz', code: 'H1', note: null },
-      ],
-      concurrency: 1,
+    const enterpriseThenHertz: SearchPlan = {
+      ...enterprisePlan(),
+      candidates: [...enterprisePlan().candidates, plan().candidates[0]!],
     };
-    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterpriseOnly });
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterpriseThenHertz });
     await settle();
     const windowId = chromeMock.windowsCreated[0];
     expect(windowId).toBeDefined();

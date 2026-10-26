@@ -555,6 +555,9 @@ async function failureOf(promise: Promise<unknown>): Promise<DriverError> {
 afterEach(() => {
   document.body.innerHTML = '';
   window.location.hash = '';
+  // The submit marker is per tab and would otherwise outlive the test that
+  // set it, letting a later `drive` mistake a fresh fixture for its own reload.
+  window.sessionStorage.clear();
 });
 
 describe('registration', () => {
@@ -1161,16 +1164,34 @@ describe('verifyResults', () => {
 });
 
 describe('drive', () => {
-  it('drives nothing on a document already showing results', async () => {
+  it('drives nothing on a results view this tab submitted for this code', async () => {
     // The probe re-runs on every document and Enterprise's results view shares
     // the form's path, so a reload of the results page would otherwise wait
-    // the whole budget for a `#cid` that view never renders.
+    // the whole budget for a `#cid` that view never renders. The marker is
+    // what `submitSearch` leaves behind before it clicks.
     renderForm({ onSubmit: 'results' });
-    document.querySelector('button')!.click();
+    let released = false;
+    await submitSearch(makeContext());
     const cid = document.querySelector<HTMLInputElement>('#cid')!;
     cid.value = '';
-    await expect(enterpriseDriver.drive(makeContext())).resolves.toBeUndefined();
+    await expect(
+      enterpriseDriver.drive(makeContext({ releasePaint: () => (released = true) })),
+    ).resolves.toBeUndefined();
     expect(cid.value).toBe('');
+    expect(released).toBe(true);
+  });
+
+  it('drives a results view that was not its own search, and fails loudly on it', async () => {
+    // A `#car_select` this tab did not earn — restored session state, the
+    // previous quote's search, the user's own — is driven from the top like
+    // any other document, and a view without a form fails rather than being
+    // priced under this code with a "form filled" badge.
+    renderForm({ onSubmit: 'results' });
+    await submitSearch(makeContext({ code: 'XZOTHER' }));
+    document.querySelector('#cid')!.remove();
+    const error = await failureOf(enterpriseDriver.drive(makeContext()));
+    expect(error.failure).toBe('form-fill');
+    expect(error.message).toMatch(/hydrate/);
   });
 
   it('drives the whole form and submits', async () => {

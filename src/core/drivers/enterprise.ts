@@ -94,6 +94,35 @@ const REJECTED_RE = /cannot be used online/i;
 /** The hash Enterprise puts on the URL once a search has produced results. */
 const RESULTS_HASH = 'car_select';
 
+/**
+ * Where this tab records that *it* submitted a search, and for which code.
+ *
+ * `sessionStorage` is per tab and survives a reload of the document, which is
+ * exactly the pair of properties needed: a reload of the results view finds
+ * the marker and knows the search on screen is its own, while a fresh tab —
+ * or a results view Enterprise restored from its own session state — finds
+ * none and drives the form from the top. The code is the value so a tab that
+ * raced code A and is now assigned code B cannot mistake A's results for B's.
+ */
+const SUBMITTED_KEY = 'spicy-discount-searcher:enterprise:submitted';
+
+function markSubmitted(ctx: DriveContext): void {
+  try {
+    ctx.doc.defaultView?.sessionStorage.setItem(SUBMITTED_KEY, ctx.code);
+  } catch {
+    // Storage can be unavailable (a sandboxed document); the driver then just
+    // cannot recognise its own reload, which fails loudly rather than wrongly.
+  }
+}
+
+function submittedHere(ctx: DriveContext): boolean {
+  try {
+    return ctx.doc.defaultView?.sessionStorage.getItem(SUBMITTED_KEY) === ctx.code;
+  } catch {
+    return false;
+  }
+}
+
 function carTrip(ctx: DriveContext): CarTrip {
   if (ctx.trip.category !== 'car') {
     throw new DriverError('form-fill', 'enterprise is a car vendor, got a hotel trip');
@@ -612,8 +641,12 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
   // click landed. Review of PR #69 found it; a fixture with a slow repaint
   // pins it.
   let pagedFrom: string | null = null;
+  // Arrow clicks, not polls: with one click per redraw most iterations are
+  // spent waiting, and counting those against a two-year page budget would
+  // exhaust it on a trip eight months out. The deadline bounds the waiting.
+  let paged = 0;
 
-  for (let step = 0; step <= MAX_MONTH_STEPS; step += 1) {
+  for (;;) {
     const cell = dayCell(ctx, id);
     if (cell) {
       cell.click();
@@ -648,7 +681,9 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
             `enterprise's calendar will not page ${direction.toLowerCase()} to reach ${id}`,
           );
         }
+        if (paged >= MAX_MONTH_STEPS) break;
         control.click();
+        paged += 1;
         pagedFrom = key;
       }
     }
@@ -891,6 +926,10 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
   );
   if (!button) throw new DriverError('form-fill', 'no "Browse Vehicles" button on the form');
 
+  // Mark this tab as the one that submitted this code, *before* the click,
+  // so a re-injected probe on the results view can tell its own search from a
+  // results page Enterprise restored from session state. See `drive`.
+  markSubmitted(ctx);
   button.click();
 
   await waitFor(
@@ -997,14 +1036,27 @@ export const enterpriseDriver: FormDriver = {
   startPath: new URL(START_URL).pathname,
   verifyResults,
   async drive(ctx) {
-    // A document already showing results has nothing to drive. The probe
-    // re-runs on every document and gates on `startPath`, which for Enterprise
-    // is the *same* path as the results view — only `#car_select` tells them
-    // apart — so a reload of the results page (a consent bounce, an SPA
-    // `location.reload`) would otherwise spend the whole budget waiting for a
-    // `#cid` this view never renders, and fail a quote whose search had
-    // already succeeded. `verifyResults` still runs, and still checks.
-    if (ctx.doc.location?.hash.includes(RESULTS_HASH)) return;
+    // A document already showing the results of *this tab's own search* has
+    // nothing to drive. The probe re-runs on every document and gates on
+    // `startPath`, which for Enterprise is the *same* path as the results
+    // view — only `#car_select` tells them apart — so a reload of the results
+    // page (a consent bounce, an SPA `location.reload`) would otherwise spend
+    // the whole budget waiting for a `#cid` this view never renders, and fail
+    // a quote whose search had already succeeded.
+    //
+    // The hash alone is not enough, and the first version of this gate used
+    // only that. Enterprise keeps its itinerary in session state, so a results
+    // view could in principle be *restored* rather than earned — the previous
+    // quote's search, or the user's own — and `verifyResults` checks that an
+    // account is named, not whose. Skipping the drive on that view would price
+    // somebody else's search under this code with a "form filled" badge. So
+    // the skip needs this tab's own marker for this code (see `SUBMITTED_KEY`);
+    // anything else drives from the top and fails loudly on a view without a
+    // form. The paint hold is released here too, as it is after a submit.
+    if (ctx.doc.location?.hash.includes(RESULTS_HASH) && submittedHere(ctx)) {
+      ctx.releasePaint?.();
+      return;
+    }
     await awaitHydration(ctx);
     await fillLocation(ctx);
     // The itinerary before the code, and both before the submit: there is no
