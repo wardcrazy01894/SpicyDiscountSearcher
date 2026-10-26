@@ -884,8 +884,9 @@ described below too, but as a closed question rather than as work.
   race it started runs behind it.
 
 - TypeScript is pinned below 7 by something outside this repo.
-  `typescript-eslint@8.65.0` is the newest release — its canary too — and
-  declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` cannot resolve TS 7
+  `typescript-eslint@8.72.0` is the newest release — its canary too — and
+  declares `peer typescript ">=4.8.4 <6.1.0"` (checked again on 2026-10-26,
+  when Dependabot moved it from 8.65.0), so `npm ci` cannot resolve TS 7
   at all. The code itself is ready — measured on Dependabot's branch with
   `--legacy-peer-deps`, `tsc --noEmit` is clean under 7.0.2 and the suite
   passes — so this is a wait, not a migration. `.github/dependabot.yml` ignores

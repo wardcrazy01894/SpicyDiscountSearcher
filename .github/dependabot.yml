@@ -17,9 +17,10 @@ updates:
         update-types: [minor, patch]
     ignore:
       # TypeScript 7 cannot be installed here, and the blocker is upstream.
-      # `typescript-eslint@8.65.0` -- the newest release, and its canary --
-      # declares `peer typescript ">=4.8.4 <6.1.0"`, so `npm ci` fails to
-      # resolve before a line is compiled. There is no 9.x.
+      # `typescript-eslint@8.72.0` -- the newest release, and its canary --
+      # declares `peer typescript ">=4.8.4 <6.1.0"` (still, as of the
+      # 2026-10-26 bump from 8.65.0), so `npm ci` fails to resolve before a
+      # line is compiled. There is no 9.x.
       #
       # The repo itself is ready. Measured on Dependabot's own branch with
       # --legacy-peer-deps: tsc --noEmit clean under 7.0.2, 261 tests passing,
