@@ -357,10 +357,20 @@ encode other people's websites. They will break. Both are deliberately isolated:
   results, so `main` won on every vendor and every page; the narrow selectors in
   front of it were decoration. `firstMatch` now tries each alternative in turn.
   Found by measuring National, where `.vehicle-list` is real, present, and made
-  no difference whatsoever when added. **No vendor defines an `offer` selector**,
-  though, so the per-offer branch never fires and every `ProbeReport` says
-  `generic-sweep`. The selector path is kept — and tested with an injected
-  config — so it works the day someone fills one in.
+  no difference whatsoever when added. **Enterprise is the one vendor with an
+  `offer` selector**, since 2026-10-26, and the reason is a measurement from a
+  real probe run rather than a tidy-up: its results page splits every rate
+  into `<span>$</span><span>55</span><span>.13</span>` with "Per Day" or
+  "Total" in a sibling `<p>`, so the card's `textContent` is
+  `$55.13Per Day$298.34Total` and no `\b` exists before either unit. The
+  sweep found all 78 numbers and tagged every one `unknown`; the popup printed
+  "$55.13 (basis unclear)" for a quote `comparisonGroups` then could not rank
+  against anybody's total. The per-offer branch now classifies **each `price`
+  match against its own text** (joined with element-boundary spaces, as the
+  sweep already did), which is what National's selector note said the branch
+  could not do and why no vendor had used it. National is untouched regardless
+  — it works, and the reactive-only rule at the top of this file governs it.
+  Every other `ProbeReport` still says `generic-sweep`.
 - A vendor redesign therefore degrades to a noisier sweep rather than nothing.
   Labels are best-effort: a card with no heading of its own inherits the
   previous card's, which markup cannot distinguish from a legitimate wrapper.
@@ -482,6 +492,12 @@ frame, and the autocomplete menu and calendar are lazily-rendered popups that
 may need one too. Releasing early would move the identical failure one step
 later and cost another live run to find. Tightening it is a real saving and
 wants its own measurement first.
+
+One thing on that page is measured **not** to need a frame: the header banner
+that names the contract holder, which `verifyResults` reads _after_ the hold
+is released. On 2026-10-26 a loaded build raced IBM's code in a real probe
+tab, released the paint on submit, and the banner was there on the next poll
+of a tab that was back in a minimised window.
 
 `maxLanes: 1` bounds this to one Enterprise tab at a time, but **not** to one
 short flash: the hold is taken per quote, so a race over the 19 shared
@@ -632,6 +648,13 @@ should shape the driver when it is written:
   `I B M CORP (USA)` in the header. That is a per-code verification signal of
   the same kind `verify-trip.ts` gives us for Avis, and it is the good news
   here: it can prove the code _applied_ rather than being silently dropped.
+  **Checked since 2026-10-26**, once the markup was captured: the name sits
+  in `button.contract-name__button` inside `#codebanner-container`, and the
+  same search with an empty account number leaves that container with no
+  children at all — at the identical $55.13, which is the whole danger. A
+  results page that lists cars and names no contract fails `discount-missing`
+  within a three-second grace, never at the quote's deadline, and is never
+  remembered, for the reasons the split below gives.
 - **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
   "this account number cannot be used online. Please contact your account
   manager." A real answer, not a broken driver, and a distinct outcome from
@@ -949,7 +972,16 @@ too, but as a closed question rather than as work.
   behaviour knows it was understood, not so that someone implements it.
 
 - Hotel support is wired end to end but has had far less thought than cars.
-- No end-to-end test that actually loads the extension in a browser.
+- No end-to-end test in CI that loads the extension in a browser. There is
+  one you run by hand: `scripts/live-race.mjs` launches a Chromium-based
+  browser with `dist/` loaded, fills the popup, clicks Run and prints what the
+  real service worker, probe tab and extraction returned — the race the popup
+  would run, in the minimised window it would run it in. Written 2026-10-26
+  and used the same day to prove Enterprise end to end three times; it is the
+  evidence this file's rules ask for, where a foreground tab is not. Two
+  things to know: **branded Google Chrome ignores `--load-extension`** since
+  137, so point it at Brave or Chromium, and it uses a throwaway profile, so
+  a vendor that wants a bot check passed will want it passed again there.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison
   warnings, the plan line's wording, saved-selection persistence. Its
   import-time contract is not: `tests/popup-contract.test.ts` loads the real
