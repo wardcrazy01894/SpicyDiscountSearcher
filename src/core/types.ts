@@ -33,6 +33,30 @@ export interface Vendor {
    */
   alsoTryAs?: VendorId[];
   /**
+   * How long a quote at this vendor may take, if the default is not enough.
+   *
+   * Exists for Enterprise, whose booking widget is not merely slow but
+   * *variably* slow: it mounted instantly on one profile, took about forty
+   * seconds on another, and on a third never mounted at all. The default 45s
+   * budget, of which a driver gets `DRIVE_SHARE`, cannot absorb that.
+   *
+   * Per-vendor rather than a raised global, because the global is also a
+   * politeness setting: it bounds how long a tab sits open on *every* vendor's
+   * site, and Hertz, Avis and National answer well inside it. Slowing them down
+   * to accommodate Enterprise would be paying for one vendor's problem
+   * everywhere.
+   *
+   * `KEEPALIVE_CEILING_MS` is **not** derived from these — it stays on the
+   * default, and that was checked rather than assumed. Its job is to exceed the
+   * longest legitimate gap between two quotes settling, and `13 x (45s + 750ms)`
+   * is 9.9 minutes against a 120s quote: five times over. Deriving it from the
+   * largest instead pushed it to 26 minutes, which is how long a *wedged* run
+   * would pin the worker with a minimised window open. See the constant's own
+   * comment; there is room for a vendor budget of about eight minutes before
+   * this stops being true.
+   */
+  probeTimeoutMs?: number;
+  /**
    * How many tabs may be open at this vendor at once, if fewer than the run's
    * own concurrency.
    *
@@ -50,6 +74,41 @@ export interface Vendor {
    * bound.
    */
   maxLanes?: number;
+  /**
+   * Minimum time between two searches opened at this vendor, in one run.
+   *
+   * Measured on National on 2026-10-27: seven searches in about fifty seconds
+   * from one profile, and the eighth and every one after it answered
+   * "Something went wrong. Please try again later." — Imperva marks the
+   * profile's `visid_incap` visitor id and keeps refusing until it clears,
+   * which a brand-new profile proved by pricing the same code immediately.
+   * `maxLanes: 1` bounds how many tabs are open and says nothing about how
+   * fast they follow each other; this is the other half.
+   */
+  minGapMs?: number;
+  /**
+   * This vendor's form does not mount unless Chrome actually paints the tab.
+   *
+   * The probe window is minimised, and a minimised window is never painted — so
+   * for a vendor with this flag the window is opened *visible* (never focused)
+   * and the probe tab selected, both put back when the driver calls
+   * `DriveContext.releasePaint` — after the search is submitted, not at the
+   * mount; `form-driver.ts` says why.
+   *
+   * Enterprise is the measured case, and it is not throttling or
+   * `visibilityState`. A hidden tab left for 153 seconds had **zero `<input>`
+   * elements** while the page shell rendered normally; one forced repaint
+   * produced all five and `#cid` immediately, with `visibilityState` still
+   * `hidden` and timers running at the documented ~1/s throughout. The standard
+   * "hydrate when scrolled into view" pattern does exactly this, and no
+   * content-script API can force a frame in a window Chrome is not drawing.
+   *
+   * Deliberately per-vendor and deliberately narrow. It is the one thing in
+   * this file that puts a window on the user's screen, so it costs politeness
+   * and must be paid only where it buys a vendor that otherwise cannot run at
+   * all. Do not set it to make a slow vendor faster.
+   */
+  needsPaintedWindow?: boolean;
 }
 
 /** One discount code for one company at one vendor, as parsed from the workbook. */
@@ -207,6 +266,19 @@ export type QuoteFailure =
    */
   | 'discount-missing'
   /**
+   * The vendor refused to run the search at all, for this browser, for now.
+   *
+   * Not about the code and not about the form: National answers "Something
+   * went wrong. Please try again later." to every search once its bot
+   * protection has marked the profile, and it keeps answering that until the
+   * mark clears. Distinct from `form-submit` because the response is immediate
+   * and the diagnosis is the opposite — "wait, and search less often" rather
+   * than "the submit never landed" — and because the worker acts on it: every
+   * other quote queued for that vendor is settled with the same code at once,
+   * since each would otherwise spend a full deadline failing the same way.
+   */
+  | 'vendor-throttled'
+  /**
    * The page priced a different trip from the one asked for.
    *
    * Not a missing price — a real one, for the wrong rental. Avis lets its
@@ -236,6 +308,16 @@ export interface ProbeReport {
   finalPath: string;
   title: string;
   offerCount: number;
+  /**
+   * The account holder the results page named, for driven vendors.
+   *
+   * Evidence, not a verdict: `discount-missing` already fires when nothing is
+   * named, so this exists for the case that passed — four different codes
+   * pricing the same trip at the same number is either four contracts on one
+   * rate plan or one restored account priced four times, and only the name
+   * rendered beside each price tells those apart.
+   */
+  account?: string;
   /**
    * Which extraction branch produced the offers.
    *

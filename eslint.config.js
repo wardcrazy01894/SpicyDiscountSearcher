@@ -12,7 +12,11 @@ export default tseslint.config(
         // Config and build scripts aren't in any tsconfig; let the default
         // project cover them rather than type-checking tooling.
         projectService: {
-          allowDefaultProject: ['eslint.config.js', 'scripts/check-dist.mjs'],
+          allowDefaultProject: [
+            'eslint.config.js',
+            'scripts/check-dist.mjs',
+            'scripts/live-race.mjs',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },

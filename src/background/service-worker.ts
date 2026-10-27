@@ -13,6 +13,7 @@ import type {
   QuoteFailure,
   RunState,
   SearchPlan,
+  VendorId,
 } from '../core/types.js';
 
 /**
@@ -27,6 +28,14 @@ import type {
 const STATE_KEY = 'runState';
 /** Window id of a run in flight, so a restarted worker can close the orphan. */
 const WINDOW_KEY = 'runWindow';
+/**
+ * How long a quote gets, unless its vendor asks for longer.
+ *
+ * Also a politeness setting, not only a correctness one: it bounds how long a
+ * tab sits open on a vendor's site. That is why a vendor needing more asks for
+ * it by name in `vendors.ts` rather than this number being raised for
+ * everybody — Enterprise's 40s hydration should not slow Hertz down.
+ */
 const PROBE_TIMEOUT_MS = 45_000;
 /** Time the background keeps in hand after the probe's own deadline passes. */
 const PROBE_GRACE_MS = 5_000;
@@ -81,11 +90,35 @@ const KEEPALIVE_MS = 20_000;
  * how many codes are in the run. Thirteen times that is ~10 minutes today and
  * shrinks automatically if the deadline does.
  *
+ * **Still derived from the default, not from the longest vendor budget**, and
+ * that was checked rather than assumed. A version of this briefly used the
+ * longest, on the theory that a ceiling shorter than a single quote's own
+ * budget would let a run of slow quotes trip its own inactivity guard. The
+ * arithmetic says otherwise: `13 x (45s + 750ms)` is **9.9 minutes** against
+ * Enterprise's 120s quote — five times over, not short. Using the longest
+ * instead pushed the ceiling to 26 minutes, which is how long a *wedged* run
+ * would pin the worker and hold a minimised window open, for no benefit.
+ *
+ * The property to preserve if a slower vendor is ever added: this must exceed
+ * one lane's longest deadline plus its stagger. At 9.9 minutes there is room
+ * for a vendor budget of about eight minutes before that stops being true.
+ *
  * Tripping it returns the worker to Chrome's ordinary suspension rules, which
  * is what shipped before this keepalive existed — the worst case is the old
  * behaviour, not a new failure.
  */
 const KEEPALIVE_CEILING_MS = 13 * (PROBE_TIMEOUT_MS + STAGGER_MS);
+/**
+ * This vendor's probe deadline.
+ *
+ * `findVendor` rather than the throwing `getVendor`: a quote whose vendor is
+ * somehow unknown should get the default budget and fail on its own merits, not
+ * take the whole run down from inside a timing calculation.
+ */
+function probeTimeoutFor(vendor: VendorId): number {
+  return findVendor(vendor)?.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+}
+
 interface ActiveRun {
   state: RunState;
   /** Tab id -> quote id, so a probing content script can identify itself. */
@@ -105,11 +138,36 @@ interface ActiveRun {
   windowId: number | null;
   /** In-flight window creation, so concurrent lanes share one window. */
   windowPromise: Promise<number> | null;
+  /**
+   * Quotes whose vendor needs a painted window and whose form has not mounted.
+   *
+   * The window is visible while this is non-empty and minimised the moment it
+   * empties. A set rather than a counter so a duplicate `PROBE_PAINT_DONE` — the
+   * probe re-runs on every document, and a forged one is possible — cannot
+   * decrement past zero and minimise the window out from under another quote
+   * that is still mounting.
+   */
+  awaitingPaint: Set<string>;
   cancelled: boolean;
   /** Resolvers waiting on a quote to finish, keyed by quote id. */
   waiters: Map<string, () => void>;
   /** Vendor id -> tabs currently open at it, for `Vendor.maxLanes`. */
   vendorInFlight: Map<string, number>;
+  /**
+   * Set when Chrome tears down one of this run's probe tabs *because its
+   * window is closing*. That is what tells the user closing the run window
+   * (Stop) apart from Chrome removing a window that had simply run out of
+   * tabs — see `windows.onRemoved`.
+   */
+  windowTookTab: boolean;
+  /** Vendor id -> when its last quote was taken, for `Vendor.minGapMs`. */
+  vendorLastStart: Map<string, number>;
+  /**
+   * Vendors that answered `vendor-throttled` in this run. Nothing queued for
+   * one of these is worth a tab: the site has said it will refuse, and each
+   * attempt would cost a full probe deadline to hear it again.
+   */
+  throttled: Set<string>;
   /**
    * Lanes parked because every quote left belongs to a capped vendor.
    *
@@ -228,6 +286,12 @@ function finishQuote(run: ActiveRun, quoteId: string, patch: Partial<Quote>): vo
     return;
   }
   Object.assign(quote, patch, { finishedAt: Date.now() });
+  // Whatever happened, this quote is no longer mounting a form. Without it a
+  // quote that fails or times out before its driver ever reports hydration
+  // leaves the window visible for the rest of the run — which is the failure
+  // the user is most likely to see, since a paint-gated vendor that cannot
+  // mount is exactly the case this flag exists for.
+  void setAwaitingPaint(run, quoteId, false);
   // Remember only what the vendor itself said. `discount-missing` is our own
   // inference and is deliberately not recorded — see `rejected-codes.ts`.
   if (quote.failure === 'code-rejected') {
@@ -296,11 +360,14 @@ const MAX_REPORT_TEXT = 200;
 /**
  * How many offers one page may contribute.
  *
- * Generous by an order of magnitude: the longest real results page in the
- * fixtures carries tens, not hundreds. This is a bound on a hostile page, not a
- * judgement about a legitimate one.
+ * A bound on a hostile page, not a judgement about a legitimate one — and the
+ * margin has to be real. This was 200 against "tens, not hundreds" until
+ * Enterprise's measured results page produced 146 (73 vehicle classes, each
+ * with a per-day and a total), which left a larger fleet or a third rate
+ * column to truncate silently, dropping the *last* cards in document order
+ * with nothing to say the cheapest might have been among them.
  */
-const MAX_OFFERS = 200;
+const MAX_OFFERS = 500;
 
 const PRICE_BASES = new Set<PriceBasis>(['total', 'per-day', 'unknown']);
 
@@ -353,6 +420,9 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
     // the safe default is the one that keeps the quote out of the ranking. A
     // forged or future value should not be handed the more trusted label.
     path: PROBE_PATHS.has(report.path) ? report.path : 'body-fallback',
+    ...(typeof report.account === 'string' && report.account
+      ? { account: report.account.slice(0, MAX_REPORT_TEXT) }
+      : {}),
   };
 }
 
@@ -396,6 +466,8 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
   'form-submit',
   'code-rejected',
   'discount-missing',
+  // The driver reads the refusal off the page, so only it can say so.
+  'vendor-throttled',
 ]);
 
 /**
@@ -408,11 +480,13 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
  *
  * No longer blind for avis, whose builder targets
  * /en/reservation/vehicle-availability, so a landing on the root is the same
- * unambiguous tell it is everywhere else. Budget, enterprise and sixt are out
- * of scope entirely — they build no URL and produce no candidate. National is
- * not: it builds one (`confidence: 'driven'`, the page its form lives on) and
- * races, but its driver checks the results page itself, which is a stronger
- * signal than this flag can give.
+ * unambiguous tell it is everywhere else. Budget and sixt are out of scope
+ * entirely — they build no URL and produce no candidate. National and
+ * enterprise are not: both build one (`confidence: 'driven'`, the page the
+ * form lives on) and race, so this flag *can* fire for them if the vendor ever
+ * 302s to its root. Their drivers check the results page themselves, which is
+ * a stronger signal than this flag can give — but "out of scope" would be
+ * wrong, and reading it that way would dismiss a real `suspect` badge.
  *
  * Still blind to a link that reaches a real page which is not the search we
  * asked for. Sixt used to be the live example and is `searchable: false` now;
@@ -528,7 +602,14 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
   const pending = (run.windowPromise ??= (async () => {
     // Minimised keeps a dozen rental-car pages out of the user's face while
     // they load. Brave and Chrome both still render and run scripts in it.
-    const created = await chrome.windows.create({ state: 'minimized', focused: false });
+    //
+    // Except that a minimised window is never *painted*, and one vendor's form
+    // will not mount without a frame — so if a paint-gated quote is already
+    // waiting when the window is created, it starts visible. Never focused
+    // either way: appearing on screen is the cost being paid, stealing the
+    // user's keyboard is not.
+    const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+    const created = await chrome.windows.create({ state, focused: false });
     // windows.create can resolve undefined — @types/chrome 0.2 says so and the
     // older typings did not, so this was a live "cannot read id of undefined"
     // waiting for the one call that failed.
@@ -555,6 +636,48 @@ async function ensureWindow(run: ActiveRun): Promise<number> {
     if (run.windowPromise === pending) run.windowPromise = null;
     throw error;
   }
+}
+
+/**
+ * Put the window into the state the run's paint-gated quotes require.
+ *
+ * Visible while any of them is still mounting, minimised otherwise. Called on
+ * every transition rather than only on the edges, because the alternative is
+ * tracking which edge we last took and the two drift: a quote that fails before
+ * `PROBE_PAINT_DONE` and one that hydrates normally must both end minimised.
+ *
+ * Failures are swallowed. The window may already be gone — the user can close
+ * it, and it is a real window they can see now — and a run whose politeness
+ * nicety could not be applied is not a run worth failing. It is never *closed*
+ * from here; only `closeWindow` does that.
+ */
+async function applyWindowState(run: ActiveRun): Promise<void> {
+  const windowId = run.windowId;
+  if (windowId === null) return;
+  const state = run.awaitingPaint.size > 0 ? 'normal' : 'minimized';
+  try {
+    await chrome.windows.update(windowId, { state, focused: false });
+  } catch {
+    // Nothing to do and nothing worth logging: `warn` is for failures that
+    // belong to no quote and cost the user something, and this costs a window
+    // left in the wrong state on a run that is otherwise fine.
+  }
+}
+
+/**
+ * Note that a quote needs the window painted, or no longer does.
+ *
+ * `finishQuote` calls this too, with `false`, and that is the half that makes it
+ * safe: a quote that fails or times out before its driver ever reports
+ * hydration would otherwise hold the window on the user's screen for the rest
+ * of the run.
+ */
+async function setAwaitingPaint(run: ActiveRun, quoteId: string, awaiting: boolean): Promise<void> {
+  const had = run.awaitingPaint.has(quoteId);
+  if (awaiting === had) return;
+  if (awaiting) run.awaitingPaint.add(quoteId);
+  else run.awaitingPaint.delete(quoteId);
+  await applyWindowState(run);
 }
 
 /** Close the run's window, if it still has one, and forget it. */
@@ -623,19 +746,54 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
 
   let tabId: number | undefined;
   try {
+    // Registered *before* the window exists, so `ensureWindow` can create it
+    // visible rather than creating it minimised and raising it a moment later —
+    // the tab starts loading immediately, and a form that has already decided
+    // not to mount is not persuaded by a later repaint.
+    const needsPaint = findVendor(quote.candidate.vendor)?.needsPaintedWindow === true;
+    if (needsPaint) await setAwaitingPaint(run, quote.id, true);
     const windowId = await ensureWindow(run);
+    // Re-applied *after* the window exists, and this is not belt-and-braces.
+    // `setAwaitingPaint` above can only apply a state to a window that is
+    // already there, and `ensureWindow` fixes `state` at the moment it calls
+    // `windows.create` — so a lane that got there a moment earlier creates it
+    // minimised, this quote registers into the gap while that create is still
+    // in flight, and nothing ever raises it. The tab then opens into an
+    // unpainted window and the form never mounts: the production failure this
+    // whole flag exists to fix, reintroduced by the fix for it. Pinned by
+    // "raises a window another lane had already created minimised".
+    if (needsPaint) await applyWindowState(run);
     // Cancel can land while the window is still opening. Without this the run
     // goes on to load vendor pages *after* the user pressed Cancel, which is
     // exactly the hijacking the minimised window exists to avoid.
     if (run.cancelled || quote.finishedAt) return;
-    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: false });
+    // `active` is false for every vendor but the paint-gated one, and that
+    // exception is measured rather than defensive. A *window* being visible is
+    // not enough: a non-selected tab is `visibilityState: hidden` and Chrome
+    // draws no frames for it, so Enterprise's form does not mount in one.
+    // Measured 2026-08-12 in a window known to be painted (its sibling tab was
+    // rendering): 75s as a background tab gave zero `<input>` elements;
+    // selecting that same tab gave all five and `#cid` immediately.
+    //
+    // Selecting a tab inside our own unfocused window does not take the user's
+    // keyboard or raise the window over their work — `focused: false` is
+    // preserved everywhere — but it does mean the vendor's page is on screen
+    // until the driver releases the hold.
+    const tab = await chrome.tabs.create({ url: quote.url, windowId, active: needsPaint });
     tabId = tab.id;
     if (tabId === undefined) throw new Error('tab did not open');
     run.tabs.set(tabId, quote.id);
     // Absolute, so a vendor that bounces through a consent interstitial and
     // re-injects the probe cannot hand it a fresh budget the background will
     // not honour — the tab used to be killed 5s into a "40s" probe deadline.
-    run.deadlines.set(quote.id, Date.now() + PROBE_TIMEOUT_MS - PROBE_GRACE_MS);
+    // Read once and used for *both* the probe's deadline and the kill timer
+    // below. They were allowed to disagree once: the deadline honoured the
+    // vendor's budget while the timer stayed on the default, so an Enterprise
+    // tab was closed at 45s against a 115s deadline — `PROBE_GRACE_MS`
+    // inverted by seventy seconds, and `probeTimeoutMs` with no observable
+    // effect at all. The one number is why that cannot recur.
+    const budget = probeTimeoutFor(quote.candidate.vendor);
+    run.deadlines.set(quote.id, Date.now() + budget - PROBE_GRACE_MS);
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -645,7 +803,7 @@ async function runQuote(run: ActiveRun, quote: Quote): Promise<void> {
           message: 'the tab never reported back before the deadline',
         });
         resolve();
-      }, PROBE_TIMEOUT_MS);
+      }, budget);
 
       run.waiters.set(quote.id, () => {
         clearTimeout(timer);
@@ -747,34 +905,110 @@ async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
  * two lanes both seeing the last free slot. An async guard is not a guard, and
  * this file already records `cancelRun()` failing at exactly that.
  */
-function takeNext(run: ActiveRun, queue: Quote[]): Quote | null {
+function takeNext(run: ActiveRun, queue: Quote[], now: number): Quote | null {
   for (let i = 0; i < queue.length; i += 1) {
     const quote = queue[i]!;
     const vendor = quote.candidate.vendor;
     // An unknown vendor is uncapped rather than skipped: `findVendor` tolerates
     // an id the registry has dropped, and a quote nothing will ever take is a
     // lane parked forever.
-    const cap = findVendor(vendor)?.maxLanes ?? Infinity;
-    if ((run.vendorInFlight.get(vendor) ?? 0) < cap) {
-      queue.splice(i, 1);
-      run.vendorInFlight.set(vendor, (run.vendorInFlight.get(vendor) ?? 0) + 1);
-      return quote;
-    }
+    const config = findVendor(vendor);
+    const cap = config?.maxLanes ?? Infinity;
+    if ((run.vendorInFlight.get(vendor) ?? 0) >= cap) continue;
+    if (gapRemaining(run, vendor, now) > 0) continue;
+    queue.splice(i, 1);
+    run.vendorInFlight.set(vendor, (run.vendorInFlight.get(vendor) ?? 0) + 1);
+    run.vendorLastStart.set(vendor, now);
+    return quote;
   }
   return null;
+}
+
+/** How much of `Vendor.minGapMs` is still to run before this vendor may be searched again. */
+function gapRemaining(run: ActiveRun, vendor: string, now: number): number {
+  const gap = findVendor(vendor)?.minGapMs ?? 0;
+  const last = run.vendorLastStart.get(vendor);
+  return last === undefined ? 0 : Math.max(0, last + gap - now);
+}
+
+/**
+ * The shortest wait after which `takeNext` could succeed on gap alone, or
+ * `Infinity` when every queued quote is held by a lane cap rather than a gap.
+ * A cap frees when a quote settles, which wakes the lanes; a gap frees on the
+ * clock, which nothing else watches.
+ */
+function nextGapEnds(run: ActiveRun, queue: Quote[], now: number): number {
+  let soonest = Infinity;
+  for (const quote of queue) {
+    const vendor = quote.candidate.vendor;
+    const cap = findVendor(vendor)?.maxLanes ?? Infinity;
+    if ((run.vendorInFlight.get(vendor) ?? 0) >= cap) continue;
+    soonest = Math.min(soonest, gapRemaining(run, vendor, now));
+  }
+  return soonest;
+}
+
+/**
+ * Settle, without a tab, every queued quote at a vendor that has answered
+ * `vendor-throttled` in this run.
+ *
+ * Measured cost of not doing this, 2026-10-27: eleven National codes after the
+ * refusal began, each opening a tab, each waiting out a 35s deadline to be
+ * told the same thing — six minutes of a run whose answer was already known.
+ * The quotes keep the code so the popup says why they were skipped rather than
+ * folding them into the one that was actually refused.
+ */
+async function retireThrottled(run: ActiveRun, queue: Quote[]): Promise<void> {
+  let retired = false;
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    const quote = queue[i]!;
+    const vendor = quote.candidate.vendor;
+    if (!run.throttled.has(vendor)) continue;
+    queue.splice(i, 1);
+    const label = findVendor(vendor)?.label ?? vendor;
+    finishQuote(run, quote.id, {
+      status: 'no-price',
+      failure: 'vendor-throttled',
+      message: `skipped: ${label} is refusing searches from this browser for now`,
+    });
+    retired = true;
+  }
+  if (retired) await publish();
 }
 
 async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
   for (;;) {
     if (run.cancelled) return;
-    const next = takeNext(run, queue);
+    await retireThrottled(run, queue);
+    const next = takeNext(run, queue, Date.now());
     if (!next) {
       // Nothing left for anyone: this lane is done.
       if (queue.length === 0) return;
-      // Work remains, but all of it belongs to vendors at their cap. Park until
-      // a slot frees rather than spin — and rather than return, which would
-      // quietly drop those quotes on the floor with the run reported complete.
-      await new Promise<void>((resolve) => run.laneWaiters.add(resolve));
+      // Work remains, but all of it belongs to vendors at their cap or inside
+      // their gap. Park until a slot frees or the gap runs out rather than
+      // spin — and rather than return, which would quietly drop those quotes
+      // on the floor with the run reported complete. Resolving twice is
+      // harmless, so the timer and the waiter can share one promise.
+      const wait = nextGapEnds(run, queue, Date.now());
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const waiter = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+        run.laneWaiters.add(waiter);
+        if (Number.isFinite(wait)) {
+          // And leave the set when the clock wins, or every timer-driven
+          // wake would leave a dead resolver behind for the rest of the run.
+          timer = setTimeout(() => {
+            run.laneWaiters.delete(waiter);
+            resolve();
+          }, wait);
+        }
+      });
+      // A cancel is what woke this lane as often as not; go straight to the
+      // check at the top rather than sleeping a stagger first.
+      if (run.cancelled) return;
       // The stagger lives at the tail of this loop, which a `continue` skips.
       // Without this the capped vendors — the ones whose sites keep session
       // state, and so the ones most likely to rate-limit — are exactly the
@@ -911,12 +1145,16 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     state,
     tabs: new Map(),
     retiredTabs: new Map(),
+    awaitingPaint: new Set(),
     deadlines: new Map(),
     windowId: null,
     windowPromise: null,
     cancelled: false,
     waiters: new Map(),
     vendorInFlight: new Map(),
+    vendorLastStart: new Map(),
+    windowTookTab: false,
+    throttled: new Set(),
     laneWaiters: new Set(),
   };
   active = run;
@@ -1116,6 +1354,19 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ type: 'RUN_STATE', state: await currentState() } satisfies StateMessage);
           return;
         }
+        case 'PROBE_PAINT_DONE': {
+          // Only ever un-sets, and only for the quote that owns the sending
+          // tab. So the worst a forged one can do is minimise the window early,
+          // which costs at most the sender's own quote — a page cannot use it
+          // to keep the window on the user's screen, and cannot reach another
+          // quote's. `retiredTabs` is deliberately not consulted: a tab past
+          // its deadline has already been settled, and its entry cleared.
+          const tabId = sender.tab?.id;
+          const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
+          if (active && quoteId !== undefined) await setAwaitingPaint(active, quoteId, false);
+          sendResponse({ ok: true });
+          return;
+        }
         case 'PROBE_READY': {
           const tabId = sender.tab?.id;
           const quoteId = tabId === undefined ? undefined : active?.tabs.get(tabId);
@@ -1201,6 +1452,11 @@ chrome.runtime.onMessage.addListener(
           }
           if (active && quoteId !== undefined) {
             const failed = quoteFor(active, quoteId);
+            // The site has said it will refuse this browser; the lanes retire
+            // the rest of its queue the next time they look (`retireThrottled`).
+            if (failed && message.failure === 'vendor-throttled') {
+              active.throttled.add(failed.candidate.vendor);
+            }
             finishQuote(active, quoteId, {
               status: 'no-price',
               // Unrecognised means unrecognised. Coercing it to probe-empty
@@ -1289,13 +1545,49 @@ async function reapOrphanWindow(): Promise<void> {
 // one is no longer around to clean up after itself.
 void reapOrphanWindow();
 
+// The run's window is a real, closeable window now — on screen whenever a
+// paint-gated vendor is mounting — so the user can close it, and closing it is
+// the clearest Stop there is. Treated exactly like the popup's Stop. The
+// alternative, forgetting the id so the next lane opens a fresh window, would
+// put a window the user had just closed straight back on their screen; the
+// state this replaces was worse still, a stale id on which every remaining
+// `tabs.create` failed `tab-open`. Our own teardown closes the same window and
+// fires the same event; both callers of `closeWindow` have already marked the
+// run finished or cancelled by then, which is the guard.
+//
+// Chrome dispatches `tabs.onRemoved` for the window's tabs before this fires,
+// so a lane freed by a `tab-closed` settle can resume and attempt one
+// `tabs.create` against the dead id first; that quote reports `tab-open`
+// rather than `cancelled`. A label, not a leak — the run still stops here.
+chrome.windows.onRemoved.addListener((windowId) => {
+  const run = active;
+  if (!run || run.windowId !== windowId) return;
+  if (run.cancelled || run.state.finishedAt !== undefined) return;
+  run.windowId = null;
+  run.windowPromise = null;
+  // The stored id too: `closeWindow` forgets only the window it closes, and
+  // it has nothing to close now. Left behind, the dead id would make the next
+  // worker's `reapOrphanWindow` try to remove it and log that it could not.
+  void forgetWindowId(windowId);
+  // Only a window that took a probe tab down with it is the user's Stop. The
+  // window is created with no URL, so a new-tab page is all that keeps it
+  // alive between quotes — and that page is on screen whenever a paint-gated
+  // vendor is mounting, where closing it is an ordinary thing to do. After
+  // that, the next quote's own `closeTab` empties the window and Chrome
+  // removes it: no one cancelled anything, and the next `ensureWindow` simply
+  // opens another. Measured as a review finding rather than live, 2026-10-27.
+  if (!run.windowTookTab) return;
+  void cancelRun();
+});
+
 // A tab the user closes mid-probe should release its lane instead of blocking
 // the queue until the timeout fires.
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId, removed) => {
   const run = active;
   const quoteId = run?.tabs.get(tabId);
   if (!run || quoteId === undefined) return;
   run.tabs.delete(tabId);
+  if (removed.isWindowClosing) run.windowTookTab = true;
   finishQuote(run, quoteId, {
     status: 'no-price',
     failure: 'tab-closed',

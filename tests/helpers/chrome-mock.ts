@@ -58,6 +58,8 @@ export interface ChromeHarness {
    * tell a polite run from a run that hijacks the user's browser.
    */
   windowOptions: chrome.windows.CreateData[];
+  /** Every `windows.update`, in order, so a state transition can be asserted. */
+  windowUpdates: ({ windowId: number } & chrome.windows.UpdateInfo)[];
   tabOptions: Array<{ options: chrome.tabs.CreateProperties; at: number }>;
   session: Map<string, unknown>;
   local: Map<string, unknown>;
@@ -86,6 +88,8 @@ export interface ChromeHarness {
   fromTab: (tabId: number, message: unknown) => Promise<unknown>;
   /** Simulate the user closing a tab. */
   userClosesTab: (tabId: number) => void;
+  /** The user closes the run's window — a real, visible one now — by hand. */
+  userClosesWindow: (windowId: number) => void;
   /** Make the next `storage.session.set` reject, once. */
   failNextSessionWrite: () => void;
   /**
@@ -113,7 +117,9 @@ export interface ChromeHarness {
 
 export function installChromeMock(): ChromeHarness {
   const messageListeners: MessageListener[] = [];
-  const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  type TabRemoved = (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void;
+  const tabRemovedListeners: TabRemoved[] = [];
+  const windowRemovedListeners: Array<(windowId: number) => void> = [];
   const tabs = new Map<number, FakeTab>();
   const windows = new Set<number>();
   const windowsCreated: number[] = [];
@@ -121,6 +127,7 @@ export function installChromeMock(): ChromeHarness {
   const local = new Map<string, unknown>();
   const broadcasts: unknown[] = [];
   const windowOptions: chrome.windows.CreateData[] = [];
+  const windowUpdates: ({ windowId: number } & chrome.windows.UpdateInfo)[] = [];
   const tabOptions: Array<{ options: chrome.tabs.CreateProperties; at: number }> = [];
   let nextTabId = 100;
   let nextWindowId = 1;
@@ -139,8 +146,20 @@ export function installChromeMock(): ChromeHarness {
       return Promise.resolve(out);
     };
 
-  const fireRemoved = (tabId: number): void => {
-    for (const listener of [...tabRemovedListeners]) listener(tabId);
+  const fireRemoved = (tabId: number, windowId: number, isWindowClosing = false): void => {
+    for (const listener of [...tabRemovedListeners]) listener(tabId, { windowId, isWindowClosing });
+  };
+  // Chrome fires this for a window closed by anyone, the extension included,
+  // after the window's own tabs have been torn down.
+  const removeWindow = (windowId: number): void => {
+    windows.delete(windowId);
+    for (const [id, tab] of [...tabs]) {
+      if (tab.windowId === windowId) {
+        tabs.delete(id);
+        fireRemoved(id, windowId, true);
+      }
+    }
+    for (const listener of [...windowRemovedListeners]) listener(windowId);
   };
 
   const fakeChrome = {
@@ -225,13 +244,14 @@ export function installChromeMock(): ChromeHarness {
         });
       },
       remove: (tabId: number) => {
-        if (!tabs.has(tabId)) return Promise.reject(new Error('No tab with id'));
+        const tab = tabs.get(tabId);
+        if (!tab) return Promise.reject(new Error('No tab with id'));
         tabs.delete(tabId);
-        fireRemoved(tabId);
+        fireRemoved(tabId, tab.windowId);
         return Promise.resolve();
       },
       onRemoved: {
-        addListener: (fn: (tabId: number) => void) => tabRemovedListeners.push(fn),
+        addListener: (fn: TabRemoved) => tabRemovedListeners.push(fn),
       },
     },
     windows: {
@@ -251,6 +271,15 @@ export function installChromeMock(): ChromeHarness {
         }
         return Promise.resolve({ id });
       },
+      // Modelled rather than stubbed, and it rejects for an unknown id exactly
+      // as Chrome does. Without this the namespace had no `update` at all, so
+      // the paint-gated window logic threw `is not a function` in every test
+      // that reached it — which is the class of gap a mock is for.
+      update: (windowId: number, info: chrome.windows.UpdateInfo) => {
+        if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));
+        windowUpdates.push({ windowId, ...info });
+        return Promise.resolve({ id: windowId });
+      },
       // The background asks this after a failed close, to tell "already gone"
       // from "still there and I could not close it" — which need opposite
       // handling for the stored id.
@@ -260,15 +289,11 @@ export function installChromeMock(): ChromeHarness {
       },
       remove: (windowId: number) => {
         if (!windows.has(windowId)) return Promise.reject(new Error('No window with id'));
-        windows.delete(windowId);
-        // Chrome tears down the window's tabs with it.
-        for (const [id, tab] of [...tabs]) {
-          if (tab.windowId === windowId) {
-            tabs.delete(id);
-            fireRemoved(id);
-          }
-        }
+        removeWindow(windowId);
         return Promise.resolve();
+      },
+      onRemoved: {
+        addListener: (fn: (windowId: number) => void) => windowRemovedListeners.push(fn),
       },
     },
   };
@@ -295,6 +320,7 @@ export function installChromeMock(): ChromeHarness {
     windows,
     windowsCreated,
     windowOptions,
+    windowUpdates,
     tabOptions,
     session,
     local,
@@ -305,8 +331,12 @@ export function installChromeMock(): ChromeHarness {
     fromTab: (tabId, message) =>
       deliver(message, { tab: { id: tabId } } as unknown as chrome.runtime.MessageSender),
     userClosesTab: (tabId) => {
+      const tab = tabs.get(tabId);
       tabs.delete(tabId);
-      fireRemoved(tabId);
+      fireRemoved(tabId, tab?.windowId ?? -1);
+    },
+    userClosesWindow: (windowId) => {
+      if (windows.has(windowId)) removeWindow(windowId);
     },
     failNextSessionWrite: () => {
       failSessionWrite = true;

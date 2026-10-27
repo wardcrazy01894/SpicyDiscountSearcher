@@ -151,7 +151,31 @@ export const VENDOR_SELECTORS: Partial<Record<VendorId, VendorSelectors>> = {
   hertz: { container: '[data-testid="vehicle-list"], .vehicle-list, main' },
   avis: { container: '[data-testid="vehicle-results"], .car-results, main' },
   budget: { container: '[data-testid="vehicle-results"], .car-results, main' },
-  enterprise: { container: '.car-class-list, [data-testid="vehicle-list"], main' },
+  /**
+   * Measured against the live results page, 2026-10-26, from a real probe run
+   * rather than a foreground tab.
+   *
+   * The sweep found the right number and lost its meaning. Enterprise renders
+   * a rate as `<span>$</span><span>55</span><span>.13</span>` with "Per Day" or
+   * "Total" in a sibling `<p>`, so the card's `textContent` is
+   * `$55.13Per Day$298.34Total` — no word boundary before "Per" or "Total" —
+   * and all 78 prices the sweep found were `unknown`. The popup printed
+   * "$55.13 (basis unclear)", and `comparisonGroups` could not rank that
+   * against anybody's total.
+   *
+   * `section.car-item__wrapper` is one vehicle class (73 on the measured page),
+   * its `h2` is the class name, and each `.car-item__price-details-item` holds
+   * exactly one amount beside its own unit label — which is what the offer
+   * branch now classifies against. If the markup moves, the selectors match
+   * nothing and extraction falls back to the sweep: "basis unclear" again,
+   * rather than no quote.
+   */
+  enterprise: {
+    container: '.car-class-list, [data-testid="vehicle-list"], main',
+    offer: 'section.car-item__wrapper',
+    label: 'h2',
+    price: '.car-item__price-details-item',
+  },
   /**
    * Measured against the live results page, unlike the guess it replaces.
    *
@@ -169,10 +193,12 @@ export const VENDOR_SELECTORS: Partial<Record<VendorId, VendorSelectors>> = {
    *
    * Deliberately **no `offer` selector**, though `.vehicle` is exactly one card
    * and would give real labels. Each card carries two prices — "$ 70.30 / day"
-   * and "$ 185.05 Est. Total" — and the offer branch calls `classifyBasis` once
-   * per node, so both would be tagged the same and one of them would be a lie.
-   * The sweep classifies each price against the text around it, which is the
-   * behaviour this page needs.
+   * and "$ 185.05 Est. Total" — and when this was written the offer branch
+   * called `classifyBasis` once per node, so both would have been tagged the
+   * same and one of them would have been a lie. The branch classifies each
+   * `price` match on its own text now (Enterprise needed that, below), but
+   * National works as it is, and the reactive-only rule at the top of
+   * CLAUDE.md is why it is not re-measured for a selector it does not need.
    */
   national: { container: '.vehicle-list, .vehicle-list-container, main' },
   sixt: { container: '[data-testid="offer-list"], .offer-list, main' },
@@ -854,6 +880,14 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
   // trusts and the caller has to be able to weigh them differently.
   if (!doc.body) return { offers: [], path: 'body-fallback' };
   const swept = extractFrom(doc.body, config);
+  // Always `body-fallback` here, even when the body pass read the vendor's own
+  // cards through its `offer` selector. The label is the one tell the worker
+  // has that these offers came from outside every scope the vendor trusts —
+  // `suspectFrom` flags `scope-lost` on it and keeps the quote out of the
+  // ranking — and a landing page that reuses the card markup for featured
+  // deals is exactly the page that guard exists for. An earlier version
+  // relabelled the pass `vendor-selectors` so the report named the branch that
+  // read the offers, and that traded the guard for a diagnostic nicety.
   return { offers: swept.offers, path: 'body-fallback' };
 }
 
@@ -864,15 +898,48 @@ function extractFrom(root: Element, config: VendorSelectors): Extraction {
     const headings = new Map<Element, string | null>();
     for (const node of offerNodes) {
       const label = textOf(firstMatch(node, config.label)) || labelNear(node, headings, root);
-      const priceText = textOf(firstMatch(node, config.price)) || textOf(node);
-      const context = textOf(node).slice(0, 400);
-      for (const price of findPrices(priceText)) {
-        offers.push({
-          label: label || null,
-          amount: price.amount,
-          currency: price.currency,
-          basis: classifyBasis(context),
-        });
+      // Every `price` match, each classified against its *own* text. A card
+      // carrying two rates — Enterprise renders "$55.13 Per Day" beside
+      // "$298.34 Total" — classified once from the whole card reads both
+      // phrases, calls it mixed, and tags both prices `unknown`. That is the
+      // reason National's note below declines an `offer` selector, and the
+      // reason the first real per-vendor config landed here rather than there.
+      //
+      // `offerText`, not `textOf`: the amount and its unit are separate
+      // elements, and `textContent` glues them into "$55.13Per Day", where
+      // `\bper` has no boundary to match. Measured on Enterprise's results
+      // page, 2026-10-26, in a real probe run — every rate came back `unknown`
+      // and the popup printed "basis unclear" beside a number the comparison
+      // then could not rank.
+      const priceNodes = allMatches(node, config.price);
+      const sites = priceNodes.length > 0 ? priceNodes : [node];
+      for (const site of sites) {
+        const own = offerText(site);
+        // The same fee guard the sweep applies, for the same reason: a price
+        // element reading "Taxes & Fees $38.40 Total" carries the most trusted
+        // basis there is and would be the cheapest total on the page.
+        if (isFeeLine(own)) continue;
+        // The element's own text first, the card's only as a fallback, and
+        // only when the card does not mix bases. A `price` element that holds
+        // just the amount — `<span class="amt">$132.00</span> per night` —
+        // would otherwise lose the unit that sits beside it and come back
+        // `unknown`, which outranks `per-day` and lets a nightly rate bucket
+        // with trip totals; a card holding both a daily rate and a total says
+        // nothing about which one this element is, which is the case this
+        // branch exists for.
+        let basis = classifyBasis(own.slice(0, 400));
+        if (basis === 'unknown' && priceNodes.length > 0) {
+          const card = offerText(node).slice(0, 400);
+          if (!mixesBases(card)) basis = classifyBasis(card);
+        }
+        for (const price of findPrices(own)) {
+          offers.push({
+            label: label || null,
+            amount: price.amount,
+            currency: price.currency,
+            basis,
+          });
+        }
       }
     }
     if (offers.length > 0) return { offers: dedupe(offers), path: 'vendor-selectors' };

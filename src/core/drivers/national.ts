@@ -1,5 +1,6 @@
 import { clock12, isoParts } from '../deeplinks.js';
 import {
+  type DriveEvidence,
   DriverError,
   type DriveContext,
   type FormDriver,
@@ -30,8 +31,8 @@ import type { CarTrip } from '../types.js';
  *
  * Same vehicle, same result count, different price. That is the pair of facts
  * that rules out "the form submitted and the code did nothing" — the same
- * standard `deeplinks.ts` holds Hertz to, and the reason this file exists while
- * `enterprise.ts` still refuses to run.
+ * standard `deeplinks.ts` holds Hertz to, and the reason this file shipped
+ * first, while `enterprise.ts` still refused to run.
  *
  * The form is on `/en/home.html`, not a `/reserve` route, and is a different
  * shape from Enterprise's despite the two sharing a backend (National's own
@@ -114,6 +115,38 @@ const ACCOUNT_LABEL_RE = /ACCOUNT\s+NAME/i;
 const REJECTED_RE = /cannot be used online/i;
 
 /**
+ * National's other refusal, in its own words.
+ *
+ * Measured 2026-10-27 with JP Morgan's `XZ240G`: "We're sorry, but the
+ * promotion code provided for this reservation is invalid. Please update or
+ * remove to continue." Same banner, same place, same shape as the sentence
+ * above — and until it was read, the same cost: a full budget waited out for a
+ * results page, reported as `form-submit`, for a search National had answered
+ * within a second. Unlike the sentence above it is scoped to the reservation,
+ * so it is reported but not remembered (see `refuseIfRejected`).
+ */
+const INVALID_RE = /promotion code[^.]*is invalid/i;
+
+/**
+ * What National's form shows when the site refuses to run the search at all.
+ *
+ * Same place and same shape as the rejection — a "Warning Error" block on the
+ * home page, no navigation — and the same cost if it is not read: the driver
+ * waits out its whole budget for a results page and reports `form-submit`.
+ * Measured 2026-10-27, racing eighteen codes from one profile: the first seven
+ * searches were answered (four priced, three refused), and from the eighth on
+ * every one got "Something went wrong. Please try again later." within a
+ * second of the click. The `reservations/initiate` call behind it never
+ * returns. A brand-new profile priced the same code at once, so it is the
+ * profile that is marked, not the address — Imperva's `visid_incap` cookie on
+ * the webapi host — and it does not clear within the run.
+ */
+// The whole sentence, not its first half: "something went wrong" alone is
+// generic enough to sit in a hidden error template or a footer, and one false
+// match retires the vendor for the run.
+const THROTTLED_RE = /something went wrong\.?\s*please try again later/i;
+
+/**
  * The longest a *value* rendered beside the label may be.
  *
  * Deliberately a bound on the value rather than on the element holding the
@@ -124,7 +157,8 @@ const REJECTED_RE = /cannot be used online/i;
 const ACCOUNT_VALUE_MAX = 60;
 
 /**
- * Did the results page name an account, rather than merely say the words?
+ * The account holder the results page names, or null when it merely says the
+ * words.
  *
  * The label alone is too weak to carry this much weight: "account name" is
  * ordinary sign-in furniture and could sit in a profile menu or a hidden modal
@@ -149,7 +183,7 @@ const ACCOUNT_VALUE_MAX = 60;
  * direction: a header that stops matching fails the quote loudly rather than
  * letting a retail price through quietly.
  */
-export function accountNamed(doc: Document): boolean {
+export function accountName(doc: Document): string | null {
   const holders = [...doc.querySelectorAll<HTMLElement>('*')].filter((el) => {
     if (!ACCOUNT_LABEL_RE.test(textOf(el))) return false;
     // Smallest: no child of it also carries the phrase.
@@ -160,16 +194,16 @@ export function accountNamed(doc: Document): boolean {
     const beside = textOf(holder).replace(ACCOUNT_LABEL_RE, ' ').replace(/\s+/g, ' ').trim();
     // Inside the label's own element, no length rule is needed: "the smallest
     // element still carrying the phrase" has already scoped it to a header.
-    if (beside) return true;
+    if (beside) return beside.slice(0, ACCOUNT_VALUE_MAX);
     // Next to it, one is. A bare label is a sibling of whatever follows it in
     // the document, so without this a sign-in label sitting anywhere on a
     // retail page is "followed by something" and passes — the exact collapse
     // this function exists to avoid, arriving by a different door. A rendered
     // account name is short; a page region is not.
     const sibling = textOf(holder.nextElementSibling);
-    if (sibling && sibling.length <= ACCOUNT_VALUE_MAX) return true;
+    if (sibling && sibling.length <= ACCOUNT_VALUE_MAX) return sibling;
   }
-  return false;
+  return null;
 }
 
 const MONTHS = [
@@ -681,6 +715,14 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
 
   // Written unconditionally, never appended to. Session state can leave another
   // code in here, and that is the contamination this vendor is prone to.
+  //
+  // Known and deliberately left: this read-back is on the node we just wrote,
+  // on the same tick, so it tests our own assignment rather than the widget's
+  // acceptance — the pattern Enterprise's `waitForSettled` exists to avoid. A
+  // remount that detached `field` would submit uncoded and be caught by
+  // `verifyResults` as `discount-missing` (a wasted quote, not a wrong price).
+  // National is reactive-only and priced every code it could in every race on
+  // 2026-10-27, so this is recorded here rather than changed without a symptom.
   field.focus();
   setNativeValue(field, ctx.code);
   await waitFor(ctx, 'the account number field to keep the code', () => field.value === ctx.code);
@@ -701,10 +743,28 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
  */
 /** Throw the vendor's verdict rather than waiting out a page that has answered. */
 function refuseIfRejected(ctx: DriveContext): void {
-  if (REJECTED_RE.test(textOf(ctx.doc.body))) {
+  const text = textOf(ctx.doc.body);
+  if (REJECTED_RE.test(text)) {
     throw new DriverError(
       'code-rejected',
       'National says this account number cannot be used online',
+    );
+  }
+  if (INVALID_RE.test(text)) {
+    // Not `code-rejected`, which is remembered for good: the vendor's own
+    // sentence scopes this to "this reservation", so it may be the itinerary
+    // — a branch or dates the contract does not cover — rather than the code.
+    // One wasted tab per run (about 4s now that the sentence is read) is the
+    // price of not retiring a code that might price next trip.
+    throw new DriverError(
+      'discount-missing',
+      'National says the promotion code provided for this reservation is invalid',
+    );
+  }
+  if (THROTTLED_RE.test(text)) {
+    throw new DriverError(
+      'vendor-throttled',
+      'National answered "Something went wrong. Please try again later." to the search — it is refusing this browser for now',
     );
   }
 }
@@ -751,7 +811,7 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
  */
 const ACCOUNT_GRACE_MS = 4_000;
 
-export async function verifyResults(ctx: DriveContext): Promise<void> {
+export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
   // First that a search happened at all. On this path the document may be a
   // fresh one that never drove anything, having been re-injected after
   // National's own navigation.
@@ -772,7 +832,8 @@ export async function verifyResults(ctx: DriveContext): Promise<void> {
   // reporting it as a company's rate is the failure this codebase refuses.
   const graceEnds = Math.min(ctx.deadline, ctx.now() + ACCOUNT_GRACE_MS);
   for (;;) {
-    if (accountNamed(ctx.doc)) return;
+    const account = accountName(ctx.doc);
+    if (account !== null) return { account };
     if (ctx.now() >= graceEnds) {
       throw new DriverError(
         // Not `code-rejected`: the vendor said nothing: we simply found no

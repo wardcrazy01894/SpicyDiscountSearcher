@@ -1,6 +1,6 @@
 import { extract } from '../core/extract.js';
 import { FORM_DRIVERS } from '../core/drivers/index.js';
-import { DriverError, visibleText } from '../core/form-driver.js';
+import { type DriveEvidence, DriverError, visibleText } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
@@ -44,6 +44,12 @@ async function send(message: ProbeRequest): Promise<void> {
   // quote out on its own, and there is no one left here to tell.
 }
 
+/**
+ * What the driver saw, kept for every report this document sends. Set once by
+ * `driveForm`; an undriven vendor leaves it empty and the report unchanged.
+ */
+let evidence: DriveEvidence = {};
+
 /** Path only — the query string carries the discount code and the itinerary. */
 function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
   return {
@@ -51,6 +57,7 @@ function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
     title: document.title.slice(0, 120),
     offerCount: offers.length,
     path,
+    ...(evidence.account ? { account: evidence.account } : {}),
   };
 }
 
@@ -118,23 +125,37 @@ const VERIFY_TRIP = new Set<string>(['avis']);
  * How much of a quote's budget a form driver may spend before pricing starts.
  *
  * **A guess, and the number here most likely to be wrong.** It is live for
- * National, and the margin is thinner than it looks. Measured in a throttled tab,
- * its drive costs ~2s for the location and up to ~12s for the date range, which
- * can need three verify-and-retry passes — inside the ~27s this leaves of a 45s
- * `PROBE_TIMEOUT_MS`, but not by much.
+ * National and Enterprise, and National's margin is thinner than it looks:
+ * measured in a throttled tab, its drive costs ~2s for the location and up to
+ * ~12s for the date range, which can need three verify-and-retry passes —
+ * inside the ~27s this leaves of the 45s default, but not by much.
  *
- * Raising `PROBE_TIMEOUT_MS` is the real answer if that margin proves too thin,
- * and it is deliberately **not** done here: `KEEPALIVE_CEILING_MS` derives from
- * it and five timing tests restate it, so it is a change to make on evidence
- * from a real run rather than pre-emptively. Enterprise will force the question
- * anyway — its widget alone took ~40s on one measured load.
+ * Enterprise did force the question, as this comment predicted, and the answer
+ * was a per-vendor `probeTimeoutMs` rather than a bigger default: its widget
+ * alone took ~40s on one measured load. That leaves the share itself untouched
+ * — 0.6 of 120s is ~68s for the drive — and it is still the number to revisit
+ * on evidence from a real run rather than pre-emptively.
  */
 const DRIVE_SHARE = 0.6;
 
 /**
+ * How much of the budget the results check may run into.
+ *
+ * Separate from the drive's share because it starts where the drive ended: a
+ * 40s hydration plus the fill leaves `verifyResults` a few seconds of the
+ * drive's 0.6, in a tab that has just been minimised and polls about once a
+ * second — and a results page that was slow to list its cars, or to name its
+ * account, then fails `form-submit` or `discount-missing` with half the real
+ * budget unused. What remains after this share is for reading prices, which
+ * on a page that has reached results is quick.
+ */
+const VERIFY_SHARE = 0.85;
+
+/**
  * Fill and submit the vendor's own search form, for vendors that need it.
  *
- * Live for National; `FORM_DRIVERS` decides. Returns the failure to report, or
+ * Live for National and Enterprise; `FORM_DRIVERS` decides. Returns the failure
+ * to report, or
  * null when there is nothing to drive and nothing went wrong. Reporting rather
  * than sending, so the caller keeps the one place that decides what a
  * `ProbeReport` looks like.
@@ -161,10 +182,19 @@ async function driveForm(
     deadline: start + assignment.timeoutMs * DRIVE_SHARE,
     now: () => Date.now(),
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    // Fire-and-forget: the window state is the background's business and there
+    // is nothing useful to do here if the message is lost. A dropped one costs
+    // a visible window until the quote settles, which `finishQuote` cleans up
+    // anyway.
+    releasePaint: () => void send({ type: 'PROBE_PAINT_DONE' }),
   };
   try {
     if (location.pathname === driver.startPath) await driver.drive(context);
-    await driver.verifyResults(context);
+    const seen = await driver.verifyResults({
+      ...context,
+      deadline: start + assignment.timeoutMs * VERIFY_SHARE,
+    });
+    if (seen) evidence = seen;
     return null;
   } catch (error) {
     if (error instanceof DriverError) return { failure: error.failure, message: error.message };

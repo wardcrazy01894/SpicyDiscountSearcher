@@ -1079,12 +1079,13 @@ describe('the popup half of the double-run guard', () => {
       ),
     );
     expect(listed.size).toBeGreaterThan(0);
-    // Labels now, not raw ids — and National belongs here: it is searchable via
-    // its driver, so a saved selection naming it survives. Budget and
-    // Enterprise are what must not, which is the invariant this test is for.
-    // Sixt joins Budget and Enterprise here: its deep link reaches no search,
-    // so a saved selection naming it must not survive either.
-    expect([...listed].sort()).toEqual(['Avis', 'Hertz', 'National']);
+    // Labels now, not raw ids. National and Enterprise both belong here: each
+    // is searchable via its driver, so a saved selection naming either
+    // survives. **Budget and Sixt are what must not** — Budget's form is
+    // undriven and Sixt has nowhere to put a code — and that is the invariant
+    // this test exists for. Enterprise moved from the second group to the first
+    // on 2026-08-12 when its calendar was measured and driven.
+    expect([...listed].sort()).toEqual(['Avis', 'Enterprise', 'Hertz', 'National']);
   });
 
   it('refuses a location that is not an airport code, before opening any tab', async () => {
@@ -1293,6 +1294,34 @@ describe('the popup half of the double-run guard', () => {
     startedAt: 1,
     finishedAt: 2,
     ...over,
+  });
+
+  it('names the account a driven row was priced under, on the badge', async () => {
+    // The one place an `ok` row carries it: the evidence line is hidden on
+    // success, and this is the fact that tells four contracts on one rate plan
+    // from one restored account priced four times.
+    const driven = quote({
+      id: 'national:5666666',
+      candidate: {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'national',
+        code: '5666666',
+        note: null,
+      },
+      url: 'https://www.nationalcar.com/en/home.html',
+      confidence: 'driven',
+      report: {
+        finalPath: '/en/reserve.html',
+        title: 'Select Vehicle',
+        offerCount: 70,
+        path: 'generic-sweep',
+        account: 'I B M CORP (USA)',
+      },
+    });
+    await caveatFor([driven]);
+    const badge = document.querySelector('#quotes .confidence')?.textContent ?? '';
+    expect(badge).toBe('form filled · I B M CORP (USA)');
   });
 
   it('explains a home-page landing as such, not as a currency mismatch', async () => {

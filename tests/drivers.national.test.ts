@@ -96,6 +96,8 @@ interface FormOptions {
     | 'results-no-account'
     | 'results-no-interstitial'
     | 'rejected'
+    | 'invalid'
+    | 'throttled'
     | 'nothing';
 }
 
@@ -375,6 +377,23 @@ function renderForm(options: FormOptions = {}): void {
       // banner on the same page.
       document.body.prepend(
         textNode("Warning Error We're sorry, but this account number cannot be used online."),
+      );
+      return;
+    }
+    if (onSubmit === 'invalid') {
+      // National's other refusal, measured with JP Morgan's XZ240G.
+      document.body.prepend(
+        textNode(
+          "Warning Error We're sorry, but the promotion code provided for this reservation is invalid. Please update or remove to continue.",
+        ),
+      );
+      return;
+    }
+    if (onSubmit === 'throttled') {
+      // Same banner, different sentence: what every search got from the eighth
+      // onward on 2026-10-27, within a second of the click.
+      document.body.prepend(
+        textNode('Warning Error Something went wrong. Please try again later.'),
       );
       return;
     }
@@ -809,6 +828,29 @@ describe('submitSearch', () => {
     const error = await failureOf(submitSearch(makeContext()));
     expect(error.failure).toBe('form-submit');
   });
+
+  it('reports an invalid promotion code in the vendor’s words, without remembering it', async () => {
+    // JP Morgan's XZ240G, 2026-10-27: a different sentence from the same
+    // banner, and the same verdict — the vendor read the code and said no.
+    renderForm({ onSubmit: 'invalid' });
+    const error = await failureOf(submitSearch(makeContext()));
+    // Not the remembered code: the sentence is about "this reservation".
+    expect(error.failure).toBe('discount-missing');
+    expect(error.message).toMatch(/promotion code/i);
+  });
+
+  it('reports the site refusing to search at all, not a missing results page', async () => {
+    // Measured 2026-10-27 racing eighteen codes from one profile: after seven
+    // searches National answered "Something went wrong. Please try again
+    // later." to every click, at once. Without this the driver waited out its
+    // whole budget each time and reported `form-submit` — eleven codes, 35s
+    // apiece, to learn the same thing eleven times.
+    renderForm({ onSubmit: 'throttled' });
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('vendor-throttled');
+    expect(error.message).toMatch(/something went wrong/i);
+    expect(window.location.hash).toBe('');
+  });
 });
 
 describe('verifyResults', () => {
@@ -816,7 +858,20 @@ describe('verifyResults', () => {
     renderForm();
     window.location.hash = '#/car_select';
     document.body.prepend(textNode('ACCOUNT NAME I B M CORP (USA) Custom Rate'));
-    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+    // And says who: the name is the evidence that separates four contracts on
+    // one rate plan from one restored account priced four times.
+    await expect(verifyResults(makeContext())).resolves.toEqual({
+      account: 'I B M CORP (USA) Custom Rate',
+    });
+  });
+
+  it('reports the site refusing the search when the refusal lands after submit', async () => {
+    // The throttle banner can paint after `submitSearch` has returned, on the
+    // document that is waiting for results.
+    renderForm();
+    document.body.prepend(textNode('Warning Error Something went wrong. Please try again later.'));
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('vendor-throttled');
   });
 
   it('reports discount-missing when results carry no account', async () => {
@@ -849,7 +904,7 @@ describe('verifyResults', () => {
     const context = makeContext();
     const promise = verifyResults(context);
     document.body.prepend(textNode('ACCOUNT NAME I B M CORP (USA)'));
-    await expect(promise).resolves.toBeUndefined();
+    await expect(promise).resolves.toEqual({ account: 'I B M CORP (USA)' });
   });
 
   it('does not read an inline script as the account header', async () => {
@@ -886,7 +941,8 @@ describe('verifyResults', () => {
       script,
       textNode('ACCOUNT NAME I B M CORP (USA) 34 Results $ 70.30 / day'),
     );
-    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+    const seen = await verifyResults(makeContext());
+    expect(seen.account).toContain('I B M CORP');
   });
 
   it('does not accept the words "account name" with nothing beside them', async () => {
@@ -911,7 +967,8 @@ describe('verifyResults', () => {
     const row = document.createElement('div');
     row.append(textNode('ACCOUNT NAME'), textNode('I B M CORP (USA)'));
     document.body.prepend(row);
-    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+    const seen = await verifyResults(makeContext());
+    expect(seen.account).toContain('I B M CORP');
   });
 
   it('is not satisfied by the label sitting anywhere on a long page', async () => {

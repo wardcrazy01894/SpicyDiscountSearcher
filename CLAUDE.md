@@ -7,10 +7,12 @@ covers things that aren't obvious from the code.
 ## Where the work actually is
 
 **Hertz, Avis and National are done. Leave them alone.** They run and they
-return real prices. The remaining rental-car work is **Budget and Enterprise** —
-the two that cannot run at all. If someone asks what is left to do on cars, that
-list is the answer, and it does not include re-measuring a container, tightening
-an extraction rule or capping a lane on a vendor that works.
+return real prices. **Enterprise joined them on 2026-08-12** — driven, not
+deep-linked, the same way National is. The remaining rental-car work is
+**Budget**, alone: the one vendor left that cannot run at all. If someone asks
+what is left to do on cars, that is the answer, and it does not include
+re-measuring a container, tightening an extraction rule or capping a lane on a
+vendor that works.
 
 **Sixt used to be on that list and is now closed.** Investigated 2026-08-12: its
 search URL works and replays, but no corporate-code field exists anywhere in its
@@ -22,6 +24,24 @@ Changes to a working vendor are **reactive only**, triggered by a symptom
 somebody actually saw: prices stopped coming back, or an obviously wrong number
 reached the popup. "I measured it and the config claims something untrue" is not
 a symptom.
+
+**"Works" was only ever proved one code at a time, and that was the gap.** On
+2026-10-26 the user raced every code at once in their own profile and reported
+National not working and every Avis code pricing the same. The National half
+was reproduced the next day from a loaded build in a clean profile, racing all
+eighteen codes: the first seven searches were answered and from the eighth on
+every one got "Something went wrong. Please try again later." — Imperva marks
+the profile (`visid_incap` on the webapi host) after a burst and refuses for
+about fifteen minutes; a brand-new profile priced the same code at once. The
+driver did not know the sentence, so each refusal cost a full 35s deadline and
+was reported as `form-submit`. Three changes close it, all measured against the
+same eighteen-code race: `Vendor.minGapMs` spaces a vendor's searches (20s;
+nineteen codes then ran in 401s with no refusal), `vendor-throttled` reads the
+sentence and retires the vendor's remaining queue at once, and the account the
+results page named rides on every driven row's badge — which is what showed
+the identical prices to be real: seven "personal use" contracts share one rate
+plan, and PwC, Raytheon, MUFG and West Monroe each priced differently under
+their own names. The Avis half is open; see the Avis entry under Known gaps.
 
 That rule was bought expensively on 2026-08-11. **Two** PRs landed against the
 working vendors, carrying three changes between them — #59 bundled a container
@@ -214,8 +234,8 @@ encode other people's websites. They will break. Both are deliberately isolated:
   location on screen, so there was nothing to read. Differing prices _and_
   counts is what rules out a default search.
 
-  **Budget and Enterprise throw instead of building.** They were
-  observed ignoring the query string entirely, and returning a URL for them was
+  **Budget throws instead of building.** It was observed ignoring the query
+  string entirely, and returning a URL for it was
   the worst available option: the landing page answers with a marketing
   "from $19/day", the probe reads it as a real price, and nothing downstream
   can tell — `compare.ts` never reads `confidence`, so it ranks head-to-head
@@ -224,6 +244,13 @@ encode other people's websites. They will break. Both are deliberately isolated:
   `reservation.html#car_select` therefore compares equal to the path asked for.
   `link-build` is visible; that is not. Same trade as the malformed date and
   the one-way trip.
+
+  Enterprise was the other half of this paragraph until 2026-08-12. Everything
+  above is still true of _its URL_ — that is exactly why its builder returns
+  `'driven'` rather than a search link, and why the `finalPath` truncation note
+  is worth keeping: `reservation.html#car_select` is Enterprise's own results
+  hash, and it is still invisible to `landedElsewhere`. What changed is that
+  nothing now depends on that URL carrying a search.
 
   **Sixt throws too, and deliberately not for these reasons.** Its landing page
   shows `$35` rather than `from $19/day`, and — the part that matters —
@@ -245,10 +272,11 @@ encode other people's websites. They will break. Both are deliberately isolated:
   permission. Dropping those hosts from the manifest is a real reduction
   in what the extension may read.
 
-  **National left this group.** It has a driver now
-  (`src/core/drivers/national.ts`), so its builder returns the page the form
-  lives on rather than throwing, and it is `searchable: true` with its host back
-  in the manifest. Its confidence is `'driven'` — a third value meaning the URL
+  **National left this group, and Enterprise followed on 2026-08-12.** Each has
+  a driver now (`src/core/drivers/national.ts`, `drivers/enterprise.ts`), so its
+  builder returns the page the form lives on rather than throwing, and each is
+  `searchable: true` with its host back
+  in the manifest. Their confidence is `'driven'` — a third value meaning the URL
   is not carrying the search at all, so it is not graded on the
   reverse-engineering scale and is not counted among the popup's "unverified"
   links. See `docs/driving-a-vendor-form.md`; the checklist there is now a
@@ -374,10 +402,20 @@ encode other people's websites. They will break. Both are deliberately isolated:
   results, so `main` won on every vendor and every page; the narrow selectors in
   front of it were decoration. `firstMatch` now tries each alternative in turn.
   Found by measuring National, where `.vehicle-list` is real, present, and made
-  no difference whatsoever when added. **No vendor defines an `offer` selector**,
-  though, so the per-offer branch never fires and every `ProbeReport` says
-  `generic-sweep`. The selector path is kept — and tested with an injected
-  config — so it works the day someone fills one in.
+  no difference whatsoever when added. **Enterprise is the one vendor with an
+  `offer` selector**, since 2026-10-26, and the reason is a measurement from a
+  real probe run rather than a tidy-up: its results page splits every rate
+  into `<span>$</span><span>55</span><span>.13</span>` with "Per Day" or
+  "Total" in a sibling `<p>`, so the card's `textContent` is
+  `$55.13Per Day$298.34Total` and no `\b` exists before either unit. The
+  sweep found all 78 numbers and tagged every one `unknown`; the popup printed
+  "$55.13 (basis unclear)" for a quote `comparisonGroups` then could not rank
+  against anybody's total. The per-offer branch now classifies **each `price`
+  match against its own text** (joined with element-boundary spaces, as the
+  sweep already did), which is what National's selector note said the branch
+  could not do and why no vendor had used it. National is untouched regardless
+  — it works, and the reactive-only rule at the top of this file governs it.
+  Every other `ProbeReport` still says `generic-sweep`.
 - A vendor redesign therefore degrades to a noisier sweep rather than nothing.
   Labels are best-effort: a card with no heading of its own inherits the
   previous card's, which markup cannot distinguish from a legitimate wrapper.
@@ -467,11 +505,85 @@ window and close as soon as they answer, and the content script stays inert
 unless the background assigns it a quote. Keep it that way — this opens real
 tabs on real vendor sites.
 
+**Two vendors are also spaced, and the number is measured.** `Vendor.minGapMs`
+holds a lane from taking a vendor's next quote until that long after its last
+one was taken; the lane skips to another vendor if one is queued and otherwise
+parks on a timer. National and Enterprise are both `20_000`. `maxLanes: 1`
+already kept them to one tab each, which bounds how many are open and says
+nothing about how fast they follow — and seven National searches inside fifty
+seconds is what got a profile refused for the rest of a run on 2026-10-27.
+Twenty seconds was the first value tried and held for nineteen codes; nothing
+smaller has been measured, so a shorter gap is a measurement to take rather
+than a constant to change.
+
+**One vendor is an exception, and it is a measured one rather than a
+convenience.** A minimised window is never _painted_, and Enterprise's booking
+form does not mount in a tab Chrome has not drawn — measured 2026-08-12, a
+hidden tab left for 153s had **zero `<input>` elements** while the page shell
+rendered normally, and one forced repaint produced all five and `#cid`
+immediately. It is not `visibilityState` (still `hidden` throughout) and not
+timer throttling (polls ran at the documented ~1/s); it is the standard
+"hydrate when scrolled into view" pattern, and no content-script API can force
+a frame in a window Chrome is not drawing. Without this the driver never
+reaches step one, which is what "Enterprise doesn't do anything in the
+background" was.
+
+**A visible window is not sufficient, and that cost a build.** The first fix
+raised the window and left the probe tab `active: false` — but a non-selected
+tab is `visibilityState: hidden` and Chrome draws no frames for it either.
+Measured the same day in a window _known_ to be painted (its sibling tab was
+rendering): Enterprise as a background tab had zero inputs after 75s, and
+selecting that same tab mounted the form immediately.
+
+So `Vendor.needsPaintedWindow` opens the run's window **visible** _and_ creates
+that vendor's probe tab **selected**. Never `focused` — that is not relaxed for
+anyone, so the user's keyboard is never taken and the window does not come up
+over their work; but the vendor's page is on screen. `DriveContext.releasePaint`
+puts both back, and `finishQuote` releases the hold too, or a quote that dies
+before mounting would leave the window up for the rest of the run.
+
+`releasePaint` fires **after the submit, not at the mount**, and that is
+deliberate caution rather than measurement: only the mount was shown to need a
+frame, and the autocomplete menu and calendar are lazily-rendered popups that
+may need one too. Releasing early would move the identical failure one step
+later and cost another live run to find. Tightening it is a real saving and
+wants its own measurement first.
+
+One thing on that page is measured **not** to need a frame: the header banner
+that names the contract holder, which `verifyResults` reads _after_ the hold
+is released. On 2026-10-26 a loaded build raced IBM's code in a real probe
+tab, released the paint on submit, and the banner was there on the next poll
+of a tab that was back in a minimised window.
+
+`maxLanes: 1` bounds this to one Enterprise tab at a time, but **not** to one
+short flash: the hold is taken per quote, so a race over the 19 shared
+Enterprise codes raises and lowers the window 19 times, each held from tab-open
+until the search is submitted. For an Enterprise-heavy race the window is on
+screen for most of the run.
+
+The flag is the only thing in this extension that puts a window on the user's
+screen. Set it only where it buys a vendor that otherwise cannot run at all,
+never to make a slow one faster, and expect to justify it with the same kind of
+measurement. Everything else still opens minimised with inactive tabs, and
+tests pin both.
+
 The 750 ms stagger is **between a lane's consecutive quotes**, not between
 concurrent tab opens: at run start every lane opens a tab at once. All four of
 these are pinned by tests in `tests/service-worker.test.ts` that fail if the
 window becomes visible, the tabs become active, the stagger goes to zero, or the
-cap is lifted — they were unpinned until someone checked.
+cap is lifted — they were unpinned until someone checked. The first two now read
+"for a vendor that does not need painting", which is every vendor but
+Enterprise; the window is never _focused_ for anyone, so the user's keyboard is
+never taken.
+
+The run window is created with no URL, so a new-tab page is what keeps it
+alive between quotes — and that page is on screen whenever Enterprise is
+mounting, where closing it is an ordinary thing to do. The next quote's own
+`closeTab` then empties the window and Chrome removes it, firing the same
+`windows.onRemoved` the user's Stop fires. The two are told apart by whether a
+probe tab went down **with** the window (`tabs.onRemoved` reports
+`isWindowClosing`): that is Stop, and the run is cancelled; an empty window
+closing on its own is not, and the next `ensureWindow` opens another.
 
 `START_RUN` is deliberately not retried on a failed `sendMessage`: a rejection
 doesn't prove non-delivery, and a retry starts a second race that opens real
@@ -526,10 +638,39 @@ stays disabled after a failed send" was false until this flag existed.
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
 `cancelled`, `form-fill`, `form-submit`, `code-rejected`, `discount-missing`,
-`wrong-trip`. The popup
+`vendor-throttled`, `wrong-trip`. The popup
 renders a short phrase per code and keeps the raw message in a tooltip. Assert
 the **code** in tests; rewording a message must not change what the system
 believes happened.
+
+`vendor-throttled` is the site refusing to search at all for this browser, in
+its own words — National's "Something went wrong. Please try again later." —
+and it is split from `form-submit` because the two want opposite responses:
+wait and space the searches, against look at why the submit never landed. It
+is also the one failure the worker **acts on mid-run**: the vendor goes into
+`ActiveRun.throttled` and the lanes settle everything still queued for it with
+the same code and a message beginning `skipped:`, without opening a tab. Eleven
+codes after the first refusal spent 35s each learning the same thing before
+that existed. It is not remembered across runs — the block clears in minutes,
+and the next run is the right time to find out.
+
+Two more of the vendors' sentences are read now, and only one of them is
+remembered. "This account number cannot be used online" is `code-rejected` and
+durable, as before. "The promotion code provided for **this reservation** is
+invalid" is scoped by its own wording to the itinerary, so it is
+`discount-missing` with the vendor's words in the message: reported, raced
+again next trip, never recorded. So is Enterprise's "please sign in to your
+Enterprise Plus account", which is a verdict on the session rather than the
+code. "No vehicles are available" is `probe-empty`.
+
+A driven row that priced carries the account the results page named, on its
+badge: `form filled · I B M CORP (USA)`. `verifyResults` returns it as
+`DriveEvidence`, the probe keeps it for every report that document sends, and
+the worker admits it as text only. It is evidence and not a check — nothing
+maps a code to the name it should produce — but it is the fact that separates
+"every code priced the same" from "one restored account priced every time",
+and on the badge rather than the evidence line because an `ok` row hides that
+line.
 
 The three form codes are **on** `PROBE_FAILURES` now, because National ships a
 registered driver at a `searchable: true` vendor — a reachable emitter, which is
@@ -538,9 +679,11 @@ existed, since a code admitted early can only ever arrive forged.
 
 They exist for the vendors whose sites ignore the query string entirely:
 Enterprise's results page is a bare `#car_select`, Budget's a bare `#/vehicles`.
-Those two still refuse to build a URL and are `searchable: false`, so nothing
-routes a run to them; their codes stay in the database waiting for a driver that
-can run. `code-rejected` is the vendor's verdict on the code rather than a fault in the
+**Budget** still refuses to build a URL and is `searchable: false`, so nothing
+routes a run to it; its codes stay in the database waiting for a driver that
+can run. Enterprise's URL is just as empty, but it no longer needs to carry
+anything — its form is driven, so it is `searchable: true` and emits all three
+of these codes for real. `code-rejected` is the vendor's verdict on the code rather than a fault in the
 run, and it is **the only failure this extension remembers**. A refused code is
 recorded in `chrome.storage.local` by `core/rejected-codes.ts` and skipped by
 every later plan, because racing it costs a real tab and can only fail again.
@@ -599,6 +742,15 @@ should shape the driver when it is written:
   `I B M CORP (USA)` in the header. That is a per-code verification signal of
   the same kind `verify-trip.ts` gives us for Avis, and it is the good news
   here: it can prove the code _applied_ rather than being silently dropped.
+  **Checked since 2026-10-26**, once the markup was captured: the name sits
+  in `button.contract-name__button` inside `#codebanner-container`, and the
+  same search with an empty account number leaves that container with no
+  children at all — at the identical $55.13, which is the whole danger. A
+  results page that lists cars and names no contract fails `discount-missing`
+  within a ten-second grace — ten rather than three because it runs after the
+  paint hold is released, in a tab back in a minimised window where timers tick
+  about once a second — never at the quote's deadline, and is never
+  remembered, for the reasons the split below gives.
 - **Some codes are refused server-side.** Accenture's `XZ15J55` came back with
   "this account number cannot be used online. Please contact your account
   manager." A real answer, not a broken driver, and a distinct outcome from
@@ -629,14 +781,23 @@ that wrong — it confirmed the branch name was on the page, which the suggestio
 menu guarantees whether or not the click did anything, so it now requires the
 name somewhere the menu is _not_. A test pins that distinction.
 
-**And it is deliberately unreachable.** `FORM_DRIVERS` is empty, Enterprise is
-still `searchable: false`, and `enterpriseDriver.drive` always fails — because
-the date control was never exercised. Both live runs used the form's default
-dates, and the control is custom rather than a `select`, so nothing says the
-trip's dates can be set, let alone verified after setting. `applyDates` therefore
-refuses outright, and is ordered _before_ the code fill and the submit so a form
-that cannot express the trip is never sent. A test asserts that failure; when
-the control is measured and driven, that test is replaced rather than deleted.
+**It was deliberately unreachable for months, and is not any more.**
+`applyDates` refused outright because the date control had never been exercised:
+both live runs used the form's default dates, so nothing said the trip's dates
+could be set, let alone verified after setting. That refusal was deleted on
+2026-08-12 by _measuring_ the control rather than by deciding the risk was
+acceptable, which is the only way one of these should ever go.
+
+What the calendar turned out to be is worth knowing before touching it: a range
+picker whose day cells carry `data-test-id="MM/DD/YYYY"`, where the same id
+appears twice — a disabled spillover in the previous month's grid and the live
+one — and whose paging arrows spell "disabled" as an `invisible` class rather
+than the `disabled` property. Choosing a pick-up clears the return, so the
+return needs a second pass. All three are pinned by fixtures.
+
+The ordering survives and still matters: the itinerary steps run _before_ the
+code fill and the submit, so a form that cannot express the trip is never sent,
+and the code is never typed into one. A test asserts both.
 
 Everything else in the driver is measured and tested: hydration (with the
 throttle case given its own message, because "back off" and "go read the DOM"
@@ -664,11 +825,15 @@ would settle another vendor's quote, labelled with the wrong vendor and code,
 **No currently matched pair realises that**, and an earlier version of this
 paragraph claiming it was "a live bug rather than only a future one" was
 overstated. Its evidence was that Avis and Budget share a parent, and Budget
-left `host_permissions` when it became unsearchable. The six hosts the manifest
-still matches — avis, hertz, nationalcar, hilton, hyatt, marriott — are six
-distinct brands with no redirect between them. Sixt left when it became
-unsearchable; National arrived with its driver, and it shares a _backend_ with
-Enterprise (`prd.location.enterprise.com`) without sharing a matched host. Starwood shares marriott.com but is
+left `host_permissions` when it became unsearchable. The seven hosts the
+manifest matches — avis, hertz, nationalcar, enterprise, hilton, hyatt,
+marriott — are seven distinct brands with no redirect measured between them.
+Sixt left when it became unsearchable; National arrived with its driver, and
+Enterprise with its own (2026-10-26). Those two are the pair to watch: one
+company, one backend (`prd.location.enterprise.com`), two matched hosts.
+Across 76 driven quotes on 2026-10-27 neither ever landed on the other's host,
+but nobody has looked for a country or affiliate router between them, and
+this paragraph's rule says that is where it would come from. Starwood shares marriott.com but is
 `searchable: false`, so it never holds a quote to misattribute. A redirect to a
 _sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
 entirely, which is the `left-our-origins` case and not this one.
@@ -701,7 +866,7 @@ not be told apart from a consent interstitial or a country picker.
 
 It cannot always read it. The manifest holds no `tabs` permission — PR #5
 dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
-current URL is not one of the six vendor hosts still in the manifest. Not a gap to paper over with a
+current URL is not one of the seven vendor hosts in the manifest. Not a gap to paper over with a
 permission, but not a diagnosis either: all it establishes is that the tab's
 address is unreadable, which is equally true of a redirect off the vendor's
 site and of a load that never committed (`about:blank`, or `chrome-error://`
@@ -739,10 +904,14 @@ background's own knowledge, and a page claiming `cancelled` would misattribute
 its failure to the user. State the rule when you extend `PROBE_FAILURES`, not a
 second copy of the list — the two drifted apart once already.
 
-`form-fill` and `form-submit` satisfy the rule and are still deliberately **not**
-on the allowlist, because nothing emits them yet. A code admitted before its
-emitter exists can only ever arrive forged, and the popup would print "could not
-fill the search form" for a build with no form-filling code in it.
+`form-fill`, `form-submit` and `code-rejected` **are** on the allowlist now, and
+the paragraph that used to sit here said the opposite long after that stopped
+being true — it survived National's driver landing and contradicted this same
+section twenty lines up. The rule it stated is still the right one: a code
+admitted before anything can emit it can only ever arrive forged, and the popup
+would print "could not fill the search form" for a build with no form-filling
+code in it. What changed is that National and Enterprise are both reachable
+emitters, which is exactly the test that rule applies.
 
 `warn()` in the service worker is the only place this extension logs. There is
 no log store and the worker's console dies with it, so the structured fields
@@ -753,15 +922,27 @@ close). Never pass it a URL or a code.
 ## Known gaps
 
 Read the top of this file first: **none of what follows is a reason to touch
-Hertz, Avis or National.** Those three work. The open rental-car work is Budget
-and Enterprise, and the entries below describe what each of those needs. Sixt is
-described below too, but as a closed question rather than as work.
+Hertz, Avis, National or Enterprise.** Those four work. The open rental-car work
+is Budget, and the entry below describes what it needs. Sixt is described below
+too, but as a closed question rather than as work.
 
-- **The two car vendors that cannot run.** **Budget and Enterprise** are worse
-  than unverified: both keep the search in session state, so no query string can
-  express it and the builders they have today cannot ever work. They need
-  drivers. Neither is reachable at the moment — Enterprise's booking app 503s
-  rather than mounting, and Budget raises a bot check on submit.
+- **The one car vendor that cannot run.** **Budget** is worse than unverified:
+  it keeps the search in session state, so no query string can express it and
+  the builder it has today can never work. It needs a driver, and it is not
+  reachable at the moment — submitting its form raises a bot check.
+
+  **Enterprise left this entry on 2026-08-12.** It was the other half of this
+  bullet for months, on the same grounds, and the thing that changed was not the
+  URL — that still carries nothing — but that its form is now driven end to end.
+  Its calendar turned out to be a range picker whose day cells carry
+  `data-test-id="MM/DD/YYYY"`, which made the dates both drivable and exactly
+  verifiable. See `drivers/enterprise.ts`.
+
+  Two things it needed that National did not, both worth knowing before the same
+  is attempted for Budget: a **per-vendor probe timeout**, because its widget can
+  take ~40s to mount against a 45s default; and time dropdowns driven explicitly,
+  because the form defaults to noon at both ends and a wrong time is a wrong
+  rental length, which is a wrong price.
 
   **Sixt is no longer one of them, and this entry is the cautionary tale.** It
   used to read "measured-broken but not impossible — it returns the day someone
@@ -777,13 +958,13 @@ described below too, but as a closed question rather than as work.
   branch at all, and a hand-captured lookup table would rot silently.
 
   `unsearchable()` still takes its reason as a whole sentence, which now earns
-  its keep twice over — Sixt's refusal borrows neither the other two's "cannot
-  be searched by URL" nor its own previous claim to have no working one.
+  its keep twice over — Sixt's refusal borrows neither Budget's "cannot be
+  searched by URL" nor its own previous claim to have no working one.
 
-  National keeps its search in session state exactly like Budget and Enterprise
-  and is searchable anyway, because it is driven rather than deep-linked. It is
-  listed here only as the worked example the other two should follow, not as
-  work outstanding.
+  National and Enterprise both keep their search in session state exactly like
+  Budget, and both are searchable anyway, because they are driven rather than
+  deep-linked. They are listed here only as the worked examples Budget should
+  follow, not as work outstanding.
 
 - MV3 can terminate the service worker mid-run, and did so on **any run
   containing a page that does not price**: the probe is silent until prices
@@ -850,14 +1031,22 @@ described below too, but as a closed question rather than as work.
   existed — and the alternative is listing codes that cannot be raced, but it
   was a real loss and the only explanation lives in the README.
 
-  **National reaching `searchable: true` gives 19 of those codes back**, and
+  **National reaching `searchable: true` gave 19 of those codes back**, and
   every one of them arrives through `alsoTryAs`: the workbook files them all
   under Enterprise and contains no `vendor: 'national'` record at all. Asking
   `buildCandidates` for Enterprise therefore returns National candidates, which
   reads oddly and is correct — `wanted` is widened by `alsoTryAs` before the
-  search, the codes are the same codes, and nothing is routed to the vendor that
-  cannot run them. The README's tally needs revisiting against what is still
-  missing.
+  search, and the codes are the same codes.
+
+  **Enterprise reaching `searchable: true` on 2026-08-12 changed what that
+  costs.** The sentence here used to end "nothing is routed to the vendor that
+  cannot run them", which was the point while Enterprise could not run. It can,
+  so those same 19 codes now race at _both_ ends of the shared column — 38
+  driven quotes where there were 19, each needing a real tab, and both vendors
+  capped at one lane. That is deliberate rather than a leak: they are two
+  different vendors quoting the same contract, and either may be cheaper. But
+  it is the whole race at the default concurrency of two, and worth knowing
+  before wondering why a run of Enterprise codes takes as long as it does.
 
 - **Two old Avis notes, kept as background and _not_ as work.** Both used to be
   phrased as open questions with a named fix attached, which is the shape of text
@@ -883,7 +1072,16 @@ described below too, but as a closed question rather than as work.
   behaviour knows it was understood, not so that someone implements it.
 
 - Hotel support is wired end to end but has had far less thought than cars.
-- No end-to-end test that actually loads the extension in a browser.
+- No end-to-end test in CI that loads the extension in a browser. There is
+  one you run by hand: `scripts/live-race.mjs` launches a Chromium-based
+  browser with `dist/` loaded, fills the popup, clicks Run and prints what the
+  real service worker, probe tab and extraction returned — the race the popup
+  would run, in the minimised window it would run it in. Written 2026-10-26
+  and used the same day to prove Enterprise end to end three times; it is the
+  evidence this file's rules ask for, where a foreground tab is not. Two
+  things to know: **branded Google Chrome ignores `--load-extension`** since
+  137, so point it at Brave or Chromium, and it uses a throwaway profile, so
+  a vendor that wants a bot check passed will want it passed again there.
 - Most of `src/popup/popup.ts`'s _logic_ is still unpinned — the comparison
   warnings, the plan line's wording, saved-selection persistence. Its
   import-time contract is not: `tests/popup-contract.test.ts` loads the real
