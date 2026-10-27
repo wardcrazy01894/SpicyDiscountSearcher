@@ -1,6 +1,6 @@
 import { extract } from '../core/extract.js';
 import { FORM_DRIVERS } from '../core/drivers/index.js';
-import { DriverError, visibleText } from '../core/form-driver.js';
+import { type DriveEvidence, DriverError, visibleText } from '../core/form-driver.js';
 import { checkTrip } from '../core/verify-trip.js';
 import type { ProbeAssignment, ProbeRequest } from '../core/messages.js';
 import type { Offer, ProbeReport } from '../core/types.js';
@@ -44,6 +44,12 @@ async function send(message: ProbeRequest): Promise<void> {
   // quote out on its own, and there is no one left here to tell.
 }
 
+/**
+ * What the driver saw, kept for every report this document sends. Set once by
+ * `driveForm`; an undriven vendor leaves it empty and the report unchanged.
+ */
+let evidence: DriveEvidence = {};
+
 /** Path only — the query string carries the discount code and the itinerary. */
 function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
   return {
@@ -51,6 +57,7 @@ function report(offers: Offer[], path: ProbeReport['path']): ProbeReport {
     title: document.title.slice(0, 120),
     offerCount: offers.length,
     path,
+    ...(evidence.account ? { account: evidence.account } : {}),
   };
 }
 
@@ -183,10 +190,11 @@ async function driveForm(
   };
   try {
     if (location.pathname === driver.startPath) await driver.drive(context);
-    await driver.verifyResults({
+    const seen = await driver.verifyResults({
       ...context,
       deadline: start + assignment.timeoutMs * VERIFY_SHARE,
     });
+    if (seen) evidence = seen;
     return null;
   } catch (error) {
     if (error instanceof DriverError) return { failure: error.failure, message: error.message };

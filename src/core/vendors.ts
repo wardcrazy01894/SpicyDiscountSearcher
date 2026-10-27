@@ -66,6 +66,9 @@ export const VENDORS: Vendor[] = [
     // so the same cap applies for the same reason — set now, while the evidence
     // is written down, rather than discovered again when its driver lands.
     maxLanes: 1,
+    // Same backend, same bot protection (`visid_incap` on its webapi host), so
+    // the same spacing as National until Enterprise is measured separately.
+    minGapMs: 20_000,
     // The booking form does not mount in a tab Chrome never paints, and a
     // minimised window is never painted. Measured 2026-08-12; see the flag's
     // own comment in `types.ts` for the control. This is why the first live
@@ -97,6 +100,9 @@ export const VENDORS: Vendor[] = [
     // code. The results page's own `ACCOUNT NAME` cannot catch it either: both
     // tabs would render the same name.
     maxLanes: 1,
+    // Measured 2026-10-27 — see `Vendor.minGapMs`. Seven back-to-back searches
+    // got the profile refused for the rest of the run.
+    minGapMs: 20_000,
   },
   {
     id: 'sixt',

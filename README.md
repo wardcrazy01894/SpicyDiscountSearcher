@@ -39,6 +39,17 @@ raises a bot check.
 way National is. Its URL still carries nothing; what changed is that its form is
 now filled in and verified field by field.
 
+**National and Enterprise are spaced out, twenty seconds between searches.**
+Racing every National code at once (2026-10-27) got the profile refused after
+seven searches — "Something went wrong. Please try again later." on every
+submit for about fifteen minutes. With the gap all nineteen codes ran in under
+seven minutes with no refusal. If a vendor does refuse, the row says so ("the
+site is refusing searches from this browser for now") and the rest of that
+vendor's codes are skipped for the run rather than each waiting out a deadline.
+A driven row that priced also names the account the results page showed, so
+several codes pricing identically can be read as what it is: several contracts
+on one rate plan.
+
 **Sixt is closed rather than outstanding.** It was investigated on 2026-08-12
 and the answer was no: its search URL works, but there is nowhere in Sixt's
 booking funnel to put a corporate code, and its corporate rates appear to sit

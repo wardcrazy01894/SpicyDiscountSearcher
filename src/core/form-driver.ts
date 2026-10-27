@@ -40,7 +40,14 @@ import type { QuoteFailure, Trip, VendorId } from './types.js';
  */
 export type DriverFailure = Extract<
   QuoteFailure,
-  'form-fill' | 'form-submit' | 'code-rejected' | 'discount-missing'
+  | 'form-fill'
+  | 'form-submit'
+  | 'code-rejected'
+  | 'discount-missing'
+  | 'vendor-throttled'
+  // The vendor's own "no vehicles are available": the search ran and was
+  // answered with no prices, which is what this code has always meant.
+  | 'probe-empty'
 >;
 
 /**
@@ -52,6 +59,17 @@ export type DriverFailure = Extract<
  * account number. Collapsing them into one would put "no price appeared" on a
  * run where the vendor told us plainly why.
  */
+/**
+ * What a driver saw on the results page, for the quote's report.
+ *
+ * Facts rather than verdicts — a verdict is a thrown `DriverError`. Today only
+ * the account holder the page named, which `verifyResults` already has in
+ * hand when it decides the discount applied.
+ */
+export interface DriveEvidence {
+  account?: string;
+}
+
 export class DriverError extends Error {
   constructor(
     readonly failure: DriverFailure,
@@ -137,7 +155,7 @@ export interface FormDriver {
    * happen in whichever document is holding the results. Running them only
    * inside `drive` would mean a navigating vendor is never verified at all.
    */
-  verifyResults(ctx: DriveContext): Promise<void>;
+  verifyResults(ctx: DriveContext): Promise<DriveEvidence | void>;
 }
 
 /** How often to re-check a page that is still catching up. */

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChromeHarness } from './helpers/chrome-mock.js';
 import { installChromeMock } from './helpers/chrome-mock.js';
 import { buildDeepLink } from '../src/core/deeplinks.js';
+import { getVendor } from '../src/core/vendors.js';
 import type { CarTrip, Offer, ProbeReport, RunState, SearchPlan } from '../src/core/types.js';
 
 const TRIP: CarTrip = {
@@ -1031,6 +1032,162 @@ describe('diagnosing a run afterwards', () => {
     expect(new Set(state?.quotes.map((q) => q.confidence))).toEqual(
       new Set(['verified', 'driven']),
     );
+  });
+});
+
+describe('spacing out a vendor that throttles', () => {
+  // National marks a profile after a burst of searches and refuses every one
+  // after it — measured 2026-10-27, seven searches in fifty seconds — so the
+  // vendor declares a minimum gap, and a refusal retires its queue.
+
+  function nationalPlan(codes: string[], concurrency = 2): SearchPlan {
+    return {
+      trip: TRIP,
+      candidates: codes.map((code) => ({
+        companySlug: `c-${code}`,
+        companyName: `Company ${code}`,
+        vendor: 'national',
+        code,
+        note: null,
+      })),
+      concurrency,
+    };
+  }
+
+  function nationalGap(): number {
+    const gap = getVendor('national').minGapMs;
+    expect(gap).toBeGreaterThan(0);
+    return gap!;
+  }
+
+  async function priceLatestTab(): Promise<void> {
+    const tabId = [...chromeMock.tabs.keys()].at(-1)!;
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    await settle();
+  }
+
+  it('holds the next search at a gapped vendor until its gap has run', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: nationalPlan(['N1', 'N2', 'N3']) });
+    await settle();
+    const gap = nationalGap();
+    expect(chromeMock.tabOptions).toHaveLength(1);
+
+    await priceLatestTab();
+    // Settled, slot free — and still inside the gap, so no tab yet.
+    await settle(gap / 2);
+    expect(chromeMock.tabOptions).toHaveLength(1);
+    // The gap, then the ordinary stagger a lane takes after parking.
+    await settle(gap / 2 + 1_000);
+    expect(chromeMock.tabOptions).toHaveLength(2);
+
+    await priceLatestTab();
+    await settle(gap + 1_000);
+    expect(chromeMock.tabOptions).toHaveLength(3);
+    await priceLatestTab();
+
+    const opened = chromeMock.tabOptions.map((t) => t.at);
+    for (let i = 1; i < opened.length; i += 1) {
+      expect(opened[i]! - opened[i - 1]!).toBeGreaterThanOrEqual(gap);
+    }
+    // And the run still finishes: a lane parked on the clock is woken by it.
+    await settle(2_000);
+    const state = await getState();
+    expect(state?.finishedAt).toBeDefined();
+    expect(state?.quotes.every((q) => q.status === 'ok')).toBe(true);
+  });
+
+  it('does not delay other vendors behind a gapped one', async () => {
+    await bootWorker();
+    const mixed = nationalPlan(['N1', 'N2']);
+    mixed.candidates.push(...plan().candidates);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
+    await settle();
+    // Two lanes: one National tab, and the other lane skipped past the gapped
+    // vendor to open Hertz rather than waiting.
+    const vendors = chromeMock.tabOptions.map((t) => new URL(t.options.url!).hostname);
+    expect(vendors).toHaveLength(2);
+    expect(new Set(vendors).size).toBe(2);
+  });
+
+  it('retires the rest of a vendor’s queue the moment it says it is refusing', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: nationalPlan(['N1', 'N2', 'N3']) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'vendor-throttled',
+      message: 'National answered "Something went wrong"',
+      report: REPORT,
+    });
+    await settle(nationalGap() * 2);
+
+    // One tab ever opened: the other two were settled without one.
+    expect(chromeMock.tabOptions).toHaveLength(1);
+    const state = await getState();
+    expect(state?.finishedAt).toBeDefined();
+    expect(state?.quotes.map((q) => q.failure)).toEqual([
+      'vendor-throttled',
+      'vendor-throttled',
+      'vendor-throttled',
+    ]);
+    // The refused one keeps the page's words; the skipped ones say they were skipped.
+    expect(state?.quotes[0]?.message).toMatch(/something went wrong/i);
+    expect(state?.quotes[1]?.message).toMatch(/^skipped/);
+    expect(state?.quotes[2]?.message).toMatch(/^skipped/);
+  });
+
+  it('retires only the throttling vendor', async () => {
+    await bootWorker();
+    const mixed = nationalPlan(['N1', 'N2'], 1);
+    mixed.candidates.push(plan().candidates[0]!);
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: mixed });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_FAILED',
+      failure: 'vendor-throttled',
+      message: 'refused',
+      report: REPORT,
+    });
+    await settle(1_000);
+    // Hertz still gets its tab.
+    expect(chromeMock.tabOptions).toHaveLength(2);
+    expect(new URL(chromeMock.tabOptions[1]!.options.url!).hostname).toMatch(/hertz/);
+    await priceLatestTab();
+    const state = await getState();
+    expect(state?.quotes.map((q) => q.status)).toEqual(['no-price', 'no-price', 'ok']);
+  });
+
+  it('keeps the account the results page named, and only as text', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: nationalPlan(['N1'], 1) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, account: 'I B M CORP (USA)' },
+    });
+    await settle();
+    const state = await getState();
+    expect(state?.quotes[0]?.report?.account).toBe('I B M CORP (USA)');
+  });
+
+  it('drops an account that is not a string', async () => {
+    await bootWorker();
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: nationalPlan(['N1'], 1) });
+    await settle();
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, {
+      type: 'PROBE_RESULT',
+      offers: [OFFER],
+      report: { ...REPORT, account: { nested: true } as unknown as string },
+    });
+    await settle();
+    const state = await getState();
+    expect(state?.quotes[0]?.report).not.toHaveProperty('account');
   });
 });
 

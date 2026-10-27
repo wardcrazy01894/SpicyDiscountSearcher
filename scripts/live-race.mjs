@@ -22,7 +22,18 @@
  *     --pickup TPA --from 2026-11-10T09:00 --to 2026-11-13T17:00
  *
  * `--vendors` is a regex matched against the chip labels; `--out` and
- * `--profile` default to directories under the system temp dir.
+ * `--profile` default to directories under the system temp dir. Leave
+ * `--company` out to race every code at the selected vendors — the popup's
+ * saved selection is unticked first, because a profile reused from an earlier
+ * run would otherwise quietly race only that run's company.
+ *
+ * Besides the run state it logs what the probe tab showed: every vendor
+ * response that failed or touched a reservation path, every dialog, and the
+ * page's visible text whenever it changes, with a screenshot of each change
+ * in `<out>/`. That is how the throttle banner and the second rejection
+ * sentence were read on 2026-10-27 — the run state alone said `form-submit`
+ * and a timeout, which is what the driver believed and not what the page
+ * said.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -55,7 +66,7 @@ const required = (name) => {
 };
 
 const browserBin = required('browser');
-const company = required('company');
+const company = args['company'] ?? '';
 const vendors = args['vendors'] ?? 'enterprise';
 const maxCodes = args['max'] ?? '1';
 const pickup = args['pickup'] ?? 'TPA';
@@ -97,6 +108,24 @@ const browser = await puppeteer.launch({
   ],
 });
 browser.on('targetcreated', (t) => log('target+', t.type(), t.url().slice(0, 90)));
+browser.on('targetcreated', async (t) => {
+  if (t.type() !== 'page') return;
+  const pg = await t.page().catch(() => null);
+  if (!pg) return;
+  pg.on('response', (res) => {
+    const u = new URL(res.url());
+    if (!/nationalcar|enterprise|avis|hertz/.test(u.hostname)) return;
+    const st = res.status();
+    if (st >= 400 || /reserv|search|availab|contract|account|vehicle/i.test(u.pathname)) {
+      log('net', st, res.request().method(), u.hostname + u.pathname.slice(0, 90));
+    }
+  });
+  pg.on('dialog', (d) => {
+    log('dialog', d.message().slice(0, 120));
+    d.dismiss().catch(() => {});
+  });
+});
+
 browser.on('targetdestroyed', (t) => log('target-', t.type(), t.url().slice(0, 90)));
 
 try {
@@ -140,20 +169,26 @@ try {
       if (box && box.checked !== want) box.click();
     }
   }, vendors);
-  await page.type('#company-search', company);
-  await pause(500);
-  const row = await page.evaluate((name) => {
-    const rows = [...document.querySelectorAll('#company-list label.company')];
-    const match = rows.find((r) =>
-      (r.textContent ?? '').replace(/\s+/g, ' ').trim().startsWith(name),
-    );
-    if (!match) return null;
-    const box = match.querySelector('input');
-    if (box && !box.checked) box.click();
-    return (match.textContent ?? '').replace(/\s+/g, ' ').trim();
-  }, company);
-  if (!row) throw new Error(`no company row starts with ${company}`);
-  log('company:', row);
+  await page.evaluate(() => {
+    for (const box of document.querySelectorAll('#company-list input:checked')) box.click();
+  });
+  await pause(300);
+  if (company) {
+    await page.type('#company-search', company);
+    await pause(500);
+    const row = await page.evaluate((name) => {
+      const rows = [...document.querySelectorAll('#company-list label.company')];
+      const match = rows.find((r) =>
+        (r.textContent ?? '').replace(/\s+/g, ' ').trim().startsWith(name),
+      );
+      if (!match) return null;
+      const box = match.querySelector('input');
+      if (box && !box.checked) box.click();
+      return (match.textContent ?? '').replace(/\s+/g, ' ').trim();
+    }, company);
+    if (!row) throw new Error(`no company row starts with ${company}`);
+    log('company:', row);
+  }
   await pause(500);
   log('plan:', await page.$eval('#plan-summary', (el) => el.innerText.replace(/\s+/g, ' ')));
 
@@ -161,8 +196,33 @@ try {
   await page.click('#run-btn');
   log('run clicked');
   let last = '';
+  let lastSnap = '';
   for (;;) {
     await pause(5_000);
+    for (const pg of await browser.pages()) {
+      const u = pg.url();
+      if (!/nationalcar|enterprise\.com|avis|hertz/.test(u)) continue;
+      const body = await pg
+        .evaluate(() => {
+          const t = (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim();
+          const modal = [
+            ...document.querySelectorAll(
+              '[role=dialog], [role=alert], .modal, [class*=error], [class*=alert]',
+            ),
+          ]
+            .map((e) => e.textContent?.replace(/\s+/g, ' ').trim())
+            .filter((x) => x && x.length > 3)
+            .slice(0, 5);
+          return { hash: location.hash, len: t.length, head: t.slice(0, 300), modal };
+        })
+        .catch((e) => ({ err: String(e).slice(0, 80) }));
+      const key = JSON.stringify(body);
+      if (key !== lastSnap) {
+        log('page', u.slice(0, 80), key.slice(0, 900));
+        lastSnap = key;
+        await pg.screenshot({ path: path.join(out, `probe-${Date.now()}.png`) }).catch(() => {});
+      }
+    }
     const text = await page
       .$eval('#results', (el) => el.innerText.replace(/\s+/g, ' ').trim())
       .catch(() => '');

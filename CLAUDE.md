@@ -25,6 +25,24 @@ somebody actually saw: prices stopped coming back, or an obviously wrong number
 reached the popup. "I measured it and the config claims something untrue" is not
 a symptom.
 
+**"Works" was only ever proved one code at a time, and that was the gap.** On
+2026-10-26 the user raced every code at once in their own profile and reported
+National not working and every Avis code pricing the same. The National half
+was reproduced the next day from a loaded build in a clean profile, racing all
+eighteen codes: the first seven searches were answered and from the eighth on
+every one got "Something went wrong. Please try again later." — Imperva marks
+the profile (`visid_incap` on the webapi host) after a burst and refuses for
+about fifteen minutes; a brand-new profile priced the same code at once. The
+driver did not know the sentence, so each refusal cost a full 35s deadline and
+was reported as `form-submit`. Three changes close it, all measured against the
+same eighteen-code race: `Vendor.minGapMs` spaces a vendor's searches (20s;
+nineteen codes then ran in 401s with no refusal), `vendor-throttled` reads the
+sentence and retires the vendor's remaining queue at once, and the account the
+results page named rides on every driven row's badge — which is what showed
+the identical prices to be real: seven "personal use" contracts share one rate
+plan, and PwC, Raytheon, MUFG and West Monroe each priced differently under
+their own names. The Avis half is open; see the Avis entry under Known gaps.
+
 That rule was bought expensively on 2026-08-11. **Two** PRs landed against the
 working vendors, carrying three changes between them — #59 bundled a container
 measurement with a filter-bound extraction guard, #60 added an Avis lane cap —
@@ -487,6 +505,17 @@ window and close as soon as they answer, and the content script stays inert
 unless the background assigns it a quote. Keep it that way — this opens real
 tabs on real vendor sites.
 
+**Two vendors are also spaced, and the number is measured.** `Vendor.minGapMs`
+holds a lane from taking a vendor's next quote until that long after its last
+one was taken; the lane skips to another vendor if one is queued and otherwise
+parks on a timer. National and Enterprise are both `20_000`. `maxLanes: 1`
+already kept them to one tab each, which bounds how many are open and says
+nothing about how fast they follow — and seven National searches inside fifty
+seconds is what got a profile refused for the rest of a run on 2026-10-27.
+Twenty seconds was the first value tried and held for nineteen codes; nothing
+smaller has been measured, so a shorter gap is a measurement to take rather
+than a constant to change.
+
 **One vendor is an exception, and it is a measured one rather than a
 convenience.** A minimised window is never _painted_, and Enterprise's booking
 form does not mount in a tab Chrome has not drawn — measured 2026-08-12, a
@@ -600,10 +629,30 @@ stays disabled after a failed send" was false until this flag existed.
 `Quote.failure` is a code, not a sentence — `probe-timeout`, `probe-empty`,
 `extract-threw`, `tab-closed`, `link-build`, `tab-open`, `interrupted`,
 `cancelled`, `form-fill`, `form-submit`, `code-rejected`, `discount-missing`,
-`wrong-trip`. The popup
+`vendor-throttled`, `wrong-trip`. The popup
 renders a short phrase per code and keeps the raw message in a tooltip. Assert
 the **code** in tests; rewording a message must not change what the system
 believes happened.
+
+`vendor-throttled` is the site refusing to search at all for this browser, in
+its own words — National's "Something went wrong. Please try again later." —
+and it is split from `form-submit` because the two want opposite responses:
+wait and space the searches, against look at why the submit never landed. It
+is also the one failure the worker **acts on mid-run**: the vendor goes into
+`ActiveRun.throttled` and the lanes settle everything still queued for it with
+the same code and a message beginning `skipped:`, without opening a tab. Eleven
+codes after the first refusal spent 35s each learning the same thing before
+that existed. It is not remembered across runs — the block clears in minutes,
+and the next run is the right time to find out.
+
+A driven row that priced carries the account the results page named, on its
+badge: `form filled · I B M CORP (USA)`. `verifyResults` returns it as
+`DriveEvidence`, the probe keeps it for every report that document sends, and
+the worker admits it as text only. It is evidence and not a check — nothing
+maps a code to the name it should produce — but it is the fact that separates
+"every code priced the same" from "one restored account priced every time",
+and on the badge rather than the evidence line because an `ok` row hides that
+line.
 
 The three form codes are **on** `PROBE_FAILURES` now, because National ships a
 registered driver at a `searchable: true` vendor — a reachable emitter, which is

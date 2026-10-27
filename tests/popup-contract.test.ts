@@ -1296,6 +1296,34 @@ describe('the popup half of the double-run guard', () => {
     ...over,
   });
 
+  it('names the account a driven row was priced under, on the badge', async () => {
+    // The one place an `ok` row carries it: the evidence line is hidden on
+    // success, and this is the fact that tells four contracts on one rate plan
+    // from one restored account priced four times.
+    const driven = quote({
+      id: 'national:5666666',
+      candidate: {
+        companySlug: 'ibm',
+        companyName: 'IBM',
+        vendor: 'national',
+        code: '5666666',
+        note: null,
+      },
+      url: 'https://www.nationalcar.com/en/home.html',
+      confidence: 'driven',
+      report: {
+        finalPath: '/en/reserve.html',
+        title: 'Select Vehicle',
+        offerCount: 70,
+        path: 'generic-sweep',
+        account: 'I B M CORP (USA)',
+      },
+    });
+    await caveatFor([driven]);
+    const badge = document.querySelector('#quotes .confidence')?.textContent ?? '';
+    expect(badge).toBe('form filled · I B M CORP (USA)');
+  });
+
   it('explains a home-page landing as such, not as a currency mismatch', async () => {
     // The sentence for unranked quotes can only talk about basis and currency,
     // and a quote that landed on the vendor's home page is normally in the same

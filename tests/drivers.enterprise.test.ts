@@ -87,7 +87,9 @@ interface FormOptions {
    */
   locationRemountsAsync?: boolean;
   /** What "Browse Vehicles" does. */
-  onSubmit?: 'results' | 'rejected' | 'nothing';
+  onSubmit?: 'results' | 'rejected' | 'invalid' | 'sign-in' | 'no-vehicles' | 'nothing';
+  /** Render the account banner as Fortive's no-links paragraph rather than IBM's button. */
+  bannerAsText?: boolean;
   /**
    * Whether the results page names a contract holder, as the live page does
    * for an applied code (`button.contract-name__button`) and does not for an
@@ -359,6 +361,7 @@ function renderForm(options: FormOptions = {}): void {
     onSubmit = 'results',
     cidRejectsValue = false,
     resultsNameAccount = true,
+    bannerAsText = false,
   } = options;
 
   document.body.innerHTML = '<header>Enterprise Rent-A-Car</header>';
@@ -512,8 +515,9 @@ function renderForm(options: FormOptions = {}): void {
       const banner = document.createElement('div');
       banner.id = 'codebanner-container';
       if (resultsNameAccount) {
-        banner.innerHTML =
-          '<button class="cta contract-name__button" aria-label="I B M CORP (USA)">I B M CORP (USA)</button>';
+        banner.innerHTML = bannerAsText
+          ? '<div class="code-banner code-banner--no-links"><p class="contract-name-text">FTV BUSINESS SERVICES-PERSONAL</p></div>'
+          : '<button class="cta contract-name__button" aria-label="I B M CORP (USA)">I B M CORP (USA)</button>';
       }
       document.body.prepend(banner);
       const results = document.createElement('main');
@@ -521,11 +525,20 @@ function renderForm(options: FormOptions = {}): void {
         '<section class="car-item__wrapper"><h2>Economy</h2><div class="car-item__price-details-item"><span>$55.13</span><p>Per Day</p></div></section>';
       document.body.append(results);
     }
-    if (onSubmit === 'rejected') {
-      const error = document.createElement('div');
-      error.textContent =
+    const answers: Record<string, string> = {
+      rejected:
         "Error: We're sorry, but this account number cannot be used online. " +
-        'Please contact your account manager if you have questions.';
+        'Please contact your account manager if you have questions.',
+      invalid:
+        "Error: We're sorry, but the promotion code provided for this reservation is invalid. " +
+        'Please update or remove to continue.',
+      'sign-in': 'Error: Please sign in to your Enterprise Plus® account to continue.',
+      'no-vehicles':
+        "Error: We're sorry, but no vehicles are available at this time. Please call us for assistance.",
+    };
+    if (answers[onSubmit]) {
+      const error = document.createElement('div');
+      error.textContent = answers[onSubmit];
       document.body.prepend(error);
     }
   });
@@ -1114,6 +1127,30 @@ describe('submitSearch', () => {
     expect(window.location.hash).toBe('#car_select');
   });
 
+  it('reports an invalid promotion code as the vendor refusing it', async () => {
+    renderForm({ onSubmit: 'invalid' });
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('code-rejected');
+    expect(error.message).toMatch(/promotion code/i);
+  });
+
+  it('reports a code that needs an Enterprise Plus sign-in as refused', async () => {
+    renderForm({ onSubmit: 'sign-in' });
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('code-rejected');
+    expect(error.message).toMatch(/sign-in/i);
+  });
+
+  it('reports "no vehicles available" as an empty answer, not a refusal', async () => {
+    // Purdue's code, 2026-10-27: National priced it the same minute, so this
+    // is availability under the contract rather than a verdict on the code —
+    // and must not be remembered the way `code-rejected` is.
+    renderForm({ onSubmit: 'no-vehicles' });
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('probe-empty');
+    expect(error.message).toMatch(/no vehicles/i);
+  });
+
   it('reports the vendor refusing the code as its own outcome', async () => {
     renderForm({ onSubmit: 'rejected' });
     const error = await failureOf(submitSearch(makeContext()));
@@ -1144,7 +1181,27 @@ describe('verifyResults', () => {
   it('passes a results page that names the contract holder', async () => {
     renderForm({ onSubmit: 'results' });
     document.querySelector('button')!.click();
-    await expect(verifyResults(makeContext())).resolves.toBeUndefined();
+    // And reports who, for the quote's evidence line.
+    await expect(verifyResults(makeContext())).resolves.toEqual({ account: 'I B M CORP (USA)' });
+  });
+
+  it('accepts the no-links banner, where the name is a paragraph rather than a button', async () => {
+    // Fortive's XZ15CH7, 2026-10-27: the page named the account in its header
+    // and the button-only selector failed the quote `discount-missing`.
+    renderForm({ onSubmit: 'results', bannerAsText: true });
+    document.querySelector('button')!.click();
+    await expect(verifyResults(makeContext())).resolves.toEqual({
+      account: 'FTV BUSINESS SERVICES-PERSONAL',
+    });
+  });
+
+  it('reads a vendor answer that lands after submit as that answer', async () => {
+    renderForm({ onSubmit: 'nothing' });
+    const error = document.createElement('div');
+    error.textContent = "Error: We're sorry, but no vehicles are available at this time.";
+    document.body.prepend(error);
+    const failure = await failureOf(verifyResults(makeContext()));
+    expect(failure.failure).toBe('probe-empty');
   });
 
   it('fails discount-missing when cars are listed under no account', async () => {

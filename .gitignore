@@ -23,3 +23,6 @@ __pycache__/
 
 # Excel lock files, created whenever the workbook is open.
 ~$*
+
+# JSON reporter output that `rtk pipe -f vitest` leaves behind.
+.vitest/

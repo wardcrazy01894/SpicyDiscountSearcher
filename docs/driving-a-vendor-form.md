@@ -262,6 +262,18 @@ the lane parks on a waiter rather than spinning or returning — returning would
 drop those quotes with the run reported complete. National and Enterprise are
 both `maxLanes: 1`.
 
+`Vendor.minGapMs` is the other half, and it was found by racing every National
+code at once (2026-10-27). One tab at a time was not enough: seven searches in
+fifty seconds got the profile refused — "Something went wrong. Please try
+again later." on every submit after that, for about fifteen minutes. The lane
+now also waits for the gap since the vendor's last quote was taken, parking on
+a timer when nothing else is queued. Both are `20_000`, the first value tried;
+it held for nineteen codes. The driver reads the refusal sentence as
+`vendor-throttled`, and the worker retires the vendor's remaining queue on it
+rather than spending a deadline per code to hear it again. Any new driver
+should read its site's throttle sentence the same way, and should expect to
+find it only by racing every code, not one.
+
 Avis was once suspected of the same hazard and **is not a task**. It was capped
 on that suspicion on 2026-08-11, in a change reverted the same day, and the
 premise turned out to be wrong: the user sees different prices for different

@@ -75,6 +75,18 @@ export interface Vendor {
    */
   maxLanes?: number;
   /**
+   * Minimum time between two searches opened at this vendor, in one run.
+   *
+   * Measured on National on 2026-10-27: seven searches in about fifty seconds
+   * from one profile, and the eighth and every one after it answered
+   * "Something went wrong. Please try again later." — Imperva marks the
+   * profile's `visid_incap` visitor id and keeps refusing until it clears,
+   * which a brand-new profile proved by pricing the same code immediately.
+   * `maxLanes: 1` bounds how many tabs are open and says nothing about how
+   * fast they follow each other; this is the other half.
+   */
+  minGapMs?: number;
+  /**
    * This vendor's form does not mount unless Chrome actually paints the tab.
    *
    * The probe window is minimised, and a minimised window is never painted — so
@@ -254,6 +266,19 @@ export type QuoteFailure =
    */
   | 'discount-missing'
   /**
+   * The vendor refused to run the search at all, for this browser, for now.
+   *
+   * Not about the code and not about the form: National answers "Something
+   * went wrong. Please try again later." to every search once its bot
+   * protection has marked the profile, and it keeps answering that until the
+   * mark clears. Distinct from `form-submit` because the response is immediate
+   * and the diagnosis is the opposite — "wait, and search less often" rather
+   * than "the submit never landed" — and because the worker acts on it: every
+   * other quote queued for that vendor is settled with the same code at once,
+   * since each would otherwise spend a full deadline failing the same way.
+   */
+  | 'vendor-throttled'
+  /**
    * The page priced a different trip from the one asked for.
    *
    * Not a missing price — a real one, for the wrong rental. Avis lets its
@@ -283,6 +308,16 @@ export interface ProbeReport {
   finalPath: string;
   title: string;
   offerCount: number;
+  /**
+   * The account holder the results page named, for driven vendors.
+   *
+   * Evidence, not a verdict: `discount-missing` already fires when nothing is
+   * named, so this exists for the case that passed — four different codes
+   * pricing the same trip at the same number is either four contracts on one
+   * rate plan or one restored account priced four times, and only the name
+   * rendered beside each price tells those apart.
+   */
+  account?: string;
   /**
    * Which extraction branch produced the offers.
    *

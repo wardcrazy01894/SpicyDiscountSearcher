@@ -153,6 +153,14 @@ interface ActiveRun {
   waiters: Map<string, () => void>;
   /** Vendor id -> tabs currently open at it, for `Vendor.maxLanes`. */
   vendorInFlight: Map<string, number>;
+  /** Vendor id -> when its last quote was taken, for `Vendor.minGapMs`. */
+  vendorLastStart: Map<string, number>;
+  /**
+   * Vendors that answered `vendor-throttled` in this run. Nothing queued for
+   * one of these is worth a tab: the site has said it will refuse, and each
+   * attempt would cost a full probe deadline to hear it again.
+   */
+  throttled: Set<string>;
   /**
    * Lanes parked because every quote left belongs to a capped vendor.
    *
@@ -405,6 +413,9 @@ function sanitizeReport(report: ProbeReport | undefined): ProbeReport | undefine
     // the safe default is the one that keeps the quote out of the ranking. A
     // forged or future value should not be handed the more trusted label.
     path: PROBE_PATHS.has(report.path) ? report.path : 'body-fallback',
+    ...(typeof report.account === 'string' && report.account
+      ? { account: report.account.slice(0, MAX_REPORT_TEXT) }
+      : {}),
   };
 }
 
@@ -448,6 +459,8 @@ const PROBE_FAILURES = new Set<QuoteFailure>([
   'form-submit',
   'code-rejected',
   'discount-missing',
+  // The driver reads the refusal off the page, so only it can say so.
+  'vendor-throttled',
 ]);
 
 /**
@@ -885,34 +898,95 @@ async function describeSilentTab(quote: Quote, tabId: number): Promise<void> {
  * two lanes both seeing the last free slot. An async guard is not a guard, and
  * this file already records `cancelRun()` failing at exactly that.
  */
-function takeNext(run: ActiveRun, queue: Quote[]): Quote | null {
+function takeNext(run: ActiveRun, queue: Quote[], now: number): Quote | null {
   for (let i = 0; i < queue.length; i += 1) {
     const quote = queue[i]!;
     const vendor = quote.candidate.vendor;
     // An unknown vendor is uncapped rather than skipped: `findVendor` tolerates
     // an id the registry has dropped, and a quote nothing will ever take is a
     // lane parked forever.
-    const cap = findVendor(vendor)?.maxLanes ?? Infinity;
-    if ((run.vendorInFlight.get(vendor) ?? 0) < cap) {
-      queue.splice(i, 1);
-      run.vendorInFlight.set(vendor, (run.vendorInFlight.get(vendor) ?? 0) + 1);
-      return quote;
-    }
+    const config = findVendor(vendor);
+    const cap = config?.maxLanes ?? Infinity;
+    if ((run.vendorInFlight.get(vendor) ?? 0) >= cap) continue;
+    if (gapRemaining(run, vendor, now) > 0) continue;
+    queue.splice(i, 1);
+    run.vendorInFlight.set(vendor, (run.vendorInFlight.get(vendor) ?? 0) + 1);
+    run.vendorLastStart.set(vendor, now);
+    return quote;
   }
   return null;
+}
+
+/** How much of `Vendor.minGapMs` is still to run before this vendor may be searched again. */
+function gapRemaining(run: ActiveRun, vendor: string, now: number): number {
+  const gap = findVendor(vendor)?.minGapMs ?? 0;
+  const last = run.vendorLastStart.get(vendor);
+  return last === undefined ? 0 : Math.max(0, last + gap - now);
+}
+
+/**
+ * The shortest wait after which `takeNext` could succeed on gap alone, or
+ * `Infinity` when every queued quote is held by a lane cap rather than a gap.
+ * A cap frees when a quote settles, which wakes the lanes; a gap frees on the
+ * clock, which nothing else watches.
+ */
+function nextGapEnds(run: ActiveRun, queue: Quote[], now: number): number {
+  let soonest = Infinity;
+  for (const quote of queue) {
+    const vendor = quote.candidate.vendor;
+    const cap = findVendor(vendor)?.maxLanes ?? Infinity;
+    if ((run.vendorInFlight.get(vendor) ?? 0) >= cap) continue;
+    soonest = Math.min(soonest, gapRemaining(run, vendor, now));
+  }
+  return soonest;
+}
+
+/**
+ * Settle, without a tab, every queued quote at a vendor that has answered
+ * `vendor-throttled` in this run.
+ *
+ * Measured cost of not doing this, 2026-10-27: eleven National codes after the
+ * refusal began, each opening a tab, each waiting out a 35s deadline to be
+ * told the same thing — six minutes of a run whose answer was already known.
+ * The quotes keep the code so the popup says why they were skipped rather than
+ * folding them into the one that was actually refused.
+ */
+async function retireThrottled(run: ActiveRun, queue: Quote[]): Promise<void> {
+  let retired = false;
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    const quote = queue[i]!;
+    const vendor = quote.candidate.vendor;
+    if (!run.throttled.has(vendor)) continue;
+    queue.splice(i, 1);
+    const label = findVendor(vendor)?.label ?? vendor;
+    finishQuote(run, quote.id, {
+      status: 'no-price',
+      failure: 'vendor-throttled',
+      message: `skipped: ${label} is refusing searches from this browser for now`,
+    });
+    retired = true;
+  }
+  if (retired) await publish();
 }
 
 async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
   for (;;) {
     if (run.cancelled) return;
-    const next = takeNext(run, queue);
+    await retireThrottled(run, queue);
+    const next = takeNext(run, queue, Date.now());
     if (!next) {
       // Nothing left for anyone: this lane is done.
       if (queue.length === 0) return;
-      // Work remains, but all of it belongs to vendors at their cap. Park until
-      // a slot frees rather than spin — and rather than return, which would
-      // quietly drop those quotes on the floor with the run reported complete.
-      await new Promise<void>((resolve) => run.laneWaiters.add(resolve));
+      // Work remains, but all of it belongs to vendors at their cap or inside
+      // their gap. Park until a slot frees or the gap runs out rather than
+      // spin — and rather than return, which would quietly drop those quotes
+      // on the floor with the run reported complete. Resolving twice is
+      // harmless, so the timer and the waiter can share one promise.
+      const wait = nextGapEnds(run, queue, Date.now());
+      await new Promise<void>((resolve) => {
+        run.laneWaiters.add(resolve);
+        if (Number.isFinite(wait)) setTimeout(resolve, wait);
+      });
       // The stagger lives at the tail of this loop, which a `continue` skips.
       // Without this the capped vendors — the ones whose sites keep session
       // state, and so the ones most likely to rate-limit — are exactly the
@@ -1056,6 +1130,8 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     cancelled: false,
     waiters: new Map(),
     vendorInFlight: new Map(),
+    vendorLastStart: new Map(),
+    throttled: new Set(),
     laneWaiters: new Set(),
   };
   active = run;
@@ -1353,6 +1429,11 @@ chrome.runtime.onMessage.addListener(
           }
           if (active && quoteId !== undefined) {
             const failed = quoteFor(active, quoteId);
+            // The site has said it will refuse this browser; the lanes retire
+            // the rest of its queue the next time they look (`retireThrottled`).
+            if (failed && message.failure === 'vendor-throttled') {
+              active.throttled.add(failed.candidate.vendor);
+            }
             finishQuote(active, quoteId, {
               status: 'no-price',
               // Unrecognised means unrecognised. Coercing it to probe-empty

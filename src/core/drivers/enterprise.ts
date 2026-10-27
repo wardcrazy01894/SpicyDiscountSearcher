@@ -1,5 +1,6 @@
 import { airportCode, clock12, isoParts } from '../deeplinks.js';
 import {
+  type DriveEvidence,
   DriverError,
   type DriveContext,
   type FormDriver,
@@ -94,6 +95,53 @@ const START_URL = 'https://www.enterprise.com/en/reserve.html';
  * "We're sorry, but this account number cannot be used online. Please contact
  * your account manager if you have questions." */
 const REJECTED_RE = /cannot be used online/i;
+
+/**
+ * Enterprise's other answers, all measured racing every code on 2026-10-27
+ * and all costing a 70s `form-submit` timeout until they were read:
+ *
+ * - "We're sorry, but the promotion code provided for this reservation is
+ *   invalid. Please update or remove to continue." — JP Morgan's `XZ240G`.
+ *   The vendor's verdict on the code, so `code-rejected`.
+ * - "Please sign in to your Enterprise Plus® account to continue." — EY's
+ *   `XZ24S06`. The code is real but usable only behind a login this
+ *   extension does not have, so for us it is refused: `code-rejected`.
+ * - "We're sorry, but no vehicles are available at this time. Please call us
+ *   for assistance." — Purdue's `XZ78806`, which National priced the same
+ *   minute. The search ran and was answered with nothing: `probe-empty`, not
+ *   a refusal of the code, and not remembered.
+ */
+const INVALID_RE = /promotion code[^.]*is invalid/i;
+const SIGN_IN_RE = /please sign in to your enterprise plus/i;
+const NO_VEHICLES_RE = /no vehicles are available/i;
+
+/** Throw if the form page is showing one of the vendor's answers to the search. */
+function refuseIfAnswered(text: string): void {
+  if (REJECTED_RE.test(text)) {
+    throw new DriverError(
+      'code-rejected',
+      'Enterprise says this account number cannot be used online',
+    );
+  }
+  if (INVALID_RE.test(text)) {
+    throw new DriverError(
+      'code-rejected',
+      'Enterprise says the promotion code provided for this reservation is invalid',
+    );
+  }
+  if (SIGN_IN_RE.test(text)) {
+    throw new DriverError(
+      'code-rejected',
+      'Enterprise says this account needs an Enterprise Plus sign-in, which the extension cannot do',
+    );
+  }
+  if (NO_VEHICLES_RE.test(text)) {
+    throw new DriverError(
+      'probe-empty',
+      'Enterprise says no vehicles are available at this time under this account',
+    );
+  }
+}
 
 /** The hash Enterprise puts on the URL once a search has produced results. */
 const RESULTS_HASH = 'car_select';
@@ -969,12 +1017,7 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
       // `visibleText`, not `textOf`: the latter prefers `innerText`, which
       // forces style and layout of the whole document on every poll — in the
       // one tab that is painted, while Enterprise is rendering its cards.
-      if (REJECTED_RE.test(visibleText(ctx.doc.body))) {
-        throw new DriverError(
-          'code-rejected',
-          'Enterprise says this account number cannot be used online',
-        );
-      }
+      refuseIfAnswered(visibleText(ctx.doc.body));
       return ctx.doc.location?.hash.includes(RESULTS_HASH) || null;
     },
     'form-submit',
@@ -993,7 +1036,15 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
  * the container, because an empty container is also what a page shows while
  * it is still thinking.
  */
-const CONTRACT_NAME = '.contract-name__button';
+const CONTRACT_NAME = '.contract-name__button, .contract-name-text';
+/*
+ * Two shapes, both measured. IBM's banner is the linked kind — a button with
+ * the name as its `aria-label` and text. Fortive's (`XZ15CH7`, 2026-10-27) is
+ * `code-banner--no-links`: the same `#codebanner-container`, and the name in
+ * `<p class="contract-name-text">` with no button anywhere. The first selector
+ * alone failed that quote `discount-missing` on a page that named the account
+ * in its header.
+ */
 /*
  * Measured not to leak between searches in one profile, which is the question
  * a session-state vendor raises: the no-code control above was run in the same
@@ -1040,11 +1091,16 @@ const BANNER_GRACE_MS = 10_000;
  * deliberately never remembered. See `rejected-codes.ts` for why that split
  * is load-bearing.
  */
-export async function verifyResults(ctx: DriveContext): Promise<void> {
+export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
   await waitFor(
     ctx,
     'Enterprise to be showing a results page',
-    () => ctx.doc.location?.hash.includes(RESULTS_HASH) || null,
+    () => {
+      // The answer can land after `submitSearch` returned, on the document
+      // waiting for results; same sentences, same verdicts.
+      refuseIfAnswered(visibleText(ctx.doc.body));
+      return ctx.doc.location?.hash.includes(RESULTS_HASH) || null;
+    },
     'form-submit',
   );
   await waitFor(
@@ -1056,12 +1112,16 @@ export async function verifyResults(ctx: DriveContext): Promise<void> {
   // A shortened deadline, never a longer one: the grace is capped by the
   // quote's own budget so this step can never outlive the probe.
   const grace = { ...ctx, deadline: Math.min(ctx.deadline, ctx.now() + BANNER_GRACE_MS) };
-  await waitFor(
+  const banner = await waitFor(
     grace,
     'Enterprise to name the account the search was priced under (it listed cars but no contract)',
-    () => ctx.doc.querySelector(CONTRACT_NAME),
+    () => ctx.doc.querySelector<HTMLElement>(CONTRACT_NAME),
     'discount-missing',
   );
+  // The name rides on the quote's report: `I B M CORP (USA)` is the aria-label
+  // and the visible text both, so take whichever the page filled.
+  const account = (banner.getAttribute('aria-label') || textOf(banner)).trim().slice(0, 60);
+  return account ? { account } : {};
 }
 
 export const enterpriseDriver: FormDriver = {

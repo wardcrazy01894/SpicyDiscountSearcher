@@ -822,6 +822,9 @@ const FAILURE_TEXT: Record<QuoteFailure, string> = {
   // Not "refused": nothing refused it. The search ran and the discount was not
   // on the answer, which is a different thing and a less certain one.
   'discount-missing': 'searched, but no company discount was applied',
+  // The site, not the code: it is refusing every search from this browser for
+  // now, so the advice is to wait rather than to try another code.
+  'vendor-throttled': 'the site is refusing searches from this browser for now',
   'wrong-trip': 'the page priced a different trip',
   'tab-closed': 'tab closed early',
   interrupted: 'interrupted mid-run',
@@ -903,7 +906,8 @@ function evidenceLine(quote: Quote): HTMLElement | null {
       ? 'no permission to read this tab’s address'
       : 'no path to show';
   const counted = observed ? '' : ` · ${report.offerCount} offer${plural}`;
-  line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;
+  const account = report.account ? ` · account ${report.account}` : '';
+  line.textContent = `${landed}${counted} · ${branchText(report.path)}${account}${took ? ` · ${took}` : ''}`;
   if (report.title) line.title = report.title;
   return line;
 }
@@ -972,7 +976,13 @@ function confidenceBadge(quote: Quote): HTMLElement | null {
       'search — for a US airport round trip, driver aged 25 or over. That is a claim about the ' +
       'URL, not about this itinerary and not about the price.';
   } else if (quote.confidence === 'driven') {
-    badge.textContent = 'form filled';
+    // With the account the results page named, when the driver read one. On
+    // an `ok` row this is the only place it shows, and it is the fact that
+    // separates four contracts on one rate plan from one restored account
+    // priced four times — the question identical prices raise at a vendor
+    // that keeps its search in session state.
+    const account = quote.report?.account;
+    badge.textContent = account ? `form filled · ${account}` : 'form filled';
     badge.title =
       'This vendor’s URL carries no search, so the trip and the code are typed into its own ' +
       'booking form — and each step is checked against what the form renders back, failing the ' +
