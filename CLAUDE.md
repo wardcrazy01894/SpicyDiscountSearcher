@@ -576,6 +576,15 @@ cap is lifted — they were unpinned until someone checked. The first two now re
 Enterprise; the window is never _focused_ for anyone, so the user's keyboard is
 never taken.
 
+The run window is created with no URL, so a new-tab page is what keeps it
+alive between quotes — and that page is on screen whenever Enterprise is
+mounting, where closing it is an ordinary thing to do. The next quote's own
+`closeTab` then empties the window and Chrome removes it, firing the same
+`windows.onRemoved` the user's Stop fires. The two are told apart by whether a
+probe tab went down **with** the window (`tabs.onRemoved` reports
+`isWindowClosing`): that is Stop, and the run is cancelled; an empty window
+closing on its own is not, and the next `ensureWindow` opens another.
+
 `START_RUN` is deliberately not retried on a failed `sendMessage`: a rejection
 doesn't prove non-delivery, and a retry starts a second race that opens real
 tabs before cancelling the first.
@@ -644,6 +653,15 @@ the same code and a message beginning `skipped:`, without opening a tab. Eleven
 codes after the first refusal spent 35s each learning the same thing before
 that existed. It is not remembered across runs — the block clears in minutes,
 and the next run is the right time to find out.
+
+Two more of the vendors' sentences are read now, and only one of them is
+remembered. "This account number cannot be used online" is `code-rejected` and
+durable, as before. "The promotion code provided for **this reservation** is
+invalid" is scoped by its own wording to the itinerary, so it is
+`discount-missing` with the vendor's words in the message: reported, raced
+again next trip, never recorded. So is Enterprise's "please sign in to your
+Enterprise Plus account", which is a verdict on the session rather than the
+code. "No vehicles are available" is `probe-empty`.
 
 A driven row that priced carries the account the results page named, on its
 badge: `form filled · I B M CORP (USA)`. `verifyResults` returns it as

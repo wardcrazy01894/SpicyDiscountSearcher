@@ -102,7 +102,8 @@ const REJECTED_RE = /cannot be used online/i;
  *
  * - "We're sorry, but the promotion code provided for this reservation is
  *   invalid. Please update or remove to continue." — JP Morgan's `XZ240G`.
- *   The vendor's verdict on the code, so `code-rejected`.
+ *   Scoped to the reservation by its own wording, so `discount-missing`:
+ *   reported, not remembered.
  * - "Please sign in to your Enterprise Plus® account to continue." — EY's
  *   `XZ24S06`. The code is real but usable only behind a login this
  *   extension does not have. `discount-missing`, not `code-rejected`: a
@@ -125,8 +126,10 @@ function refuseIfAnswered(text: string): void {
     );
   }
   if (INVALID_RE.test(text)) {
+    // Scoped by the vendor to "this reservation", so not remembered — see the
+    // same branch in National's driver.
     throw new DriverError(
-      'code-rejected',
+      'discount-missing',
       'Enterprise says the promotion code provided for this reservation is invalid',
     );
   }

@@ -768,6 +768,41 @@ describe('politeness', () => {
     expect(chromeMock.windowsCreated).toHaveLength(1);
   });
 
+  it('does not mistake an emptied window closing on its own for Stop', async () => {
+    // The window is created with no URL, so a new-tab page is what keeps it
+    // alive between quotes. On screen for a paint-gated vendor, that page gets
+    // closed like any other; the next quote's own closeTab then empties the
+    // window and Chrome removes it. Nobody cancelled, and the run must carry
+    // on in a fresh window rather than report a cancelled race.
+    await bootWorker();
+    const enterpriseThenHertz: SearchPlan = {
+      ...enterprisePlan(),
+      candidates: [...enterprisePlan().candidates, plan().candidates[0]!],
+    };
+    enterpriseThenHertz.concurrency = 1;
+    await chromeMock.fromPopup({ type: 'START_RUN', plan: enterpriseThenHertz });
+    await settle();
+    const windowId = chromeMock.windowsCreated[0]!;
+    // The Enterprise quote settles; the worker closes its tab.
+    const tabId = [...chromeMock.tabs.keys()][0]!;
+    await chromeMock.fromTab(tabId, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    await settle();
+    expect(chromeMock.tabs.size).toBe(0);
+    // Chrome removes the now-empty window: no probe tab goes down with it.
+    chromeMock.userClosesWindow(windowId);
+    await settle(getVendor('enterprise').minGapMs! + 2_000);
+    // The Hertz quote opened in a fresh window; answer it.
+    expect(chromeMock.windowsCreated).toHaveLength(2);
+    const hertzTab = [...chromeMock.tabs.keys()].at(-1)!;
+    await chromeMock.fromTab(hertzTab, { type: 'PROBE_RESULT', offers: [OFFER], report: REPORT });
+    await settle(2_000);
+
+    const state = await getState();
+    expect(state?.quotes.map((q) => q.status)).toEqual(['ok', 'ok']);
+    expect(state?.quotes.some((q) => q.failure === 'cancelled')).toBe(false);
+    expect(chromeMock.windowsCreated).toHaveLength(2);
+  });
+
   it('does not mistake its own teardown for the user closing the window', async () => {
     // The worker closes the same window at the end of every run, and Chrome
     // fires the same event for it. A run that finished normally must not be

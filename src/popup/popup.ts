@@ -906,8 +906,10 @@ function evidenceLine(quote: Quote): HTMLElement | null {
       ? 'no permission to read this tab’s address'
       : 'no path to show';
   const counted = observed ? '' : ` · ${report.offerCount} offer${plural}`;
-  const account = report.account ? ` · account ${report.account}` : '';
-  line.textContent = `${landed}${counted} · ${branchText(report.path)}${account}${took ? ` · ${took}` : ''}`;
+  // The account holder is on the badge, not here: a failed or flagged driven
+  // row renders both, and the same sixty characters twice on adjacent lines
+  // was the result.
+  line.textContent = `${landed}${counted} · ${branchText(report.path)}${took ? ` · ${took}` : ''}`;
   if (report.title) line.title = report.title;
   return line;
 }

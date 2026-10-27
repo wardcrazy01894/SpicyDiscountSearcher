@@ -117,7 +117,8 @@ export interface ChromeHarness {
 
 export function installChromeMock(): ChromeHarness {
   const messageListeners: MessageListener[] = [];
-  const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  type TabRemoved = (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void;
+  const tabRemovedListeners: TabRemoved[] = [];
   const windowRemovedListeners: Array<(windowId: number) => void> = [];
   const tabs = new Map<number, FakeTab>();
   const windows = new Set<number>();
@@ -145,8 +146,8 @@ export function installChromeMock(): ChromeHarness {
       return Promise.resolve(out);
     };
 
-  const fireRemoved = (tabId: number): void => {
-    for (const listener of [...tabRemovedListeners]) listener(tabId);
+  const fireRemoved = (tabId: number, windowId: number, isWindowClosing = false): void => {
+    for (const listener of [...tabRemovedListeners]) listener(tabId, { windowId, isWindowClosing });
   };
   // Chrome fires this for a window closed by anyone, the extension included,
   // after the window's own tabs have been torn down.
@@ -155,7 +156,7 @@ export function installChromeMock(): ChromeHarness {
     for (const [id, tab] of [...tabs]) {
       if (tab.windowId === windowId) {
         tabs.delete(id);
-        fireRemoved(id);
+        fireRemoved(id, windowId, true);
       }
     }
     for (const listener of [...windowRemovedListeners]) listener(windowId);
@@ -243,13 +244,14 @@ export function installChromeMock(): ChromeHarness {
         });
       },
       remove: (tabId: number) => {
-        if (!tabs.has(tabId)) return Promise.reject(new Error('No tab with id'));
+        const tab = tabs.get(tabId);
+        if (!tab) return Promise.reject(new Error('No tab with id'));
         tabs.delete(tabId);
-        fireRemoved(tabId);
+        fireRemoved(tabId, tab.windowId);
         return Promise.resolve();
       },
       onRemoved: {
-        addListener: (fn: (tabId: number) => void) => tabRemovedListeners.push(fn),
+        addListener: (fn: TabRemoved) => tabRemovedListeners.push(fn),
       },
     },
     windows: {
@@ -329,8 +331,9 @@ export function installChromeMock(): ChromeHarness {
     fromTab: (tabId, message) =>
       deliver(message, { tab: { id: tabId } } as unknown as chrome.runtime.MessageSender),
     userClosesTab: (tabId) => {
+      const tab = tabs.get(tabId);
       tabs.delete(tabId);
-      fireRemoved(tabId);
+      fireRemoved(tabId, tab?.windowId ?? -1);
     },
     userClosesWindow: (windowId) => {
       if (windows.has(windowId)) removeWindow(windowId);

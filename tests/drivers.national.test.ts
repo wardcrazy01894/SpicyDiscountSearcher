@@ -829,12 +829,13 @@ describe('submitSearch', () => {
     expect(error.failure).toBe('form-submit');
   });
 
-  it('reports an invalid promotion code as the vendor refusing it', async () => {
+  it('reports an invalid promotion code in the vendor’s words, without remembering it', async () => {
     // JP Morgan's XZ240G, 2026-10-27: a different sentence from the same
     // banner, and the same verdict — the vendor read the code and said no.
     renderForm({ onSubmit: 'invalid' });
     const error = await failureOf(submitSearch(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    // Not the remembered code: the sentence is about "this reservation".
+    expect(error.failure).toBe('discount-missing');
     expect(error.message).toMatch(/promotion code/i);
   });
 

@@ -122,8 +122,8 @@ const REJECTED_RE = /cannot be used online/i;
  * remove to continue." Same banner, same place, same shape as the sentence
  * above — and until it was read, the same cost: a full budget waited out for a
  * results page, reported as `form-submit`, for a search National had answered
- * within a second. Equally the vendor's verdict on the code, so equally
- * `code-rejected` and equally durable.
+ * within a second. Unlike the sentence above it is scoped to the reservation,
+ * so it is reported but not remembered (see `refuseIfRejected`).
  */
 const INVALID_RE = /promotion code[^.]*is invalid/i;
 
@@ -157,7 +157,8 @@ const THROTTLED_RE = /something went wrong\.?\s*please try again later/i;
 const ACCOUNT_VALUE_MAX = 60;
 
 /**
- * Did the results page name an account, rather than merely say the words?
+ * The account holder the results page names, or null when it merely says the
+ * words.
  *
  * The label alone is too weak to carry this much weight: "account name" is
  * ordinary sign-in furniture and could sit in a profile menu or a hidden modal
@@ -182,11 +183,6 @@ const ACCOUNT_VALUE_MAX = 60;
  * direction: a header that stops matching fails the quote loudly rather than
  * letting a retail price through quietly.
  */
-export function accountNamed(doc: Document): boolean {
-  return accountName(doc) !== null;
-}
-
-/** The account holder the results page names, or null when it names none. */
 export function accountName(doc: Document): string | null {
   const holders = [...doc.querySelectorAll<HTMLElement>('*')].filter((el) => {
     if (!ACCOUNT_LABEL_RE.test(textOf(el))) return false;
@@ -755,8 +751,13 @@ function refuseIfRejected(ctx: DriveContext): void {
     );
   }
   if (INVALID_RE.test(text)) {
+    // Not `code-rejected`, which is remembered for good: the vendor's own
+    // sentence scopes this to "this reservation", so it may be the itinerary
+    // — a branch or dates the contract does not cover — rather than the code.
+    // One wasted tab per run (about 4s now that the sentence is read) is the
+    // price of not retiring a code that might price next trip.
     throw new DriverError(
-      'code-rejected',
+      'discount-missing',
       'National says the promotion code provided for this reservation is invalid',
     );
   }

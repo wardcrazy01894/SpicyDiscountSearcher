@@ -153,6 +153,13 @@ interface ActiveRun {
   waiters: Map<string, () => void>;
   /** Vendor id -> tabs currently open at it, for `Vendor.maxLanes`. */
   vendorInFlight: Map<string, number>;
+  /**
+   * Set when Chrome tears down one of this run's probe tabs *because its
+   * window is closing*. That is what tells the user closing the run window
+   * (Stop) apart from Chrome removing a window that had simply run out of
+   * tabs — see `windows.onRemoved`.
+   */
+  windowTookTab: boolean;
   /** Vendor id -> when its last quote was taken, for `Vendor.minGapMs`. */
   vendorLastStart: Map<string, number>;
   /**
@@ -1138,6 +1145,7 @@ async function beginRun(plan: SearchPlan): Promise<RunState> {
     waiters: new Map(),
     vendorInFlight: new Map(),
     vendorLastStart: new Map(),
+    windowTookTab: false,
     throttled: new Set(),
     laneWaiters: new Set(),
   };
@@ -1553,16 +1561,25 @@ chrome.windows.onRemoved.addListener((windowId) => {
   // it has nothing to close now. Left behind, the dead id would make the next
   // worker's `reapOrphanWindow` try to remove it and log that it could not.
   void forgetWindowId(windowId);
+  // Only a window that took a probe tab down with it is the user's Stop. The
+  // window is created with no URL, so a new-tab page is all that keeps it
+  // alive between quotes — and that page is on screen whenever a paint-gated
+  // vendor is mounting, where closing it is an ordinary thing to do. After
+  // that, the next quote's own `closeTab` empties the window and Chrome
+  // removes it: no one cancelled anything, and the next `ensureWindow` simply
+  // opens another. Measured as a review finding rather than live, 2026-10-27.
+  if (!run.windowTookTab) return;
   void cancelRun();
 });
 
 // A tab the user closes mid-probe should release its lane instead of blocking
 // the queue until the timeout fires.
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId, removed) => {
   const run = active;
   const quoteId = run?.tabs.get(tabId);
   if (!run || quoteId === undefined) return;
   run.tabs.delete(tabId);
+  if (removed.isWindowClosing) run.windowTookTab = true;
   finishQuote(run, quoteId, {
     status: 'no-price',
     failure: 'tab-closed',

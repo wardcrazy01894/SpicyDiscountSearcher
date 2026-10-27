@@ -1127,10 +1127,10 @@ describe('submitSearch', () => {
     expect(window.location.hash).toBe('#car_select');
   });
 
-  it('reports an invalid promotion code as the vendor refusing it', async () => {
+  it('reports an invalid promotion code in the vendor’s words, without remembering it', async () => {
     renderForm({ onSubmit: 'invalid' });
     const error = await failureOf(submitSearch(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    expect(error.failure).toBe('discount-missing');
     expect(error.message).toMatch(/promotion code/i);
   });
 
