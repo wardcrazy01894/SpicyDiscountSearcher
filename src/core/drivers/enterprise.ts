@@ -1119,7 +1119,12 @@ export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
   await waitFor(
     ctx,
     'Enterprise to list vehicle classes',
-    () => ctx.doc.querySelector(RESULT_CARD),
+    () => {
+      // An answer can also arrive on the results view itself, after the hash
+      // has landed and before any card does.
+      refuseIfAnswered(visibleText(ctx.doc.body));
+      return ctx.doc.querySelector(RESULT_CARD);
+    },
     'form-submit',
   );
   // A shortened deadline, never a longer one: the grace is capped by the
@@ -1159,9 +1164,20 @@ export const enterpriseDriver: FormDriver = {
     // the skip needs this tab's own marker for this code (see `SUBMITTED_KEY`);
     // anything else drives from the top and fails loudly on a view without a
     // form. The paint hold is released here too, as it is after a submit.
-    if (ctx.doc.location?.hash.includes(RESULTS_HASH) && submittedHere(ctx)) {
-      ctx.releasePaint?.();
-      return;
+    if (ctx.doc.location?.hash.includes(RESULTS_HASH)) {
+      if (submittedHere(ctx)) {
+        ctx.releasePaint?.();
+        return;
+      }
+      // Loudly and at once, not after 72s of waiting for a `#cid` this view
+      // never renders and then blaming throttling. Every tab the worker opens
+      // starts at the bare form URL, so this is a reload of a results view
+      // whose marker is gone, or a view Enterprise restored on its own —
+      // either way not this tab's search, and not something to price.
+      throw new DriverError(
+        'form-fill',
+        'Enterprise is showing a results page this tab did not search (restored from session state); refusing to price it under this code',
+      );
     }
     await awaitHydration(ctx);
     await fillLocation(ctx);

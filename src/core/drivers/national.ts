@@ -719,6 +719,14 @@ export async function fillAccountNumber(ctx: DriveContext): Promise<void> {
 
   // Written unconditionally, never appended to. Session state can leave another
   // code in here, and that is the contamination this vendor is prone to.
+  //
+  // Known and deliberately left: this read-back is on the node we just wrote,
+  // on the same tick, so it tests our own assignment rather than the widget's
+  // acceptance — the pattern Enterprise's `waitForSettled` exists to avoid. A
+  // remount that detached `field` would submit uncoded and be caught by
+  // `verifyResults` as `discount-missing` (a wasted quote, not a wrong price).
+  // National is reactive-only and priced every code it could in every race on
+  // 2026-10-27, so this is recorded here rather than changed without a symptom.
   field.focus();
   setNativeValue(field, ctx.code);
   await waitFor(ctx, 'the account number field to keep the code', () => field.value === ctx.code);

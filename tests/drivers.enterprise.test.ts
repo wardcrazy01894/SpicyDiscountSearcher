@@ -1267,9 +1267,23 @@ describe('drive', () => {
     renderForm({ onSubmit: 'results' });
     await submitSearch(makeContext({ code: 'XZOTHER' }));
     document.querySelector('#cid')!.remove();
-    const error = await failureOf(enterpriseDriver.drive(makeContext()));
+    const ctx = makeContext();
+    const error = await failureOf(enterpriseDriver.drive(ctx));
     expect(error.failure).toBe('form-fill');
-    expect(error.message).toMatch(/hydrate/);
+    // And says what it saw, at once — not "hydrate (it may be throttling us)"
+    // after waiting out the drive budget for a field this view never renders.
+    expect(error.message).toMatch(/did not search/);
+    expect(ctx.now()).toBeLessThan(2_000);
+  });
+
+  it('reads a vendor answer that lands on the results view before any card', async () => {
+    renderForm({ onSubmit: 'nothing' });
+    window.location.hash = '#car_select';
+    const error = document.createElement('div');
+    error.textContent = "Error: We're sorry, but this account number cannot be used online.";
+    document.body.prepend(error);
+    const failure = await failureOf(verifyResults(makeContext()));
+    expect(failure.failure).toBe('code-rejected');
   });
 
   it('drives the whole form and submits', async () => {

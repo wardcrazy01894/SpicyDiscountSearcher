@@ -984,9 +984,16 @@ async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
       // harmless, so the timer and the waiter can share one promise.
       const wait = nextGapEnds(run, queue, Date.now());
       await new Promise<void>((resolve) => {
-        run.laneWaiters.add(resolve);
-        if (Number.isFinite(wait)) setTimeout(resolve, wait);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        run.laneWaiters.add(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+        if (Number.isFinite(wait)) timer = setTimeout(resolve, wait);
       });
+      // A cancel is what woke this lane as often as not; go straight to the
+      // check at the top rather than sleeping a stagger first.
+      if (run.cancelled) return;
       // The stagger lives at the tail of this loop, which a `continue` skips.
       // Without this the capped vendors — the ones whose sites keep session
       // state, and so the ones most likely to rate-limit — are exactly the
