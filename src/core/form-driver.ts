@@ -48,6 +48,9 @@ export type DriverFailure = Extract<
   // The vendor's own "no vehicles are available": the search ran and was
   // answered with no prices, which is what this code has always meant.
   | 'probe-empty'
+  // The results page describes a different trip from the one driven — the
+  // same code `verify-trip.ts` raises for Avis, from the other direction.
+  | 'wrong-trip'
 >;
 
 /**

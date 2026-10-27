@@ -90,6 +90,8 @@ interface FormOptions {
   onSubmit?: 'results' | 'rejected' | 'invalid' | 'sign-in' | 'no-vehicles' | 'nothing';
   /** Render the account banner as Fortive's no-links paragraph rather than IBM's button. */
   bannerAsText?: boolean;
+  /** What the results page says the rental times are; defaults to the fixture trip's. */
+  resultsTimes?: string;
   /**
    * Whether the results page names a contract holder, as the live page does
    * for an applied code (`button.contract-name__button`) and does not for an
@@ -362,6 +364,7 @@ function renderForm(options: FormOptions = {}): void {
     cidRejectsValue = false,
     resultsNameAccount = true,
     bannerAsText = false,
+    resultsTimes,
   } = options;
 
   document.body.innerHTML = '<header>Enterprise Rent-A-Car</header>';
@@ -523,6 +526,12 @@ function renderForm(options: FormOptions = {}): void {
       const results = document.createElement('main');
       results.innerHTML =
         '<section class="car-item__wrapper"><h2>Economy</h2><div class="car-item__price-details-item"><span>$55.13</span><p>Per Day</p></div></section>';
+      // The live results page restates the itinerary in its rental-details
+      // step; the driver checks the times against it.
+      const details = document.createElement('p');
+      details.textContent =
+        resultsTimes ?? 'RENTAL DETAILS Fri, Sep 4, 9:30 AM Sun, Sep 6, 5:00 PM';
+      results.prepend(details);
       document.body.append(results);
     }
     const answers: Record<string, string> = {
@@ -1185,6 +1194,29 @@ describe('verifyResults', () => {
     document.querySelector('button')!.click();
     // And reports who, for the quote's evidence line.
     await expect(verifyResults(makeContext())).resolves.toEqual({ account: 'I B M CORP (USA)' });
+  });
+
+  it('fails wrong-trip when the results page shows times other than the ones driven', async () => {
+    // A controlled select that reverted after the read-back would submit the
+    // noon default; the results page is the only place that shows it.
+    renderForm({ onSubmit: 'results', resultsTimes: 'Fri, Sep 4, 12:00 PM Sun, Sep 6, 12:00 PM' });
+    document.querySelector('button')!.click();
+    const error = await failureOf(verifyResults(makeContext()));
+    expect(error.failure).toBe('wrong-trip');
+    expect(error.message).toMatch(/09:30|17:00/);
+  });
+
+  it('does not let a hidden template retire a code for good', async () => {
+    // `visibleText` reads hidden nodes; the remembered verdict is confirmed
+    // against rendered text first. jsdom has no layout, so `innerText` is
+    // undefined and `textOf` falls back to `visibleText` — make the template
+    // invisible to both by putting the sentence in an attribute instead.
+    renderForm({ onSubmit: 'nothing' });
+    const template = document.createElement('div');
+    template.setAttribute('data-msg', 'this account number cannot be used online');
+    document.body.prepend(template);
+    const error = await failureOf(submitSearch(makeContext()));
+    expect(error.failure).toBe('form-submit');
   });
 
   it('accepts the no-links banner, where the name is a paragraph rather than a button', async () => {

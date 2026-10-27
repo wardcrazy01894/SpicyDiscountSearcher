@@ -79,8 +79,16 @@ const stamp = (name, fallback) => {
   }
   return [match[1], match[2]];
 };
-const [fromDate, fromTime] = stamp('from', '2026-11-10T09:00');
-const [toDate, toTime] = stamp('to', '2026-11-13T17:00');
+// Two weeks out by default, so the script keeps working after the week it
+// was written for has passed: a past date is refused by the popup, and the
+// poll then waits its full ten minutes to say so.
+const plusDays = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const [fromDate, fromTime] = stamp('from', `${plusDays(14)}T09:00`);
+const [toDate, toTime] = stamp('to', `${plusDays(17)}T17:00`);
 const ext = path.resolve(args['dist'] ?? 'dist');
 const startedAtLabel = new Date().toISOString().replace(/[:.]/g, '-');
 const out = args['out'] ?? path.join(os.tmpdir(), `spicy-live-race-${startedAtLabel}`);

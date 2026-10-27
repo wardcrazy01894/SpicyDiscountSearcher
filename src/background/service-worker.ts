@@ -992,11 +992,19 @@ async function worker(run: ActiveRun, queue: Quote[]): Promise<void> {
       const wait = nextGapEnds(run, queue, Date.now());
       await new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
-        run.laneWaiters.add(() => {
+        const waiter = (): void => {
           clearTimeout(timer);
           resolve();
-        });
-        if (Number.isFinite(wait)) timer = setTimeout(resolve, wait);
+        };
+        run.laneWaiters.add(waiter);
+        if (Number.isFinite(wait)) {
+          // And leave the set when the clock wins, or every timer-driven
+          // wake would leave a dead resolver behind for the rest of the run.
+          timer = setTimeout(() => {
+            run.laneWaiters.delete(waiter);
+            resolve();
+          }, wait);
+        }
       });
       // A cancel is what woke this lane as often as not; go straight to the
       // check at the top rather than sleeping a stagger first.

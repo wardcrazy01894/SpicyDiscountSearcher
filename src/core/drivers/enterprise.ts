@@ -118,8 +118,15 @@ const SIGN_IN_RE = /please sign in to your enterprise plus/i;
 const NO_VEHICLES_RE = /no vehicles are available/i;
 
 /** Throw if the form page is showing one of the vendor's answers to the search. */
-function refuseIfAnswered(text: string): void {
+function refuseIfAnswered(ctx: DriveContext): void {
+  const text = visibleText(ctx.doc.body);
   if (REJECTED_RE.test(text)) {
+    // The one remembered verdict is confirmed against *rendered* text before
+    // it is thrown. `visibleText` walks every text node, hidden ones
+    // included, and a template nobody saw must not retire a code for good;
+    // `textOf` prefers `innerText`, which respects layout, and this tab is
+    // painted. It costs a layout only on a match, never per poll.
+    if (!REJECTED_RE.test(textOf(ctx.doc.body))) return;
     throw new DriverError(
       'code-rejected',
       'Enterprise says this account number cannot be used online',
@@ -1033,7 +1040,7 @@ export async function submitSearch(ctx: DriveContext): Promise<void> {
       // `visibleText`, not `textOf`: the latter prefers `innerText`, which
       // forces style and layout of the whole document on every poll — in the
       // one tab that is painted, while Enterprise is rendering its cards.
-      refuseIfAnswered(visibleText(ctx.doc.body));
+      refuseIfAnswered(ctx);
       return ctx.doc.location?.hash.includes(RESULTS_HASH) || null;
     },
     'form-submit',
@@ -1114,7 +1121,7 @@ export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
     () => {
       // The answer can land after `submitSearch` returned, on the document
       // waiting for results; same sentences, same verdicts.
-      refuseIfAnswered(visibleText(ctx.doc.body));
+      refuseIfAnswered(ctx);
       return ctx.doc.location?.hash.includes(RESULTS_HASH) || null;
     },
     'form-submit',
@@ -1125,7 +1132,7 @@ export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
     () => {
       // An answer can also arrive on the results view itself, after the hash
       // has landed and before any card does.
-      refuseIfAnswered(visibleText(ctx.doc.body));
+      refuseIfAnswered(ctx);
       return ctx.doc.querySelector(RESULT_CARD);
     },
     'form-submit',
@@ -1139,10 +1146,35 @@ export async function verifyResults(ctx: DriveContext): Promise<DriveEvidence> {
     () => ctx.doc.querySelector<HTMLElement>(CONTRACT_NAME),
     'discount-missing',
   );
+  // Then that it is *our* trip's times. The form's read-backs are of our own
+  // writes, and a controlled select that reverted on a later render would
+  // submit the noon default and price a 12:00-12:00 rental under this code
+  // with a "form filled" badge. The results page restates the itinerary
+  // ("Tue, Nov 10, 9:00 AM … Fri, Nov 13, 5:00 PM", measured on every live
+  // run on 2026-10-27), so both clock strings must be on it.
+  // Outside any `<select>`: a time menu lists every clock string there is,
+  // so counting its options would make this check pass on any page.
+  const text = textOutside(ctx.doc.body, [...ctx.doc.querySelectorAll('select')]);
+  const trip = carTrip(ctx);
+  const missing = [trip.pickupTime, trip.dropoffTime].filter(
+    (hhmm) => !clockStrings(hhmm).some((label) => text.includes(label)),
+  );
+  if (missing.length > 0) {
+    throw new DriverError(
+      'wrong-trip',
+      `Enterprise's results page does not show the ${missing.length === 2 ? 'pick-up or return time' : 'requested time'} that was driven (${missing.join(', ')})`,
+    );
+  }
   // The name rides on the quote's report: `I B M CORP (USA)` is the aria-label
   // and the visible text both, so take whichever the page filled.
   const account = (banner.getAttribute('aria-label') || textOf(banner)).trim().slice(0, 60);
   return account ? { account } : {};
+}
+
+/** Both spellings of a time as the site renders it: `9:00 AM` and `09:00 AM`. */
+function clockStrings(hhmm: string): string[] {
+  const { hour, minute, ampm } = clock12(hhmm);
+  return [`${Number(hour)}:${minute} ${ampm}`, `${hour}:${minute} ${ampm}`];
 }
 
 export const enterpriseDriver: FormDriver = {

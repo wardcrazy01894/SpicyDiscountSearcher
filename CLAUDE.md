@@ -825,11 +825,15 @@ would settle another vendor's quote, labelled with the wrong vendor and code,
 **No currently matched pair realises that**, and an earlier version of this
 paragraph claiming it was "a live bug rather than only a future one" was
 overstated. Its evidence was that Avis and Budget share a parent, and Budget
-left `host_permissions` when it became unsearchable. The six hosts the manifest
-still matches — avis, hertz, nationalcar, hilton, hyatt, marriott — are six
-distinct brands with no redirect between them. Sixt left when it became
-unsearchable; National arrived with its driver, and it shares a _backend_ with
-Enterprise (`prd.location.enterprise.com`) without sharing a matched host. Starwood shares marriott.com but is
+left `host_permissions` when it became unsearchable. The seven hosts the
+manifest matches — avis, hertz, nationalcar, enterprise, hilton, hyatt,
+marriott — are seven distinct brands with no redirect measured between them.
+Sixt left when it became unsearchable; National arrived with its driver, and
+Enterprise with its own (2026-10-26). Those two are the pair to watch: one
+company, one backend (`prd.location.enterprise.com`), two matched hosts.
+Across 76 driven quotes on 2026-10-27 neither ever landed on the other's host,
+but nobody has looked for a country or affiliate router between them, and
+this paragraph's rule says that is where it would come from. Starwood shares marriott.com but is
 `searchable: false`, so it never holds a quote to misattribute. A redirect to a
 _sibling_ host of the same brand (`www.hertz.co.uk`) leaves our origins
 entirely, which is the `left-our-origins` case and not this one.
@@ -862,7 +866,7 @@ not be told apart from a consent interstitial or a country picker.
 
 It cannot always read it. The manifest holds no `tabs` permission — PR #5
 dropped it deliberately — so Chrome omits `url` and `title` for a tab whose
-current URL is not one of the six vendor hosts still in the manifest. Not a gap to paper over with a
+current URL is not one of the seven vendor hosts in the manifest. Not a gap to paper over with a
 permission, but not a diagnosis either: all it establishes is that the tab's
 address is unreadable, which is equally true of a redirect off the vendor's
 site and of a load that never committed (`about:blank`, or `chrome-error://`
