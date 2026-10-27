@@ -141,7 +141,10 @@ const INVALID_RE = /promotion code[^.]*is invalid/i;
  * profile that is marked, not the address — Imperva's `visid_incap` cookie on
  * the webapi host — and it does not clear within the run.
  */
-const THROTTLED_RE = /something went wrong/i;
+// The whole sentence, not its first half: "something went wrong" alone is
+// generic enough to sit in a hidden error template or a footer, and one false
+// match retires the vendor for the run.
+const THROTTLED_RE = /something went wrong\.?\s*please try again later/i;
 
 /**
  * The longest a *value* rendered beside the label may be.

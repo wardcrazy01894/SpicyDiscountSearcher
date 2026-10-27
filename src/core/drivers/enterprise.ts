@@ -105,7 +105,8 @@ const REJECTED_RE = /cannot be used online/i;
  *   The vendor's verdict on the code, so `code-rejected`.
  * - "Please sign in to your Enterprise Plus® account to continue." — EY's
  *   `XZ24S06`. The code is real but usable only behind a login this
- *   extension does not have, so for us it is refused: `code-rejected`.
+ *   extension does not have. `discount-missing`, not `code-rejected`: a
+ *   refusal is remembered for good, and this one is about the session.
  * - "We're sorry, but no vehicles are available at this time. Please call us
  *   for assistance." — Purdue's `XZ78806`, which National priced the same
  *   minute. The search ran and was answered with nothing: `probe-empty`, not
@@ -130,8 +131,15 @@ function refuseIfAnswered(text: string): void {
     );
   }
   if (SIGN_IN_RE.test(text)) {
+    // Not `code-rejected`, though it reads like one: that code is remembered
+    // for good, and this is the vendor's verdict on the *session*, not the
+    // code. A user who signs in to Enterprise Plus in their profile would
+    // have the code price on the next run, and must not have to find the
+    // "try them again" control first. `discount-missing` is the nearest
+    // honest code — the search was asked and no discount was applied — and
+    // it is not remembered.
     throw new DriverError(
-      'code-rejected',
+      'discount-missing',
       'Enterprise says this account needs an Enterprise Plus sign-in, which the extension cannot do',
     );
   }
@@ -759,7 +767,12 @@ async function clickDay(ctx: DriveContext, id: string, which: string): Promise<v
             `enterprise's calendar will not page ${direction.toLowerCase()} to reach ${id}`,
           );
         }
-        if (paged >= MAX_MONTH_STEPS) break;
+        if (paged >= MAX_MONTH_STEPS) {
+          throw new DriverError(
+            'form-fill',
+            `enterprise's calendar paged ${paged} times without reaching ${id} (headers now ${shown.join(', ')})`,
+          );
+        }
         control.click();
         paged += 1;
         pagedFrom = key;

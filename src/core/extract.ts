@@ -880,14 +880,15 @@ export function extract(doc: Document, vendor: VendorId): Extraction {
   // trusts and the caller has to be able to weigh them differently.
   if (!doc.body) return { offers: [], path: 'body-fallback' };
   const swept = extractFrom(doc.body, config);
-  // `body-fallback` means the sweep ran over the whole body because nothing
-  // narrower matched. A body pass that read the vendor's own cards — possible
-  // now that a vendor carries an `offer` selector — did not sweep anything,
-  // and saying it did would send the next reader to the wrong branch.
-  return {
-    offers: swept.offers,
-    path: swept.path === 'vendor-selectors' ? swept.path : 'body-fallback',
-  };
+  // Always `body-fallback` here, even when the body pass read the vendor's own
+  // cards through its `offer` selector. The label is the one tell the worker
+  // has that these offers came from outside every scope the vendor trusts —
+  // `suspectFrom` flags `scope-lost` on it and keeps the quote out of the
+  // ranking — and a landing page that reuses the card markup for featured
+  // deals is exactly the page that guard exists for. An earlier version
+  // relabelled the pass `vendor-selectors` so the report named the branch that
+  // read the offers, and that traded the guard for a diagnostic nicety.
+  return { offers: swept.offers, path: 'body-fallback' };
 }
 
 function extractFrom(root: Element, config: VendorSelectors): Extraction {

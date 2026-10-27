@@ -1047,6 +1047,19 @@ describe('where the offers came from', () => {
     expect(result.offers.map((o) => o.amount)).toContain(20000);
   });
 
+  it('stays body-fallback when the body pass read the vendor’s own cards', () => {
+    // The label is the worker's one tell that the offers came from outside
+    // every scope the vendor trusts (`suspectFrom` → `scope-lost`). A landing
+    // page reusing the card markup for featured deals must stay flagged, so
+    // reading real cards off the body does not earn the trusted label.
+    document.body.innerHTML =
+      '<div><section class="car-item__wrapper"><h2>Economy</h2>' +
+      '<div class="car-item__price-details-item"><span>$298.34</span><p>Total</p></div></section></div>';
+    const result = extract(document, 'enterprise');
+    expect(result.offers.map((o) => o.amount)).toEqual([298.34]);
+    expect(result.path).toBe('body-fallback');
+  });
+
   it('is body-fallback when the container is present but holds no prices', () => {
     // The case that broke the first attempt at this fix. Hertz commits its
     // shell — header, footer promo, empty `<main>` — before the rates arrive,

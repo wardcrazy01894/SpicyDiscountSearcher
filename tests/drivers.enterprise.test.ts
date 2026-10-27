@@ -1134,10 +1134,12 @@ describe('submitSearch', () => {
     expect(error.message).toMatch(/promotion code/i);
   });
 
-  it('reports a code that needs an Enterprise Plus sign-in as refused', async () => {
+  it('reports a code that needs an Enterprise Plus sign-in without remembering it', async () => {
+    // The vendor's verdict on the session, not the code: a user who signs in
+    // would have it price next run, so it must not land in the refused list.
     renderForm({ onSubmit: 'sign-in' });
     const error = await failureOf(submitSearch(makeContext()));
-    expect(error.failure).toBe('code-rejected');
+    expect(error.failure).toBe('discount-missing');
     expect(error.message).toMatch(/sign-in/i);
   });
 

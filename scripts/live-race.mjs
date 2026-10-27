@@ -218,7 +218,8 @@ try {
         .catch((e) => ({ err: String(e).slice(0, 80) }));
       const key = JSON.stringify(body);
       if (key !== lastSnap) {
-        log('page', u.slice(0, 80), key.slice(0, 900));
+        // Path and hash only: the query string carries the code and the trip.
+        log('page', u.replace(/\?.*?(?=#|$)/, ''), key.slice(0, 900));
         lastSnap = key;
         await pg.screenshot({ path: path.join(out, `probe-${Date.now()}.png`) }).catch(() => {});
       }
