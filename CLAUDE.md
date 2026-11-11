@@ -1108,6 +1108,23 @@ too, but as a closed question rather than as work.
   arrive — without that the popup sits telling the user to reopen it while the
   race it started runs behind it.
 
+- `package.json` carries an npm `overrides` entry forcing `minimatch` to
+  `^11.0.1`, which is outside the `^10` range `eslint`, `@eslint/config-array`
+  and `@typescript-eslint/typescript-estree` each ask for. Added 2026-11-11
+  because GHSA-g3hv-75wg-m249 (moderate, published 2026-10-30) covers every
+  minimatch from 7.0.0 up to 11.0.1 and no 10.x release carries the fix, so
+  `npm audit --audit-level=moderate` — the last step of `verify` — went red on
+  `main` with nothing in the repo having changed, and with it the pre-push gate
+  and Dependabot's #82. Measured with the override in place: `verify` exits 0
+  and audit reports 0 vulnerabilities.
+
+  REMOVE THE OVERRIDE when `npm audit` is clean without it — that is, when
+  eslint and typescript-eslint depend on a patched minimatch themselves.
+  Delete the entry, `npm install`, run `verify`. Until then it is the lint
+  toolchain running on a minimatch major its authors did not test against, so
+  a lint run that suddenly matches different files is the symptom to connect
+  back to this entry.
+
 - TypeScript is pinned below 7 by something outside this repo.
   `typescript-eslint@8.72.0` is the newest release — its canary too — and
   declares `peer typescript ">=4.8.4 <6.1.0"` (checked again on 2026-10-26,
